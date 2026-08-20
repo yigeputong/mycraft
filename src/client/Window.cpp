@@ -1,0 +1,117 @@
+#include "client/Window.h"
+#include "client/Render/OpenGL.h"
+#include "client/Render/VulkanAPI.h"
+#include <fstream>
+#include <vector>
+
+namespace mycraft {
+
+Window& Window::getInstance() {
+    static Window instance;
+    return instance;
+}
+
+Window::Window()
+    : m_window(nullptr), m_width(800), m_height(600), m_running(false) {}
+
+Window::~Window() {
+    Shutdown();
+}
+
+bool Window::Init(const std::string& title, int width, int height, RenderAPItype apitype) {
+    m_title = title;
+    m_width = width;
+    m_height = height;
+    m_apitype = apitype;
+
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        SDL_Log("SDL_Init Error: %s", SDL_GetError());
+        return false;
+    }
+
+    m_running = true;
+
+    getAPI();
+}
+
+bool Window::getAPI() {
+    switch(m_apitype) {
+    case RenderAPItype::OPENGL:
+        return CreateOpenGLWindow();
+    case RenderAPItype::VULKAN:
+        return CreateVulkanWindow();
+    default:
+        return CreateOpenGLWindow();
+    }
+}
+
+
+bool Window::CreateOpenGLWindow() {
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, OpenGLAPI::api_major);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, OpenGLAPI::api_minor);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+
+    m_window = SDL_CreateWindow(
+        m_title.c_str(),
+        m_width,
+        m_height,
+        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
+    );
+
+    if (!m_window) {
+        SDL_Log("SDL_CreateWindow Error: %s", SDL_GetError());
+        return false;
+    }
+
+    SDL_GLContext glContext = SDL_GL_CreateContext(m_window);
+    if (!glContext) {
+        SDL_Log("OpenGL Context Error: %s", SDL_GetError());
+        SDL_DestroyWindow(m_window);
+        SDL_Quit();
+        return false;
+    }
+
+    m_renderapi = std::make_unique<OpenGLAPI>();
+    return m_renderapi->Init(m_window, m_width, m_height);
+}
+
+bool Window::CreateVulkanWindow() {
+    m_window = SDL_CreateWindow(
+        m_title.c_str(),
+        m_width,
+        m_height,
+        SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
+    );
+
+    if (!m_window) {
+        SDL_Log("SDL_CreateWindow Error: %s", SDL_GetError());
+        return false;
+    }
+
+    m_renderapi = std::make_unique<VulkanAPI>();
+    return m_renderapi->Init(m_window, m_width, m_height);
+}
+
+void Window::Run() {
+    SDL_Event event;
+    bool running = true;
+    while (running) {
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_EVENT_QUIT) {
+                running = false;
+            }
+        }
+        // m_renderapi->render();
+    }
+}
+
+void Window::Shutdown() {
+    if (m_window) {
+        SDL_DestroyWindow(m_window);
+        m_window = nullptr;
+    }
+    SDL_Quit();
+    m_running = false;
+}
+
+}
