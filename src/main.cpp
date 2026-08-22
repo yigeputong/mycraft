@@ -4,7 +4,7 @@ using namespace mycraft;
 
 int main(int argc, char* argv[]) {
     Window& window = Window::getInstance();
-    if (window.Init("Mycraft v0.0.0", 800, 600, Window::RenderAPItype::VULKAN)) {
+    if (window.Init("Mycraft v0.0.0", 800, 600, Window::RenderAPItype::OPENGL)) {
         window.Run();
     }
     window.Shutdown();

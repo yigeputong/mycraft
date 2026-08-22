@@ -1,6 +1,6 @@
+#include <vulkan/vulkan.hpp>
 #include "client/Render/VulkanAPI.h"
 #include <iostream>
-
 namespace mycraft {
 
 VulkanAPI::VulkanAPI() {}
@@ -20,9 +20,9 @@ bool VulkanAPI::Init(SDL_Window* window, int width, int height) {
 }
 
 VulkanAPI::~VulkanAPI() {
-    instance.destroy();
     device.destroySwapchainKHR(swapchain);
     device.destroy();
+    instance.destroy();
 }
 
 void VulkanAPI::getExtensions() {
@@ -88,7 +88,10 @@ void VulkanAPI::createDevice() {
                    .setQueueCount(1)
                    .setQueueFamilyIndex(queueFamilyIndices.graphicsQueue.value());
 
-    createInfo.setQueueCreateInfos(queueCreateInfo);
+    std::vector<const char*> extension = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
+    createInfo.setQueueCreateInfos(queueCreateInfo)
+              .setPEnabledExtensionNames(extension);
 
     this->device = phyDevice.createDevice(createInfo);
 }

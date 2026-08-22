@@ -12,6 +12,7 @@ public:
     VulkanAPI();
     ~VulkanAPI();
     bool Init(SDL_Window* window, int width, int height) override;
+    void render() override {}
 
     struct QueueFamilyIndices final {
         std::optional<uint32_t> graphicsQueue;

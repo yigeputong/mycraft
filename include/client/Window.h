@@ -1,7 +1,6 @@
 #pragma once
 
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_gpu.h>
 #include <string>
 #include <memory>
 #include "client/Render/RenderAPI.h"
@@ -42,7 +41,7 @@ private:
     int m_width;
     int m_height;
     bool m_running;
-    RenderAPItype m_apitype;
+    SDL_GLContext glContext;
 
     bool getAPI();
     bool CreateOpenGLWindow();

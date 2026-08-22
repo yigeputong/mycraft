@@ -1,7 +1,8 @@
 #include "client/Window.h"
-#include "client/Render/OpenGL.h"
+#include "client/Render/OpenGLAPI.h"
 #include "client/Render/VulkanAPI.h"
 #include <fstream>
+#include <iostream>
 #include <vector>
 
 namespace mycraft {
@@ -31,7 +32,7 @@ bool Window::Init(const std::string& title, int width, int height, RenderAPItype
 
     m_running = true;
 
-    getAPI();
+    return getAPI();
 }
 
 bool Window::getAPI() {
@@ -63,7 +64,7 @@ bool Window::CreateOpenGLWindow() {
         return false;
     }
 
-    SDL_GLContext glContext = SDL_GL_CreateContext(m_window);
+    glContext = SDL_GL_CreateContext(m_window);
     if (!glContext) {
         SDL_Log("OpenGL Context Error: %s", SDL_GetError());
         SDL_DestroyWindow(m_window);
@@ -100,12 +101,16 @@ void Window::Run() {
             if (event.type == SDL_EVENT_QUIT) {
                 running = false;
             }
+            m_renderapi->render();
         }
-        // m_renderapi->render();
     }
 }
 
 void Window::Shutdown() {
+    if (glContext) {
+        SDL_GL_DestroyContext(glContext);
+        glContext = nullptr;
+    }
     if (m_window) {
         SDL_DestroyWindow(m_window);
         m_window = nullptr;
