@@ -93,17 +93,24 @@ bool Window::CreateVulkanWindow() {
     return m_renderapi->Init(m_window, m_width, m_height);
 }
 
-void Window::Run() {
-    SDL_Event event;
-    bool running = true;
-    while (running) {
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_QUIT) {
-                running = false;
-            }
-            m_renderapi->render();
-        }
+void Window::Update(float deltaTime) {
+    static int frameCount = 0;
+    frameCount++;
+    if (frameCount % 60 == 0) {
+        SDL_Log("FPS: %.1f", 1.0f / deltaTime);
     }
+}
+
+void Window::Render() {
+    m_renderapi->render();
+}
+
+bool Window::HandleEvent(SDL_Event& event) {
+    switch (event.type) {
+        case SDL_EVENT_QUIT:
+            return true;   // 请求退出
+    }
+    return m_renderapi->HandleEvents(event);
 }
 
 void Window::Shutdown() {

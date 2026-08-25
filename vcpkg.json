@@ -1,0 +1,11 @@
+{
+  "dependencies": [
+    "glad",
+    "sdl3",
+    "vulkan-headers",
+    "vulkan-loader",
+    "assimp",
+    "glm",
+    "volk"
+  ]
+}

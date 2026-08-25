@@ -12,6 +12,7 @@ public:
     VulkanAPI();
     ~VulkanAPI();
     bool Init(SDL_Window* window, int width, int height) override;
+    bool HandleEvents(SDL_Event& event) override {return false;};
     void render() override {}
 
     struct QueueFamilyIndices final {

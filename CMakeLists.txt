@@ -9,27 +9,29 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release")
 
+find_package(SDL3 CONFIG REQUIRED)
+find_package(assimp CONFIG REQUIRED)
+find_package(glad CONFIG REQUIRED)
+find_package(volk CONFIG REQUIRED)
 find_package(slang CONFIG HINTS "$ENV{VULKAN_SDK}/lib/cmake")
 find_package(Vulkan REQUIRED)
 
 include_directories(
     include/
-    lib/SDL/include/
-    lib/include/
-    ${Vulkan_INCLUDE_DIRS}
 )
-
-set(SDL_OFFSCREEN OFF CACHE BOOL "" FORCE)
-set(SDL_OPENGLES OFF CACHE BOOL "" FORCE)
-add_subdirectory(lib/SDL EXCLUDE_FROM_ALL)
 
 add_executable(mycraft
     src/main.cpp
     src/client/Window.cpp
-    lib/src/glad.c
-    lib/src/volk.c
+    lib/src/stb_image.cpp
     src/client/Render/OpenGL.cpp
+    src/client/Render/OpenGL/Shader.cpp
+    src/client/Render/OpenGL/Texture.cpp
     src/client/Render/Vulkan.cpp
 )
 
 target_link_libraries(mycraft PRIVATE SDL3::SDL3)
+target_link_libraries(mycraft PRIVATE assimp::assimp)
+target_link_libraries(mycraft PRIVATE glad::glad)
+target_link_libraries(mycraft PRIVATE volk::volk)
+target_link_libraries(mycraft PRIVATE Vulkan::Vulkan)
