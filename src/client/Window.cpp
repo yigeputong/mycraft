@@ -1,6 +1,7 @@
 #include "client/Window.h"
 #include "client/Render/OpenGLAPI.h"
 #include "client/Render/VulkanAPI.h"
+#include <glad/glad.h>
 #include <fstream>
 #include <iostream>
 #include <vector>
@@ -69,6 +70,11 @@ bool Window::CreateOpenGLWindow() {
         SDL_Log("OpenGL Context Error: %s", SDL_GetError());
         SDL_DestroyWindow(m_window);
         SDL_Quit();
+        return false;
+    }
+
+    if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
+        std::cout << "Failed to initalize GLAD." << std::endl;
         return false;
     }
 

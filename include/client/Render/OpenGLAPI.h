@@ -3,11 +3,13 @@
 #include "client/Render/RenderAPI.h"
 #include "client/Render/OpenGL/Shader.h"
 #include "client/Render/OpenGL/Texture.h"
+#include "client/Render/OpenGL/Model.h"
 #include <glad/glad.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <string>
+#include <memory>
 
 #define GL(func) func;OpenGLAPI::glCheckErr()
 
@@ -26,6 +28,7 @@ public:
     static constexpr int api_major = 3;
     static constexpr int api_minor = 3;
 private:
+
     SDL_Window* m_window;
 
     GLuint vao = 0;
@@ -34,7 +37,6 @@ private:
     GLuint colorVbo = 0;
     GLuint uvVbo = 0;
     GLuint ebo = 0;
-    GLuint texture = 0;
 
     GLShader lightShader;
     GLShader shader;
@@ -70,6 +72,8 @@ private:
         glm::vec3(-4.0f,  2.0f, -12.0f),
         glm::vec3( 0.0f,  0.0f, -3.0f)
     };
+
+    std::unique_ptr<GLModel> mymodel = std::make_unique<GLModel>("./assets/objects/backpack/backpack.obj");
 
     bool keyEvents(SDL_Event& event);
     bool resizeEvents(SDL_Event& event);

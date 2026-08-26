@@ -2,6 +2,10 @@
   "dependencies": [
     "glad",
     "sdl3",
+    {
+      "name": "sdl3-image",
+      "features": [ "png", "jpeg" ]
+    },
     "vulkan-headers",
     "vulkan-loader",
     "assimp",

@@ -1,6 +1,5 @@
 #include "client/Render/OpenGLAPI.h"
 #include <SDL3/SDL_video.h>
-#include <stb_image.h>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -11,10 +10,6 @@ namespace mycraft
 
 bool OpenGLAPI::Init(SDL_Window* window, int width, int height) {
     m_window = window;
-    if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
-        std::cout << "Failed to initalize GLAD." << std::endl;
-        return false;
-    }
     
     pixelWidth = width;
     pixelHeight = height;
@@ -181,21 +176,11 @@ void OpenGLAPI::render() {
     projection = glm::perspective(glm::radians(fov), (float)pixelWidth / (float)pixelHeight, 0.1f, 100.0f);
     shader.setMat4("projection", glm::value_ptr(projection));
     shader.setMat4("view", glm::value_ptr(view));
-
-    glActiveTexture(GL_TEXTURE0 + container.unit);
-    glBindTexture(GL_TEXTURE_2D, container.get());
-    glActiveTexture(GL_TEXTURE0 + container_specular.unit);
-    glBindTexture(GL_TEXTURE_2D, container_specular.get());
-    glBindVertexArray(vao);
-    for(unsigned int i = 0; i < 10; i++) {
-        model = glm::mat4(1.0);
-        model = glm::translate(model, cubePositions[i]);
-        float angle = 20.0f * i;
-        model = glm::rotate(model, glm::radians(angle), glm::vec3(1.0f, 0.3f, 0.5f));
-        shader.setMat4("model", glm::value_ptr(model));
-
-        glDrawArrays(GL_TRIANGLES, 0, 36);
-    }
+     model = glm::mat4(1.0f);
+    model = glm::translate(model, glm::vec3(0.0f, 0.0f, 0.0f));
+    model = glm::scale(model, glm::vec3(0.1f)); // 缩小10倍！如果还是看不见，改成 0.01f
+    shader.setMat4("model", glm::value_ptr(model));
+    mymodel->Draw(shader);
 
     glUseProgram(lightShader.get());
 
