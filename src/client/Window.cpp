@@ -1,52 +1,48 @@
 #include "client/Window.h"
 #include "client/Render/OpenGLAPI.h"
-#include "client/Render/VulkanAPI.h"
 #include <glad/glad.h>
 #include <fstream>
 #include <iostream>
 #include <vector>
 
-namespace mycraft {
+namespace Eng::client {
 
-Window& Window::getInstance() {
-    static Window instance;
-    return instance;
+Window::Window(const WindowConfig& config)
+    :m_config(config) {
+    m_createSuccess = CreateWindow();    
 }
-
-Window::Window()
-    : m_window(nullptr), m_width(800), m_height(600), m_running(false) {}
 
 Window::~Window() {
-    Shutdown();
-}
-
-bool Window::Init(const std::string& title, int width, int height, RenderAPItype apitype) {
-    m_title = title;
-    m_width = width;
-    m_height = height;
-    m_apitype = apitype;
-
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        SDL_Log("SDL_Init Error: %s", SDL_GetError());
-        return false;
+    if (m_glContext) {
+        SDL_GL_DestroyContext(m_glContext);
+        m_glContext = nullptr;
     }
-
-    m_running = true;
-
-    return getAPI();
+    if (m_window) {
+        SDL_DestroyWindow(m_window);
+        m_window = nullptr;
+    }
 }
 
-bool Window::getAPI() {
-    switch(m_apitype) {
+bool Window::IsValid() {
+    return m_createSuccess;
+}
+
+void Window::SwapBuffers() {
+    SDL_GL_SwapWindow(m_window);
+}
+
+void Window::SetRelativeMode(bool enabled) {
+    SDL_SetWindowRelativeMouseMode(m_window, enabled);
+}
+
+bool Window::CreateWindow() {
+    switch(m_config.apitype) {
     case RenderAPItype::OPENGL:
         return CreateOpenGLWindow();
-    case RenderAPItype::VULKAN:
-        return CreateVulkanWindow();
     default:
         return CreateOpenGLWindow();
     }
 }
-
 
 bool Window::CreateOpenGLWindow() {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, OpenGLAPI::api_major);
@@ -54,9 +50,9 @@ bool Window::CreateOpenGLWindow() {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 
     m_window = SDL_CreateWindow(
-        m_title.c_str(),
-        m_width,
-        m_height,
+        m_config.title.c_str(),
+        m_config.windowWidth,
+        m_config.windowHeight,
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
     );
 
@@ -65,8 +61,8 @@ bool Window::CreateOpenGLWindow() {
         return false;
     }
 
-    glContext = SDL_GL_CreateContext(m_window);
-    if (!glContext) {
+    m_glContext = SDL_GL_CreateContext(m_window);
+    if (!m_glContext) {
         SDL_Log("OpenGL Context Error: %s", SDL_GetError());
         SDL_DestroyWindow(m_window);
         SDL_Quit();
@@ -79,57 +75,24 @@ bool Window::CreateOpenGLWindow() {
     }
 
     m_renderapi = std::make_unique<OpenGLAPI>();
-    return m_renderapi->Init(m_window, m_width, m_height);
+    return true;
 }
 
-bool Window::CreateVulkanWindow() {
-    m_window = SDL_CreateWindow(
-        m_title.c_str(),
-        m_width,
-        m_height,
-        SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
-    );
+// bool Window::CreateVulkanWindow() {
+//     m_window = SDL_CreateWindow(
+//         m_config.title.c_str(),
+//         m_config.windowWidth,
+//         m_config.windowHeight,
+//         SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
+//     );
 
-    if (!m_window) {
-        SDL_Log("SDL_CreateWindow Error: %s", SDL_GetError());
-        return false;
-    }
+//     if (!m_window) {
+//         SDL_Log("SDL_CreateWindow Error: %s", SDL_GetError());
+//         return false;
+//     }
 
-    m_renderapi = std::make_unique<VulkanAPI>();
-    return m_renderapi->Init(m_window, m_width, m_height);
-}
-
-void Window::Update(float deltaTime) {
-    static int frameCount = 0;
-    frameCount++;
-    if (frameCount % 60 == 0) {
-        SDL_Log("FPS: %.1f", 1.0f / deltaTime);
-    }
-}
-
-void Window::Render() {
-    m_renderapi->render();
-}
-
-bool Window::HandleEvent(SDL_Event& event) {
-    switch (event.type) {
-        case SDL_EVENT_QUIT:
-            return true;   // 请求退出
-    }
-    return m_renderapi->HandleEvents(event);
-}
-
-void Window::Shutdown() {
-    if (glContext) {
-        SDL_GL_DestroyContext(glContext);
-        glContext = nullptr;
-    }
-    if (m_window) {
-        SDL_DestroyWindow(m_window);
-        m_window = nullptr;
-    }
-    SDL_Quit();
-    m_running = false;
-}
+//     m_renderapi = std::make_unique<VulkanAPI>();
+//     return true;
+// }
 
 }

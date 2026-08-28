@@ -1,99 +1,121 @@
 #pragma once
 
 #include "client/Render/RenderAPI.h"
-#include "client/Render/OpenGL/Shader.h"
-#include "client/Render/OpenGL/Texture.h"
-#include "client/Render/OpenGL/Model.h"
 #include <glad/glad.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
 #include <string>
 #include <memory>
 
 #define GL(func) func;OpenGLAPI::glCheckErr()
 
-namespace mycraft {
+namespace Eng::client {
 
-class OpenGLAPI final : public IRenderAPI, public APITraits<OpenGLAPI> {
+class OpenGLAPI final : public IRenderAPI {
 public:
-    ~OpenGLAPI();
-    bool Init(SDL_Window* window, int width, int height) override;
-    bool HandleEvents(SDL_Event& event) override;
-    void prepare();
-    void render() override;
+    OpenGLAPI();
+    ~OpenGLAPI() override;
 
-    static void glCheckErr();
+    // 初始化与销毁
+    bool Initialize(int width, int height, Window* window) override;
+    void Shutdown() override;
+
+    // 视口与清屏
+    void SetViewport(int x, int y, int w, int h) override;
+    void SetClearColor(float r, float g, float b, float a) override;
+    void Clear() override;
+
+    // 矩阵设置
+    void SetViewMatrix(const glm::mat4& view) override;
+    void SetProjectionMatrix(const glm::mat4& proj) override;
+    void SetModelMatrix(const glm::mat4& model) override;
+
+    // 资源创建（返回句柄）
+    MeshHandle CreateMesh(const MeshData& data) override;
+    TextureHandle CreateTexture(const std::string& path) override;
+    TextureHandle CreateSkybox(const std::vector<std::string>& path) override;
+    ShaderHandle CreateShader(const std::string& vertPath, const std::string& fragPath) override;
+    Model LoadModel(const std::string& path) override;
+
+    // 资源销毁
+    void DestroyMesh(MeshHandle handle) override;
+    void DestroyTexture(TextureHandle handle) override;
+    void DestroyShader(ShaderHandle handle) override;
+
+    Framebuffer CreateFramebuffer(int width, int height) override;
+    void BindFramebuffer(const Framebuffer& fb) override;
+    void UnbindFramebuffer() override;
+    uint32_t GetFramebufferTexture(const Framebuffer& fb) const override;
+
+    // Uniform 设置
+    void SetUniform(ShaderHandle shader, const std::string& name, const glm::mat4& value) override;
+    void SetUniform(ShaderHandle shader, const std::string& name, const glm::vec3& value) override;
+    void SetUniform(ShaderHandle shader, const std::string& name, float value) override;
+    void SetUniform(ShaderHandle shader, const std::string& name, int value) override;
+
+    // 绘制
+    void DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& material) override;
+
+    void DrawSkybox(TextureHandle cubemap, const glm::mat4& view) override;
+    void DrawFullscreenQuad(TextureHandle textureID) override;
 
     static constexpr int api_major = 3;
     static constexpr int api_minor = 3;
 private:
+    Window* m_window;
 
-    SDL_Window* m_window;
-
-    GLuint vao = 0;
-    GLuint lightVAO = 0;
-    GLuint posVbo = 0;
-    GLuint colorVbo = 0;
-    GLuint uvVbo = 0;
-    GLuint ebo = 0;
-
-    GLShader lightShader;
-    GLShader shader;
-    GLTexture container;
-    GLTexture container_specular;
-
-    int pixelWidth;
-    int pixelHeight;
-
-    void preVAO();
-    void preShader(GLShader& shader,const char* vertexPath, const char* fragmentPath);
-    void preTexture(GLTexture& texture, const char* path);
-
-    glm::mat4 model      = glm::mat4(1.0f);
-    glm::mat4 projection = glm::mat4(1.0f);
-
-    glm::vec3 cubePositions[10] = {
-        glm::vec3( 0.0f,  0.0f,  0.0f),
-        glm::vec3( 2.0f,  5.0f, -15.0f),
-        glm::vec3(-1.5f, -2.2f, -2.5f),
-        glm::vec3(-3.8f, -2.0f, -12.3f),
-        glm::vec3( 2.4f, -0.4f, -3.5f),
-        glm::vec3(-1.7f,  3.0f, -7.5f),
-        glm::vec3( 1.3f, -2.0f, -2.5f),
-        glm::vec3( 1.5f,  2.0f, -2.5f),
-        glm::vec3( 1.5f,  0.2f, -1.5f),
-        glm::vec3(-1.3f,  1.0f, -1.5f)
+    // 内部数据结构
+    struct MeshDataInternal {
+        GLuint vao = 0;
+        GLuint vbo = 0;
+        GLuint ebo = 0;
+        size_t indexCount = 0;
+        GLenum indexType = GL_NONE;
     };
 
-    static constexpr glm::vec3 pointLightPositions[4] = {
-        glm::vec3( 0.7f,  0.2f,  2.0f),
-        glm::vec3( 2.3f, -3.3f, -4.0f),
-        glm::vec3(-4.0f,  2.0f, -12.0f),
-        glm::vec3( 0.0f,  0.0f, -3.0f)
+    GLuint m_skyboxVAO = 0;
+    GLuint m_skyboxVBO = 0;
+    ShaderHandle m_skyboxShader = 0;
+
+    GLuint m_fullscreenVAO = 0;
+    GLuint m_fullscreenVBO = 0;
+    ShaderHandle m_fullscreenShader = 0;
+
+    struct TextureDataInternal {
+        GLuint textureID = 0;
+        int width = 0, height = 0;
+        GLenum format = GL_RGBA;
     };
 
-    std::unique_ptr<GLModel> mymodel = std::make_unique<GLModel>("./assets/objects/backpack/backpack.obj");
+    struct ShaderDataInternal {
+        GLuint program = 0;
+        // 可选的 uniform 缓存（为了性能）
+        // std::unordered_map<std::string, GLint> uniformCache;
+    };
 
-    bool keyEvents(SDL_Event& event);
-    bool resizeEvents(SDL_Event& event);
-    bool cursorEvents(SDL_Event& event);
-    bool scrollEvents(SDL_Event& event);
+    // 成员变量
+    std::unordered_map<MeshHandle, MeshDataInternal> m_meshes;
+    std::unordered_map<TextureHandle, TextureDataInternal> m_textures;
+    std::unordered_map<ShaderHandle, ShaderDataInternal> m_shaders;
 
-    //camera
-    static constexpr glm::vec3 lightPos = glm::vec3(1.2f, 1.0f, 2.0f);
+    MeshHandle m_nextMeshHandle = 1;
+    TextureHandle m_nextTextureHandle = 1;
+    ShaderHandle m_nextShaderHandle = 1;
 
-    float cameraSpeed = 0.05f;
-    float cameraSensitivity = 0.01f;
-    float fov = 45.0f;
-    float yaw = -90.0f;
-    float pitch = 0.0f;
-    glm::vec3 cameraPos = glm::vec3(0.0f, 0.0f,  3.0f);
-    glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
-    glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
-    glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+    // 当前矩阵
+    glm::mat4 m_viewMatrix = glm::mat4(1.0f);
+    glm::mat4 m_projectionMatrix = glm::mat4(1.0f);
+    glm::mat4 m_modelMatrix = glm::mat4(1.0f);
 
-    void updateView();
+    // 视口和清屏
+    int m_viewportX = 0, m_viewportY = 0;
+    int m_viewportWidth = 0, m_viewportHeight = 0;
+    float m_clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+
+    bool m_initialized = false;
+
+    // 辅助函数
+    GLuint CompileShader(GLenum type, const std::string& source);
+    GLuint LinkProgram(GLuint vertexShader, GLuint fragmentShader);
+    std::string ReadFile(const std::string& path);
 
 };
     

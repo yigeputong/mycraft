@@ -1,58 +1,73 @@
 #pragma once
 
-#include <SDL3/SDL.h>
+//standards
 #include <string>
 #include <memory>
-#include "client/Render/RenderAPI.h"
+#include <functional>
 
-namespace mycraft {
+//libraries
+#include <SDL3/SDL.h>
+
+//clients
+#include "client/Render/RenderAPI.h"
+#include "client/WindowManager.h"
+
+namespace Eng::client {
+
+class IRenderAPI;
 
 class Window final {
 public:
-    enum class RenderAPItype {
-        OPENGL,
-        OPENGLES,
-        VULKAN,
-        DIRECTX,
-        METAL
-    };
 
-    static Window& getInstance();
-
+    Window(const WindowConfig& config);
     ~Window();
+
+    bool IsValid();
+
+    void SwapBuffers();
+
+    void SetRelativeMode(bool enabled);
 
     Window(const Window&) = delete;
     Window& operator=(const Window&) = delete;
 
-    bool Init(const std::string& title, int width, int height, RenderAPItype apitype);
+    // Getter/Setter
+    WindowConfig GetConfigs() const { return m_config; }
+    void SetConfigs(const WindowConfig& config) { m_config = config; }
+    
+    bool GetRunning() const { return m_running; }
+    void SetRunning(bool running) { m_running = running; }
 
-    // SDL3 主回调将调用的三个核心函数
-    void Update(float deltaTime);
-    void Render();
-    bool HandleEvent(SDL_Event& event);  // 返回 true 表示请求退出
+    float GetTime() const { return SDL_GetTicks() / 1000.0f; }
+    float GetAspectRatio() const { return static_cast<float>(m_config.windowWidth) / m_config.windowHeight; }
+    SDL_Window* GetSDLWindow() const { return m_window; }
+    SDL_GLContext GetGLContext() const { return m_glContext; }
+    
+    // 事件回调
+    std::function<void(const SDL_Event&)> onEvent;
+    // 窗口大小变化回调（逻辑像素）
+    std::function<void(int newWidth, int newHeight)> onResize;
+    // 窗口关闭请求回调
+    std::function<void()> onCloseRequest;
+    // 窗口获得/失去焦点回调
+    std::function<void(bool hasFocus)> onFocusChanged;
 
-    // Getter（供外部使用）
-    SDL_Window* getWindow() const { return m_window; }
-    bool isRunning() const { return m_running; }
-
-    void Shutdown();
-
-private:
-    Window();
-
-    SDL_Window* m_window;
-    RenderAPItype m_apitype;
     std::unique_ptr<IRenderAPI> m_renderapi;
 
-    std::string m_title;
-    int m_width;
-    int m_height;
-    bool m_running;
-    SDL_GLContext glContext;
+private:
 
-    bool getAPI();
+    SDL_Window* m_window;
+    SDL_GLContext m_glContext = nullptr;
+
+    WindowConfig m_config;
+
+    bool m_running;
+
+    bool m_createSuccess = false;
+
+    bool CreateWindow();
     bool CreateOpenGLWindow();
-    bool CreateVulkanWindow();
+    // bool CreateVulkanWindow();
 };
 
 }

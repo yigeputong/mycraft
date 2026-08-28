@@ -22,14 +22,13 @@ include_directories(
 
 add_executable(mycraft
     src/main.cpp
+    src/Engine.cpp
+
+    src/client/Input.cpp
     src/client/Window.cpp
-    #src/client/stb.cpp
+    src/client/WindowManager.cpp
+
     src/client/Render/OpenGL.cpp
-    src/client/Render/OpenGL/Shader.cpp
-    src/client/Render/OpenGL/Texture.cpp
-    src/client/Render/OpenGL/Mesh.cpp
-    src/client/Render/OpenGL/Model.cpp
-    src/client/Render/Vulkan.cpp
 )
 
 find_package(SDL3_image CONFIG REQUIRED)
@@ -41,4 +40,10 @@ target_link_libraries(mycraft PRIVATE
     glad::glad 
     volk::volk 
     Vulkan::Vulkan
+)
+
+target_compile_options(mycraft PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX- /utf-8>
+    $<$<CXX_COMPILER_ID:GNU>:-Wall -Wextra -Wpedantic>
+    $<$<CXX_COMPILER_ID:Clang>:-Wall -Wextra -Wpedantic>
 )
