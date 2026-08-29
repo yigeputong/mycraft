@@ -44,6 +44,37 @@ struct Framebuffer {
     bool isValid = false;
 };
 
+struct RenderConfig {
+    // ===== 窗口 =====
+    int windowWidth = 1920;
+    int windowHeight = 1080;
+    bool fullscreen = false;
+    bool vsync = true;
+    int refreshRate = 0; // 0 = 自动
+
+    // ===== 渲染 =====
+    int renderWidth = windowWidth;
+    int renderHeight = windowHeight;
+    float fov = 60.0f;                  // 垂直视野（度）
+    float gamma = 2.2f;                 // Gamma 校正值
+    float anisotropy = 0.0f;            // 各向异性过滤倍数（运行时查询）
+
+    // ===== 后处理 =====
+    bool enableBloom = false;           // 建议用 FeatureManager 管理
+    bool enableSSAO = false;
+    bool enableMotionBlur = false;
+
+    int maxFPS = 0;                     // 0 = 不限帧率
+    int shadowMapSize = 2048;           // 阴影贴图分辨率
+    int maxLights = 16;                 // 最大动态光源数
+
+    bool showFPS = true;
+    bool showNormals = false;
+    bool wireframeMode = false;
+
+    void Reset();
+};
+
 class IRenderAPI {
 public:
     virtual ~IRenderAPI() = default;

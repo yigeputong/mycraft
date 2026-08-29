@@ -15,6 +15,7 @@ find_package(assimp CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(volk CONFIG REQUIRED)
 find_package(Vulkan REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 include_directories(
     include/
@@ -23,6 +24,8 @@ include_directories(
 add_executable(mycraft
     src/main.cpp
     src/Engine.cpp
+
+    src/core/Log.cpp
 
     src/client/Input.cpp
     src/client/Window.cpp
@@ -40,6 +43,7 @@ target_link_libraries(mycraft PRIVATE
     glad::glad 
     volk::volk 
     Vulkan::Vulkan
+    nlohmann_json::nlohmann_json
 )
 
 target_compile_options(mycraft PRIVATE

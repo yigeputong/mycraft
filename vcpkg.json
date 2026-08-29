@@ -10,6 +10,7 @@
     "vulkan-loader",
     "assimp",
     "glm",
-    "volk"
+    "volk",
+    "nlohmann-json"
   ]
 }

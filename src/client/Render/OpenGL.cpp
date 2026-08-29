@@ -40,7 +40,8 @@ bool OpenGLAPI::Initialize(int width, int height, Window* window) {
     m_viewportHeight = height;
     m_initialized = true;
 
-    std::cout << "[OpenGLAPI] Initialized (OpenGL " << glGetString(GL_VERSION) << ")" << std::endl;
+    std::string version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    m_logger->log(LogLevel::INFO, "[OpenGLAPI] Initialized (OpenGL " + version + ")");
 
     return true;
 }
@@ -67,7 +68,7 @@ void OpenGLAPI::Shutdown() {
     m_shaders.clear();
 
     m_initialized = false;
-    std::cout << "[OpenGLAPI] Shutdown" << std::endl;
+    m_logger->log(LogLevel::INFO, "[OpenGLAPI] Shutdown");
 }
 
 // ---------- 视口与清屏 ----------
@@ -155,18 +156,16 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
 
     SDL_Surface* surf = IMG_Load(path.c_str());
     if (!surf) {
-        std::cerr << "[Texture] IMG_Load failed: " << path 
-                  << " - " << SDL_GetError() << std::endl;
+        logError(m_logger, "[Texture] IMG_Load failed: " << path << " - " << SDL_GetError());
         return 0;
     }
 
-    std::cout << "[Texture] Loaded: " << path 
-              << ", w=" << surf->w << ", h=" << surf->h 
-              << ", format=" << surf->format << std::endl;
+    logInfo(m_logger, "[Texture] Loaded: " << path << ", w=" << std::to_string(surf->w) 
+        << ", h=" << std::to_string(surf->h) << ", format=" << std::to_string(surf->format));
 
     // 2. 检查尺寸是否有效
     if (surf->w <= 0 || surf->h <= 0) {
-        std::cerr << "[Texture] Invalid surface size: " << surf->w << "x" << surf->h << std::endl;
+        logError(m_logger, "[Texture] Invalid surface size: " << surf->w << "x" << surf->h);
         SDL_DestroySurface(surf);
         return 0;
     }
@@ -174,7 +173,7 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
     // 3. 强制转换为 RGBA8888（保证兼容性）
     SDL_Surface* converted = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_ABGR8888);
     if (!converted) {
-        std::cerr << "[Texture] SDL_ConvertSurface failed: " << SDL_GetError() << std::endl;
+        logError(m_logger, "[Texture] SDL_ConvertSurface failed: " << SDL_GetError());
         SDL_DestroySurface(surf);
         return 0;
     }
@@ -184,13 +183,13 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
     // 4. 获取像素格式细节
     const SDL_PixelFormatDetails* details = SDL_GetPixelFormatDetails(surf->format);
     if (!details) {
-        std::cerr << "[Texture] Unknown pixel format: " << surf->format << std::endl;
+        logError(m_logger, "[Texture] Unknown pixel format: " << surf->format);
         SDL_DestroySurface(surf);
         return 0;
     }
 
     int bpp = details->bytes_per_pixel;
-    std::cout << "[Texture] Bytes per pixel: " << bpp << std::endl;
+    logInfo(m_logger, "[Texture] Bytes per pixel: " << bpp);
 
     // 5. 确定 OpenGL 格式
     GLenum internalFormat = GL_RGBA;
@@ -202,7 +201,7 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
         internalFormat = GL_RGB;
         format = GL_RGB;
     } else {
-        std::cerr << "[Texture] Unsupported BPP: " << bpp << std::endl;
+        logError(m_logger, "[Texture] Unsupported BPP: " << bpp);
         SDL_DestroySurface(surf);
         return 0;
     }
@@ -233,7 +232,7 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
     data.format = format;
     m_textures[handle] = data;
 
-    std::cout << "[Texture] OpenGL texture created: " << textureID << std::endl;
+    logInfo(m_logger, "[Texture] OpenGL texture created: " << textureID);
     return handle;
 }
 
@@ -280,13 +279,13 @@ TextureHandle OpenGLAPI::CreateSkybox(const std::vector<std::string>& path) {
     for (size_t i = 0; i < path.size(); ++i) {
         SDL_Surface* surf = IMG_Load(path[i].c_str());
         if (!surf) {
-            std::cerr << "Failed to load cube face: " << path[i] << std::endl;
+            logError(m_logger, "Failed to load cube face: " << path[i]);
             return 0;
         }
         SDL_Surface* converted = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_ABGR8888);
         SDL_DestroySurface(surf);
         if (!converted) {
-            std::cerr << "Conversion failed for: " << path[i] << std::endl;
+            logError(m_logger, "Conversion failed for: " << path[i]);
             return 0;
         }
         w = converted->w;
@@ -311,7 +310,7 @@ TextureHandle OpenGLAPI::CreateSkybox(const std::vector<std::string>& path) {
     data.format = GL_RGBA;
     m_textures[handle] = data;
 
-    std::cout << "[Texture] OpenGL CubeMap texture created: " << textureID << std::endl;
+    logInfo(m_logger, "[Texture] OpenGL CubeMap texture created: " << textureID);
     return handle;
 }
 
@@ -322,7 +321,7 @@ ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath, const std::str
     std::string vertSource = ReadFile(vertPath);
     std::string fragSource = ReadFile(fragPath);
     if (vertSource.empty() || fragSource.empty()) {
-        std::cerr << "[OpenGLAPI] Failed to read shader files." << std::endl;
+        logError(m_logger, "[OpenGLAPI] Failed to read shader files.");
         return 0;
     }
 
@@ -365,12 +364,12 @@ Model OpenGLAPI::LoadModel(const std::string& path) {
     );
 
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
-        std::cerr << "[LoadModel] Assimp error: " << importer.GetErrorString() << std::endl;
+        logError(m_logger, "[LoadModel] Assimp error: " << importer.GetErrorString());
         return result;
     }
 
-    std::cout << "[LoadModel] Loaded: " << path << std::endl;
-    std::cout << "[LoadModel] Meshes: " << scene->mNumMeshes << std::endl;
+    logInfo(m_logger, "[LoadModel] Loaded: " << path);
+    logInfo(m_logger, "[LoadModel] Meshes: " << scene->mNumMeshes);
 
     std::vector<Vertex> allVertices;
     std::vector<uint32_t> allIndices;
@@ -397,11 +396,7 @@ Model OpenGLAPI::LoadModel(const std::string& path) {
             allVertices.push_back(v);
 
             
-        }if (mesh->mTextureCoords[0]) {
-                std::cout << "UV0: " << mesh->mTextureCoords[0][0].x << ", " 
-                        << mesh->mTextureCoords[0][0].y << std::endl;
-            }
-
+        }
         for (unsigned int f = 0; f < mesh->mNumFaces; ++f) {
             aiFace face = mesh->mFaces[f];
             for (unsigned int j = 0; j < face.mNumIndices; ++j) {
@@ -413,7 +408,7 @@ Model OpenGLAPI::LoadModel(const std::string& path) {
     }
 
     if (allVertices.empty() || allIndices.empty()) {
-        std::cerr << "[LoadModel] No valid mesh data!" << std::endl;
+        logError(m_logger, "[LoadModel] No valid mesh data!");
         return result;
     }
 
@@ -424,12 +419,12 @@ Model OpenGLAPI::LoadModel(const std::string& path) {
     result.mesh = CreateMesh(meshData);
 
     if (result.mesh == 0) {
-        std::cerr << "[LoadModel] Failed to create mesh!" << std::endl;
+        logError(m_logger, "[LoadModel] Failed to create mesh!");
         return result;
     }
 
-    std::cout << "[LoadModel] Uploaded: " << allVertices.size() << " vertices, "
-              << allIndices.size() << " indices" << std::endl;
+    logInfo(m_logger, "[LoadModel] Uploaded: " << allVertices.size() << " vertices, "
+              << allIndices.size() << " indices");
 
     // ===== 4. 加载第一个材质的漫反射纹理 =====
     if (scene->mNumMaterials > 0) {
@@ -449,22 +444,20 @@ Model OpenGLAPI::LoadModel(const std::string& path) {
                 fullTexPath = modelPath.parent_path().string() + "/" + texStr;
             }
 
-            std::cout << "[LoadModel] Loading texture: " << fullTexPath << std::endl;
-
             // 4.2 加载纹理
             result.diffuseTexture = CreateTexture(fullTexPath);
 
             if (result.diffuseTexture == 0) {
-                std::cerr << "[LoadModel] Warning: Failed to load texture: " << fullTexPath << std::endl;
+                logError(m_logger, "[LoadModel] Warning: Failed to load texture: " << fullTexPath);
             } else {
-                std::cout << "[LoadModel] Texture loaded!" << std::endl;
+                logInfo(m_logger, "[LoadModel] Texture loaded!");
             }
         } else {
-            std::cout << "[LoadModel] No diffuse texture found." << std::endl;
+            logInfo(m_logger, "[LoadModel] No diffuse texture found.");
         }
     }
 
-    std::cout << "[LoadModel] Done!" << std::endl;
+    logInfo(m_logger, "[LoadModel] Done!");
     return result;
 }
 
@@ -541,9 +534,9 @@ Framebuffer OpenGLAPI::CreateFramebuffer(int width, int height) {
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
         fb.isValid = true;
-        std::cout << "Framebuffer created successfully" << std::endl;
+        logInfo(m_logger, "[OpenGLAPI] Framebuffer created successfully");
     } else {
-        std::cerr << "Framebuffer creation failed!" << std::endl;
+        logError(m_logger, "[OpenGLAPI] Framebuffer creation failed!");
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -725,7 +718,7 @@ void OpenGLAPI::DrawFullscreenQuad(TextureHandle textureID) {
 std::string OpenGLAPI::ReadFile(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open()) {
-        std::cerr << "[OpenGLAPI] Could not open file: " << path << std::endl;
+        logError(m_logger, "[OpenGLAPI] Could not open file: " << path);
         return "";
     }
     std::stringstream ss;
@@ -744,7 +737,7 @@ GLuint OpenGLAPI::CompileShader(GLenum type, const std::string& source) {
     if (!success) {
         char infoLog[512];
         glGetShaderInfoLog(shader, 512, nullptr, infoLog);
-        std::cerr << "[OpenGLAPI] Shader compilation failed:\n" << infoLog << std::endl;
+        logError(m_logger, "[OpenGLAPI] Shader compilation failed:\n" << infoLog);
         glDeleteShader(shader);
         return 0;
     }
@@ -762,7 +755,7 @@ GLuint OpenGLAPI::LinkProgram(GLuint vertexShader, GLuint fragmentShader) {
     if (!success) {
         char infoLog[512];
         glGetProgramInfoLog(program, 512, nullptr, infoLog);
-        std::cerr << "[OpenGLAPI] Program linking failed:\n" << infoLog << std::endl;
+        logError(m_logger, "[OpenGLAPI] Program linking failed:\n" << infoLog);
         glDeleteProgram(program);
         return 0;
     }

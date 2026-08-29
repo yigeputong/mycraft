@@ -4,6 +4,7 @@
 #include <glad/glad.h>
 #include <string>
 #include <memory>
+#include <core/Log.h>
 
 #define GL(func) func;OpenGLAPI::glCheckErr()
 
@@ -57,10 +58,11 @@ public:
     void DrawSkybox(TextureHandle cubemap, const glm::mat4& view) override;
     void DrawFullscreenQuad(TextureHandle textureID) override;
 
-    static constexpr int api_major = 3;
-    static constexpr int api_minor = 3;
+    static constexpr int api_major = 4;
+    static constexpr int api_minor = 6;
 private:
     Window* m_window;
+    std::unique_ptr<Log> m_logger = std::make_unique<Log>("OpenGL.log");
 
     // 内部数据结构
     struct MeshDataInternal {

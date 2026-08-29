@@ -46,16 +46,20 @@ bool Engine::InitClient(const EngineConfig& config) {
     }
 
     IsClient = true;
+    m_logger->log(LogLevel::INFO, "[Engine] Client Init");
     return true;
 }
 
 bool Engine::InitServer(const EngineConfig& config) {
     IsServer = true;
+    m_logger->log(LogLevel::INFO, "[Engine] Server Init");
     return true;
 }
 
 void Engine::Run(IGame* game) {
     if (!game) return;
+
+    m_logger->log(LogLevel::INFO, "[Engine] Run main loop");
 
     game->OnStart(*this);
 
@@ -104,7 +108,7 @@ void Engine::Stop() {
 }
 
 void Engine::Quit() {
-    
+    m_logger->log(LogLevel::INFO, "[Engine] Quit");
 }
     
 } // namespace Eng

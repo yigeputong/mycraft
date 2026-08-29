@@ -7,6 +7,7 @@
 
 //core
 #include "IGame.h"
+#include "core/Log.h"
 
 //client
 #include "client/Window.h"
@@ -60,6 +61,7 @@ private:
     Engine() = default;
     client::WindowManager* m_windowManager;
     std::unique_ptr<client::IRenderAPI> m_renderapi;
+    std::unique_ptr<Log> m_logger = std::make_unique<Log>("Engine.log");
 
     bool m_running = false;
     float m_deltaTime = 0.0f;
