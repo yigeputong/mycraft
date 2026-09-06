@@ -59,14 +59,27 @@ static KeyCode SDLToKeyCode(SDL_Scancode scancode) {
         case SDL_SCANCODE_RETURN:     return KeyCode::Enter;
         case SDL_SCANCODE_BACKSPACE:  return KeyCode::Backspace;
 
-        // 方向键
-        case SDL_SCANCODE_UP:    return KeyCode::Up;
-        case SDL_SCANCODE_DOWN:  return KeyCode::Down;
-        case SDL_SCANCODE_LEFT:  return KeyCode::Left;
-        case SDL_SCANCODE_RIGHT: return KeyCode::Right;
+        //F键
+        case SDL_SCANCODE_F1:         return KeyCode::F1;
+        case SDL_SCANCODE_F2:         return KeyCode::F2;
+        case SDL_SCANCODE_F3:         return KeyCode::F3;
+        case SDL_SCANCODE_F4:         return KeyCode::F4;
+        case SDL_SCANCODE_F5:         return KeyCode::F5;
+        case SDL_SCANCODE_F6:         return KeyCode::F6;
+        case SDL_SCANCODE_F7:         return KeyCode::F7;
+        case SDL_SCANCODE_F8:         return KeyCode::F8;
+        case SDL_SCANCODE_F9:         return KeyCode::F9;
+        case SDL_SCANCODE_F10:        return KeyCode::F10;
+        case SDL_SCANCODE_F11:        return KeyCode::F11;
+        case SDL_SCANCODE_F12:        return KeyCode::F12;
 
-        default:
-            return KeyCode::Space; // fallback
+        // 方向键
+        case SDL_SCANCODE_UP:       return KeyCode::Up;
+        case SDL_SCANCODE_DOWN:     return KeyCode::Down;
+        case SDL_SCANCODE_LEFT:     return KeyCode::Left;
+        case SDL_SCANCODE_RIGHT:    return KeyCode::Right;
+
+        default:    return KeyCode::None; // fallback
     }
 }
 
@@ -76,7 +89,7 @@ static KeyCode MouseButtonToKeyCode(Uint8 button) {
         case SDL_BUTTON_LEFT:   return KeyCode::MouseLeft;
         case SDL_BUTTON_RIGHT:  return KeyCode::MouseRight;
         case SDL_BUTTON_MIDDLE: return KeyCode::MouseMiddle;
-        default:                return KeyCode::Space;
+        default:                return KeyCode::None; // fallback
     }
 }
 

@@ -18,33 +18,36 @@ enum class RenderAPItype {
 };
 
 struct WindowConfig {
+    RenderAPItype apitype = RenderAPItype::OPENGL;
     std::string title = "Engine Window";
     int windowWidth = 800;
     int windowHeight = 600;
-    RenderAPItype apitype = RenderAPItype::OPENGL;
-    bool fullscreen = false;
-    bool resizable = true;
+    int windowPixelWidth = windowWidth;
+    int windowPixelHeight = windowHeight;
+    bool resizable = false;
     bool relativeMode = false;
+    bool fullscreen = false;
+    bool borderlessFullscreen = true;
 };
 
 class WindowManager {
 public:
 
-    static WindowManager* GetInstance();
+    WindowManager() = default;
     ~WindowManager();
     
     
     WindowManager(const WindowManager&) = delete;
     WindowManager& operator=(const WindowManager&) = delete;
 
-    // 创建窗口，返回窗口 ID
-    // return 0; failed
+    /// @brief 创建窗口，返回窗口 ID
+    /// @param config 
+    /// @return 0: 失败
     uint32_t CreateWindow(const WindowConfig& config);
 
     void DestroyWindow(uint32_t id);
 
     Window* GetWindow(uint32_t id);
-    const Window* GetWindow(uint32_t id) const;
 
     // 获取所有窗口id
     const std::vector<uint32_t>& GetAllWindowIds() const { return m_windowIds; }
@@ -63,7 +66,6 @@ public:
     void Update();
 
 private:
-    WindowManager() = default;
     std::unordered_map<uint32_t, std::unique_ptr<Window>> m_windows;
     std::vector<uint32_t> m_windowIds;  // 保持创建顺序
     uint32_t m_nextId = 1;

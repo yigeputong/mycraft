@@ -9,7 +9,6 @@
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
-
 #include "client/Window.h"
 
 namespace Eng::client {
@@ -31,8 +30,8 @@ bool OpenGLAPI::Initialize(int width, int height, Window* window) {
     glDepthFunc(GL_LESS);
 
     // 启用背面剔除
-    // glEnable(GL_CULL_FACE);
-    // glCullFace(GL_BACK);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
 
     SetViewport(0, 0, width, height);
 
@@ -49,7 +48,6 @@ bool OpenGLAPI::Initialize(int width, int height, Window* window) {
 void OpenGLAPI::Shutdown() {
     if (!m_initialized) return;
 
-    // 释放所有资源
     for (auto& [handle, mesh] : m_meshes) {
         if (mesh.vao) glDeleteVertexArrays(1, &mesh.vao);
         if (mesh.vbo) glDeleteBuffers(1, &mesh.vbo);
@@ -242,17 +240,17 @@ TextureHandle OpenGLAPI::CreateSkybox(const std::vector<std::string>& path) {
     if (!m_skyboxVAO) {
          float vertices[] = {
             -1.0f, -1.0f, -1.0f,   1.0f, -1.0f, -1.0f,   1.0f,  1.0f, -1.0f,
-            1.0f,  1.0f, -1.0f,  -1.0f,  1.0f, -1.0f,  -1.0f, -1.0f, -1.0f,
+             1.0f,  1.0f, -1.0f,  -1.0f,  1.0f, -1.0f,  -1.0f, -1.0f, -1.0f,
             -1.0f, -1.0f,  1.0f,   1.0f, -1.0f,  1.0f,   1.0f,  1.0f,  1.0f,
-            1.0f,  1.0f,  1.0f,  -1.0f,  1.0f,  1.0f,  -1.0f, -1.0f,  1.0f,
+             1.0f,  1.0f,  1.0f,  -1.0f,  1.0f,  1.0f,  -1.0f, -1.0f,  1.0f,
             -1.0f,  1.0f,  1.0f,  -1.0f,  1.0f, -1.0f,  -1.0f, -1.0f, -1.0f,
             -1.0f, -1.0f, -1.0f,  -1.0f, -1.0f,  1.0f,  -1.0f,  1.0f,  1.0f,
-            1.0f,  1.0f,  1.0f,   1.0f,  1.0f, -1.0f,   1.0f, -1.0f, -1.0f,
-            1.0f, -1.0f, -1.0f,   1.0f, -1.0f,  1.0f,   1.0f,  1.0f,  1.0f,
+             1.0f,  1.0f,  1.0f,   1.0f,  1.0f, -1.0f,   1.0f, -1.0f, -1.0f,
+             1.0f, -1.0f, -1.0f,   1.0f, -1.0f,  1.0f,   1.0f,  1.0f,  1.0f,
             -1.0f, -1.0f, -1.0f,   1.0f, -1.0f, -1.0f,   1.0f, -1.0f,  1.0f,
-            1.0f, -1.0f,  1.0f,  -1.0f, -1.0f,  1.0f,  -1.0f, -1.0f, -1.0f,
+             1.0f, -1.0f,  1.0f,  -1.0f, -1.0f,  1.0f,  -1.0f, -1.0f, -1.0f,
             -1.0f,  1.0f, -1.0f,   1.0f,  1.0f, -1.0f,   1.0f,  1.0f,  1.0f,
-            1.0f,  1.0f,  1.0f,  -1.0f,  1.0f,  1.0f,  -1.0f,  1.0f, -1.0f
+             1.0f,  1.0f,  1.0f,  -1.0f,  1.0f,  1.0f,  -1.0f,  1.0f, -1.0f
         };
 
         glGenVertexArrays(1, &m_skyboxVAO);
@@ -656,6 +654,8 @@ void OpenGLAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
 void OpenGLAPI::DrawSkybox(TextureHandle cubemap, const glm::mat4& view) {
     if (!m_initialized) return;
 
+    glDisable(GL_CULL_FACE);
+
     auto texIt = m_textures.find(cubemap);
     auto shaderIt = m_shaders.find(m_skyboxShader);
     if (texIt == m_textures.end() || shaderIt == m_shaders.end()) return;
@@ -696,6 +696,8 @@ void OpenGLAPI::DrawSkybox(TextureHandle cubemap, const glm::mat4& view) {
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+
+    glEnable(GL_CULL_FACE);
 }
 
 void OpenGLAPI::DrawFullscreenQuad(TextureHandle textureID) {

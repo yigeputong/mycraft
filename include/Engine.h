@@ -22,9 +22,6 @@
 
 namespace Eng {
 
-class SceneManager;
-class InputManager;
-
 enum class Mode {
     Client,
     Server,
@@ -42,9 +39,9 @@ public:
 
     static Engine& GetInstance(); // 单例引擎
 
-    bool Init(const EngineConfig& config);
+    bool Init(const EngineConfig& config, IGame* game);
 
-    void Run(IGame* game);
+    void Run();
 
     void Stop();
 
@@ -53,14 +50,13 @@ public:
     std::string GetLastError() { return m_lastError; }
     bool IsRunning() const { return m_running; }
     float GetDeltaTime() const;
-    client::WindowManager* GetWindowManager() { return m_windowManager; }
-    client::IRenderAPI* GetRenderAPI() { return m_renderapi.get(); }
+    client::WindowManager* GetWindowManager() { return m_windowManager.get(); }
     EngineConfig GetConfig() { return m_engConfig; }
 
 private:
     Engine() = default;
-    client::WindowManager* m_windowManager;
-    std::unique_ptr<client::IRenderAPI> m_renderapi;
+    std::unique_ptr<IGame> m_game;
+    std::unique_ptr<client::WindowManager> m_windowManager;
     std::unique_ptr<Log> m_logger = std::make_unique<Log>("Engine.log");
 
     bool m_running = false;

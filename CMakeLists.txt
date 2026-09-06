@@ -19,6 +19,8 @@ find_package(nlohmann_json CONFIG REQUIRED)
 
 include_directories(
     include/
+    lib/imgui/
+    lib/imgui/backends/
 )
 
 add_executable(mycraft
@@ -32,6 +34,14 @@ add_executable(mycraft
     src/client/WindowManager.cpp
 
     src/client/Render/OpenGL.cpp
+
+    lib/imgui/imgui.cpp
+    lib/imgui/imgui_demo.cpp 
+    lib/imgui/imgui_draw.cpp 
+    lib/imgui/imgui_tables.cpp
+    lib/imgui/imgui_widgets.cpp
+    lib/imgui/backends/imgui_impl_sdl3.cpp
+    lib/imgui/backends/imgui_impl_opengl3.cpp
 )
 
 find_package(SDL3_image CONFIG REQUIRED)
@@ -50,4 +60,11 @@ target_compile_options(mycraft PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX- /utf-8>
     $<$<CXX_COMPILER_ID:GNU>:-Wall -Wextra -Wpedantic>
     $<$<CXX_COMPILER_ID:Clang>:-Wall -Wextra -Wpedantic>
+)
+
+add_custom_command(TARGET mycraft POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets
+        $<TARGET_FILE_DIR:mycraft>/assets
+    COMMENT "Copying assets to output directory"
 )

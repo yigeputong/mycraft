@@ -32,7 +32,11 @@ private:
     std::ofstream m_file;
     std::mutex m_mutex;
     bool m_consoleOutput = true;
+#ifdef _DEBUG
     LogLevel m_minLevel = LogLevel::DEBUG;
+#else
+    LogLevel m_minLevel = LogLevel::INFO;
+#endif
 };
 
 

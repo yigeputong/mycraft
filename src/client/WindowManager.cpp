@@ -1,16 +1,16 @@
 #include "client/WindowManager.h"
 #include "client/Window.h"
 #include "client/Input.h"
+#include "imgui.h"
+#include "imgui_impl_sdl3.h"
+#include <iostream>
 
 namespace Eng::client {
 
-WindowManager* WindowManager::GetInstance() {
-    static WindowManager mgr;
-    return &mgr;
-}
-
 WindowManager::~WindowManager() {
-    SDL_Quit();
+    m_windowIds.clear();
+    auto windows = std::move(m_windows);
+    windows.clear();  // 此时 m_windows 已为空
 }
 
 uint32_t WindowManager::CreateWindow(const WindowConfig& config) {
@@ -36,6 +36,12 @@ void WindowManager::DestroyWindow(uint32_t id) {
 
     if (m_mainWindowId == id) {
         m_mainWindowId = m_windowIds.empty() ? 0 : m_windowIds[0];
+    }
+
+    if (it->second) {
+        it->second->onEvent = nullptr;
+        it->second->onResize = nullptr;
+        it->second->onCloseRequest = nullptr;
     }
 
     m_windowIds.erase(std::remove(m_windowIds.begin(), m_windowIds.end(), id), m_windowIds.end());

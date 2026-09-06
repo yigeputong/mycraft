@@ -1,7 +1,11 @@
 #include "Engine.h"
 #include <chrono>
 #include <iostream>
+#include <filesystem>
 #include <SDL3_image/SDL_image.h>
+#include "imgui.h"
+#include "imgui_impl_sdl3.h"
+#include "imgui_impl_opengl3.h"
 
 #include "client/Render/OpenGLAPI.h"
 
@@ -12,8 +16,9 @@ Engine& Engine::GetInstance() {
     return eng;
 }
 
-bool Engine::Init(const EngineConfig& config) {
+bool Engine::Init(const EngineConfig& config, IGame* game) {
     m_engConfig = config;
+    m_game.reset(game);
     switch (config.mode) {
     case Mode::Client:
         return InitClient(config);
@@ -38,12 +43,7 @@ bool Engine::InitClient(const EngineConfig& config) {
         return false;
     }
 
-    m_windowManager = client::WindowManager::GetInstance();
-
-    switch(config.windowConfig.apitype) {
-        case client::RenderAPItype::OPENGL:
-            m_renderapi = std::make_unique<client::OpenGLAPI>();
-    }
+    m_windowManager.reset(new client::WindowManager);
 
     IsClient = true;
     m_logger->log(LogLevel::INFO, "[Engine] Client Init");
@@ -56,12 +56,11 @@ bool Engine::InitServer(const EngineConfig& config) {
     return true;
 }
 
-void Engine::Run(IGame* game) {
-    if (!game) return;
+void Engine::Run() {
 
     m_logger->log(LogLevel::INFO, "[Engine] Run main loop");
 
-    game->OnStart(*this);
+    m_game->OnStart(*this);
 
     m_running = true;
 
@@ -78,29 +77,28 @@ void Engine::Run(IGame* game) {
 
         client::Input::Get().Update();
 
-        m_windowManager->PollEvents();
-        if (!m_windowManager->HasAnyWindow()) {
-            m_running = false;
-            break;
+        if (m_windowManager) {
+            m_windowManager->PollEvents();
+            if (!m_windowManager->HasAnyWindow()) {
+                m_running = false;
+                break;
+            }
         }
 
         accumulator += deltaTime;
 
-        // 固定步长更新
-        while (accumulator >= fixedDelta) {
-            game->OnUpdate(*this, fixedDelta);   // 逻辑更新，固定时间
-            accumulator -= fixedDelta;
+        if (m_game->OnUpdate(*this, fixedDelta)) {
+            break;
         }
 
-        game->OnUpdate(*this, deltaTime);
+        m_game->OnRender(*this);
 
-        game->OnRender(*this);
-
-        m_windowManager->Update();
+        if (m_windowManager)
+            m_windowManager->Update();
 
     }
 
-    game->OnShutdown(*this);
+    m_game->OnShutdown(*this);
 }
 
 void Engine::Stop() {
@@ -108,6 +106,9 @@ void Engine::Stop() {
 }
 
 void Engine::Quit() {
+    m_windowManager.reset();
+    m_game.reset();
+    SDL_Quit();
     m_logger->log(LogLevel::INFO, "[Engine] Quit");
 }
     
