@@ -1,13 +1,6 @@
 #include "Engine.h"
 #include <chrono>
-#include <iostream>
-#include <filesystem>
 #include <SDL3_image/SDL_image.h>
-#include "imgui.h"
-#include "imgui_impl_sdl3.h"
-#include "imgui_impl_opengl3.h"
-
-#include "client/Render/OpenGLAPI.h"
 
 namespace Eng {
 

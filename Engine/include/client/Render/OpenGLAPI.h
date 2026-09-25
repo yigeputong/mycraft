@@ -1,10 +1,10 @@
 #pragma once
 
 #include "client/Render/RenderAPI.h"
+#include "core/Log.h"
 #include <glad/glad.h>
 #include <string>
 #include <memory>
-#include <core/Log.h>
 
 #define GL(func) func;OpenGLAPI::glCheckErr()
 

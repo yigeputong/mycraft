@@ -1,5 +1,6 @@
+#pragma once
+
 #include "Engine.h"
-#include "IGame.h"
 #include <iostream>
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
@@ -29,16 +30,12 @@ private:
     bool cursorEvents(const SDL_Event& event);
     bool scrollEvents(const SDL_Event& event);
 
-    static constexpr float zNear = 0.5f;    //近平面
-    float zFar = 256.0f;                    //远平面
+    static constexpr float zNear = 0.5f;
 
     //camera
     glm::mat4 model = glm::mat4(1.0);
     glm::mat4 projection = glm::mat4(1.0);
 
-    float cameraSpeed = 0.05f;
-    float cameraSensitivity = 0.01f;
-    float fov = 75.0f;
     float yaw = -90.0f;
     float pitch = 0.0f;
     glm::vec3 cameraPos = glm::vec3(0.0f, 0.0f,  3.0f);
@@ -50,12 +47,21 @@ private:
 
     struct Settings {
         bool fullscreen = false;
-
-    } settings;
+        float fov = 75.0f;
+        float Speed = 3.0f;
+        float Sensitivity = 0.01f;
+        float zFar = 256.0f;
+    } s;
 public:
-    void OnStart(Eng::Engine& engine) override {
+    void OnStart(Eng::Engine& engine) {
+        Eng::client::WindowConfig windowConfig = {
+            .apitype = Eng::client::RenderAPItype::OPENGL,
+            .title = "Mycraft v0.0.0",
+            .windowWidth = 1280,
+            .windowHeight = 720
+        };
         winMgr = engine.GetWindowManager();
-        m_win = winMgr->CreateWindow(engine.GetConfig().windowConfig);
+        m_win = winMgr->CreateWindow(windowConfig);
         mainWin = winMgr->GetWindow(m_win);
         if (!mainWin) return;
 
@@ -176,7 +182,7 @@ public:
         m_skybox = renderer->CreateSkybox(skyboxFaces);
     }
 
-    bool OnUpdate(Eng::Engine& engine, float deltaTime) override {
+    bool OnUpdate(Eng::Engine& engine, float deltaTime) {
         using namespace Eng::client;
 
         // 按 ESC 退出
@@ -185,7 +191,7 @@ public:
         }
 
         // WASD 移动
-        float speed = 3.0f * deltaTime;
+        float speed = s.Speed * deltaTime;
         glm::vec3 front = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
         glm::vec3 right = glm::normalize(glm::cross(front, cameraUp));
 
@@ -221,8 +227,8 @@ public:
 
         float scroll = Input::GetScrollDelta();
         if (scroll != 0.0f) {
-            fov -= scroll * 2.0f; // 向上滚缩小 FOV（拉近视野），向下滚放大
-            fov = glm::clamp(fov, 30.0f, 120.0f); // 限制范围（1~120度）
+            s.fov -= scroll * 2.0f; // 向上滚缩小 FOV（拉近视野），向下滚放大
+            s.fov = glm::clamp(s.fov, 30.0f, 120.0f); // 限制范围（1~120度）
         }
 
         // 更新 cameraFront
@@ -235,14 +241,13 @@ public:
         return false;
     }
 
-    void OnRender(Eng::Engine& engine) override {
+    void OnRender(Eng::Engine& engine) {
 
         renderer->BindFramebuffer(fbo);
 
-            projection = glm::perspective(glm::radians(fov), mainWin->GetAspectRatio(), zNear, zFar);
+            model = glm::scale(glm::translate(glm::mat4(1.0), glm::vec3(0.0f, 0.0f, 0.0f)), glm::vec3(1.0f, 1.0f, 1.0f));
             view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-            model = glm::translate(model, glm::vec3(0.0f, 0.0f, 0.0f));
-            model = glm::scale(model, glm::vec3(1.0f, 1.0f, 1.0f));
+            projection = glm::perspective(glm::radians(s.fov), mainWin->GetAspectRatio(), zNear, s.zFar);
 
             renderer->SetModelMatrix(model);
             renderer->SetViewMatrix(view);
@@ -252,10 +257,6 @@ public:
 
             renderer->DrawMesh(m_model.mesh, m_cubeShader, {m_model.diffuseTexture, 0, 32.0f});
             renderer->DrawSkybox(m_skybox, view);
-
-            model = glm::mat4(1.0);
-            view = glm::mat4(1.0);
-            projection = glm::mat4(1.0);
 
         renderer->UnbindFramebuffer();
         
@@ -286,30 +287,15 @@ public:
         ImGui::DestroyContext();
         winMgr->DestroyWindow(m_win);
     }
+
+    void RunServer(Eng::Engine& engine);
+    void RunClient(Eng::Engine& engine);
 };
 
-int main() {
-    Eng::EngineConfig engConfig = {
-        .mode = Eng::Mode::ClientAndServer,
-        .name = "Mycraft",
-        .windowConfig = {
-            .apitype = Eng::client::RenderAPItype::OPENGL,
-            .title = "Mycraft v0.0.0",
-            .windowWidth = 1280,
-            .windowHeight = 720
-        }
-    };
+void MyGame::RunServer(Eng::Engine& engine) {
 
-    Eng::Engine& eng = Eng::Engine::GetInstance();
+}
 
-    if (!eng.Init(engConfig, new MyGame)) {
-        std::cerr << "[Engine] Failed to initialize!" << std::endl;
-        std::cerr << "[Engine] Error: " << eng.GetLastError() << std::endl;
-        return -1;
-    }
-
-    eng.Run();
-
-    eng.Quit();
-    return 0;
+void MyGame::RunClient(Eng::Engine& engine) {
+    
 }

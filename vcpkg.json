@@ -1,16 +1,20 @@
 {
   "dependencies": [
+    "assimp",
     "glad",
+    "glm",
+    "nlohmann-json",
     "sdl3",
     {
       "name": "sdl3-image",
-      "features": [ "png", "jpeg" ]
+      "features": [
+        "jpeg",
+        "png"
+      ]
     },
+    "volk",
     "vulkan-headers",
     "vulkan-loader",
-    "assimp",
-    "glm",
-    "volk",
-    "nlohmann-json"
+    "sdl3-net"
   ]
 }

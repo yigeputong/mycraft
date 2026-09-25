@@ -31,7 +31,6 @@ enum class Mode {
 struct EngineConfig {
     Mode mode;
     std::string name;
-    client::WindowConfig windowConfig;
 };
 
 class Engine {
