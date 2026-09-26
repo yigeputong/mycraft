@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include "core/Log.h"
 #include <chrono>
 #include <SDL3_image/SDL_image.h>
 
@@ -12,6 +13,22 @@ Engine& Engine::GetInstance() {
 bool Engine::Init(const EngineConfig& config, IGame* game) {
     m_engConfig = config;
     m_game.reset(game);
+
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        logError(m_logger, "[Engine] SDL_Init failed: " << SDL_GetError());
+        return false;
+    }
+    logInfo(m_logger, "[Engine] SDL initialized");
+
+    if (config.enableNetwork) {
+        if (!NET_Init()) {
+            logError(m_logger, "[Engine] NET_Init failed: " << SDL_GetError());
+            SDL_Quit();
+            return false;
+        }
+        logInfo(m_logger, "[Engine] Networking initialized");
+    }
+
     switch (config.mode) {
     case Mode::Client:
         return InitClient(config);
@@ -31,11 +48,6 @@ bool Engine::Init(const EngineConfig& config, IGame* game) {
 }
 
 bool Engine::InitClient(const EngineConfig& config) {
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        m_lastError = "SDL_Init failed: " + std::string(SDL_GetError());
-        return false;
-    }
-
     m_windowManager.reset(new client::WindowManager);
 
     IsClient = true;
@@ -51,7 +63,6 @@ bool Engine::InitServer(const EngineConfig& config) {
 
 void Engine::Run() {
 
-    m_logger->log(LogLevel::INFO, "[Engine] Run main loop");
 
     m_game->OnStart(*this);
 
@@ -62,6 +73,7 @@ void Engine::Run() {
     constexpr float fixedDelta = 1.0f / 20.0f;
     float accumulator = 0.0f;
 
+    m_logger->log(LogLevel::INFO, "[Engine] Run main loop");
     while (m_running) {
         auto currentTime = steady_clock::now();
         float deltaTime = duration<float>(currentTime - lastTime).count();
@@ -101,8 +113,10 @@ void Engine::Stop() {
 void Engine::Quit() {
     m_windowManager.reset();
     m_game.reset();
+    NET_Quit();
+    logInfo(m_logger, "[Engine] Networking shutdown");
     SDL_Quit();
-    m_logger->log(LogLevel::INFO, "[Engine] Quit");
+    logInfo(m_logger, "[Engine] Quit");
 }
     
 } // namespace Eng

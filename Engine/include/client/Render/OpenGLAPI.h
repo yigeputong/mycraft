@@ -32,9 +32,10 @@ public:
     // 资源创建（返回句柄）
     MeshHandle CreateMesh(const MeshData& data) override;
     TextureHandle CreateTexture(const std::string& path) override;
+    TextureHandle CreateTextureFromMemory(const aiTexture* embedded) override;
     TextureHandle CreateSkybox(const std::vector<std::string>& path) override;
     ShaderHandle CreateShader(const std::string& vertPath, const std::string& fragPath) override;
-    Model LoadModel(const std::string& path) override;
+    Model LoadModel(const std::string& path, bool flipUV = false) override;
 
     // 资源销毁
     void DestroyMesh(MeshHandle handle) override;
@@ -54,6 +55,10 @@ public:
 
     // 绘制
     void DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& material) override;
+    void DrawMeshInstanced(MeshHandle mesh,
+                                   ShaderHandle shader,
+                                   const Material& material,
+                                   const std::vector<glm::mat4>& transforms) override;
 
     void DrawSkybox(TextureHandle cubemap, const glm::mat4& view) override;
     void DrawFullscreenQuad(TextureHandle textureID) override;
@@ -69,6 +74,7 @@ private:
         GLuint vao = 0;
         GLuint vbo = 0;
         GLuint ebo = 0;
+        GLuint instanceVBO = 0;
         size_t indexCount = 0;
         GLenum indexType = GL_NONE;
     };
@@ -97,6 +103,9 @@ private:
     std::unordered_map<MeshHandle, MeshDataInternal> m_meshes;
     std::unordered_map<TextureHandle, TextureDataInternal> m_textures;
     std::unordered_map<ShaderHandle, ShaderDataInternal> m_shaders;
+    std::unordered_map<std::string, TextureHandle> m_textureCache;
+ 
+    TextureHandle m_defaultTexture = 0;
 
     MeshHandle m_nextMeshHandle = 1;
     TextureHandle m_nextTextureHandle = 1;

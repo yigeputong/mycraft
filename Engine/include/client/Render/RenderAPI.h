@@ -6,6 +6,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <string>
 
+struct aiTexture;
+
 namespace Eng::client {
 
 class Window;
@@ -31,9 +33,22 @@ struct Material {
     float shininess = 32.0f;
 };
 
-struct Model {
+struct SubMesh {
     MeshHandle mesh = 0;
     TextureHandle diffuseTexture = 0;
+    glm::mat4 localTransform = glm::mat4(1.0f);  // 保留扩展空间
+};
+
+struct Model {
+    std::vector<SubMesh> subMeshes;
+
+    // 便利方法：是否有效
+    bool IsValid() const { return !subMeshes.empty(); }
+
+    // 兼容旧代码：返回第一个 mesh
+    MeshHandle FirstMesh() const {
+        return subMeshes.empty() ? 0 : subMeshes[0].mesh;
+    }
 };
 
 struct Framebuffer {
@@ -96,10 +111,11 @@ public:
     // 资源创建
     virtual MeshHandle CreateMesh(const MeshData& data) = 0;
     virtual TextureHandle CreateTexture(const std::string& path) = 0;
+    virtual TextureHandle CreateTextureFromMemory(const aiTexture* embedded) = 0;
     //order: right, left, top, bottom, front, back
     virtual TextureHandle CreateSkybox(const std::vector<std::string>& path) = 0;
     virtual ShaderHandle CreateShader(const std::string& vertPath, const std::string& fragPath) = 0;
-    virtual Model LoadModel(const std::string& path) = 0;
+    virtual Model LoadModel(const std::string& path, bool flipUV = false) = 0;
 
     // 帧缓冲创建
     virtual Framebuffer CreateFramebuffer(int width, int height) = 0;
@@ -120,6 +136,10 @@ public:
 
     // 绘制核心
     virtual void DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& material) = 0;
+    virtual void DrawMeshInstanced(MeshHandle mesh,
+                                    ShaderHandle shader,
+                                    const Material& material,
+                                    const std::vector<glm::mat4>& transforms) = 0;
 
     // 特殊绘制（天空盒、UI等）
     virtual void DrawSkybox(TextureHandle cubemap, const glm::mat4& view) = 0;

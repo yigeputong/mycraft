@@ -1,14 +1,13 @@
-# ============ 引擎静态库 ============
 add_library(engine STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Engine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/Log.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/NetworkChannel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/NetworkServer.cpp
 
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Input.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Window.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/WindowManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/OpenGL.cpp
-
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/server.cpp
 
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui_demo.cpp

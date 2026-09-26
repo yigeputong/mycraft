@@ -44,6 +44,9 @@ bool OpenGLAPI::Initialize(int width, int height, Window* window) {
     std::string version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
     m_logger->log(LogLevel::INFO, "[OpenGLAPI] Initialized (OpenGL " + version + ")");
 
+    // 默认纹理
+    m_defaultTexture = CreateTexture("./assets/textures/missing_texture.png");
+
     return true;
 }
 
@@ -129,6 +132,20 @@ MeshHandle OpenGLAPI::CreateMesh(const MeshData& data) {
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, uv));
     glEnableVertexAttribArray(2);
 
+    // 实例 VBO
+    glGenBuffers(1, &internal.instanceVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, internal.instanceVBO);
+    // 先分配空空间（每帧更新）
+    glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+
+    // 实例矩阵是 mat4，占 4 个 vec4 属性槽（location = 3,4,5,6）
+    for (int i = 0; i < 4; ++i) {
+        glEnableVertexAttribArray(3 + i);
+        glVertexAttribPointer(3 + i, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4),
+                              (void*)(sizeof(glm::vec4) * i));
+        glVertexAttribDivisor(3 + i, 1);   // 每个实例读一次
+    }
+
     // EBO（索引缓冲）
     if (!data.indices.empty()) {
         glGenBuffers(1, &internal.ebo);
@@ -153,6 +170,12 @@ MeshHandle OpenGLAPI::CreateMesh(const MeshData& data) {
 
 TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
     if (!m_initialized) return 0;
+
+    auto it = m_textureCache.find(path);
+    if (it != m_textureCache.end()) {
+        logDebug(m_logger, "[Texture] Cache hit: " << path);
+        return it->second;
+    }
 
     SDL_Surface* surf = IMG_Load(path.c_str());
     if (!surf) {
@@ -189,7 +212,7 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
     }
 
     int bpp = details->bytes_per_pixel;
-    logInfo(m_logger, "[Texture] Bytes per pixel: " << bpp);
+    logDebug(m_logger, "[Texture] Bytes per pixel: " << bpp);
 
     // 5. 确定 OpenGL 格式
     GLenum internalFormat = GL_RGBA;
@@ -213,8 +236,8 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
     glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, surf->w, surf->h, 0,
                  format, GL_UNSIGNED_BYTE, surf->pixels);
@@ -232,12 +255,105 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
     data.format = format;
     m_textures[handle] = data;
 
-    logInfo(m_logger, "[Texture] OpenGL texture created: " << textureID);
+    m_textureCache[path] = handle;
+    logInfo(m_logger, "[Texture] Loaded and cached: " << path);
+    return handle;
+}
+
+TextureHandle OpenGLAPI::CreateTextureFromMemory(const aiTexture* embedded) {
+    if (!embedded || !embedded->pcData) {
+        logError(m_logger, "[Texture] Embedded texture is null");
+        return 0;
+    }
+
+    SDL_Surface* surface = nullptr;
+
+    if (embedded->mHeight == 0) {
+        // ===== 情况 1：压缩数据（PNG/JPG） =====
+        SDL_IOStream* io = SDL_IOFromMem(
+            const_cast<void*>(static_cast<const void*>(embedded->pcData)),
+            embedded->mWidth
+        );
+        if (!io) {
+            logError(m_logger, "[Texture] SDL_IOFromMem failed: " << SDL_GetError());
+            return 0;
+        }
+
+        surface = IMG_Load_IO(io, true);  // true = 自动关闭 io
+        if (!surface) {
+            logError(m_logger, "[Texture] IMG_Load_IO failed: " << SDL_GetError());
+            return 0;
+        }
+    } else {
+        // ===== 情况 2：未压缩 BGRA 像素 =====
+        surface = SDL_CreateSurface(
+            static_cast<int>(embedded->mWidth),
+            static_cast<int>(embedded->mHeight),
+            SDL_PIXELFORMAT_BGRA32
+        );
+        if (!surface) {
+            logError(m_logger, "[Texture] SDL_CreateSurface failed: " << SDL_GetError());
+            return 0;
+        }
+        std::memcpy(surface->pixels, embedded->pcData,
+                    embedded->mWidth * embedded->mHeight * 4);
+    }
+
+    // ===== 转成 ABGR8888（匹配 OpenGL 的 GL_RGBA） =====
+    SDL_Surface* converted = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_ABGR8888);
+    SDL_DestroySurface(surface);
+    if (!converted) {
+        logError(m_logger, "[Texture] Conversion failed: " << SDL_GetError());
+        return 0;
+    }
+
+    // ===== 上传到 OpenGL =====
+    GLuint textureID;
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_2D, textureID);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+                 converted->w, converted->h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, converted->pixels);
+
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    // 各向异性过滤
+    GLfloat maxAniso = 1.0f;
+    glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY, &maxAniso);
+    if (maxAniso > 1.0f) {
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY,
+                        std::min(16.0f, maxAniso));
+    }
+
+    int w = converted->w;
+    int h = converted->h;
+    SDL_DestroySurface(converted);
+
+    // ===== 分配句柄 =====
+    TextureHandle handle = m_nextTextureHandle++;
+    TextureDataInternal data;
+    data.textureID = textureID;
+    data.width = w;
+    data.height = h;
+    data.format = GL_RGBA;
+    m_textures[handle] = data;
+
+    logInfo(m_logger, "[Texture] Embedded texture created: " << textureID
+              << " (" << w << "x" << h << ")");
+
     return handle;
 }
 
 TextureHandle OpenGLAPI::CreateSkybox(const std::vector<std::string>& path) {
     if (!m_initialized) return 0;
+
+    logInfo(m_logger, "[OpenGLAPI] Loading Skybox textures");
 
     if (!m_skyboxVAO) {
          float vertices[] = {
@@ -350,114 +466,127 @@ ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath, const std::str
     return handle;
 }
 
-Model OpenGLAPI::LoadModel(const std::string& path) {
+Model OpenGLAPI::LoadModel(const std::string& path, bool flipUV) {
     Model result;
     Assimp::Importer importer;
 
-    // ===== 1. 加载模型 =====
-    const aiScene* scene = importer.ReadFile(path,
-        aiProcess_Triangulate |             // 所有面转三角形
-        aiProcess_GenSmoothNormals |        // 生成法线
-        // aiProcess_FlipUVs |              // 翻转纹理坐标
-        aiProcess_JoinIdenticalVertices |   // 合并重复顶点
-        aiProcess_OptimizeMeshes            // 优化网格
-    );
+    unsigned int flags = aiProcess_Triangulate |
+                         aiProcess_GenSmoothNormals |
+                         aiProcess_JoinIdenticalVertices |
+                         aiProcess_OptimizeMeshes |
+                         aiProcess_PreTransformVertices;
+    if (flipUV) flags |= aiProcess_FlipUVs;
 
+    const aiScene* scene = importer.ReadFile(path, flags);
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
         logError(m_logger, "[LoadModel] Assimp error: " << importer.GetErrorString());
         return result;
     }
 
     logInfo(m_logger, "[LoadModel] Loaded: " << path);
-    logInfo(m_logger, "[LoadModel] Meshes: " << scene->mNumMeshes);
+    logDebug(m_logger, "[LoadModel] Meshes: " << scene->mNumMeshes);
 
-    std::vector<Vertex> allVertices;
-    std::vector<uint32_t> allIndices;
-    uint32_t indexOffset = 0;
+    std::filesystem::path modelDir = std::filesystem::path(path).parent_path();
+
+    // ★ Bug 1 修复：texCache 移到循环外
+    std::unordered_map<std::string, TextureHandle> texCache;
 
     for (unsigned int m = 0; m < scene->mNumMeshes; ++m) {
         aiMesh* mesh = scene->mMeshes[m];
 
+        // ---- 提取顶点 ----
+        std::vector<Vertex> vertices;
+        vertices.reserve(mesh->mNumVertices);
         for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
             Vertex v;
-            v.position = glm::vec3(mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z);
-            
-            if (mesh->mNormals) {
-                v.normal = glm::vec3(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z);
-            } else {
-                v.normal = glm::vec3(0.0f, 1.0f, 0.0f);
-            }
+            v.position = glm::vec3(mesh->mVertices[i].x,
+                                   mesh->mVertices[i].y,
+                                   mesh->mVertices[i].z);
 
-            if (mesh->mTextureCoords[0]) {
-                v.uv = glm::vec2(mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y);
-            } else {
-                v.uv = glm::vec2(0.0f, 0.0f);
-            }
-            allVertices.push_back(v);
+            v.normal = mesh->mNormals
+                ? glm::vec3(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z)
+                : glm::vec3(0.0f, 1.0f, 0.0f);
 
-            
+            v.uv = mesh->mTextureCoords[0]
+                ? glm::vec2(mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y)
+                : glm::vec2(0.0f, 0.0f);
+
+            vertices.push_back(v);
         }
+
+        // ---- 提取索引 ----
+        std::vector<uint32_t> indices;
         for (unsigned int f = 0; f < mesh->mNumFaces; ++f) {
             aiFace face = mesh->mFaces[f];
             for (unsigned int j = 0; j < face.mNumIndices; ++j) {
-                allIndices.push_back(indexOffset + face.mIndices[j]);
+                indices.push_back(face.mIndices[j]);
             }
         }
 
-        indexOffset += mesh->mNumVertices;
-    }
+        if (vertices.empty() || indices.empty()) continue;
 
-    if (allVertices.empty() || allIndices.empty()) {
-        logError(m_logger, "[LoadModel] No valid mesh data!");
-        return result;
-    }
+        // ---- 上传到 GPU ----
+        MeshData meshData;
+        meshData.vertices = vertices;
+        meshData.indices = indices;
+        MeshHandle meshHandle = CreateMesh(meshData);
 
-    // ===== 3. 上传到 GPU =====
-    MeshData meshData;
-    meshData.vertices = allVertices;
-    meshData.indices = allIndices;
-    result.mesh = CreateMesh(meshData);
-
-    if (result.mesh == 0) {
-        logError(m_logger, "[LoadModel] Failed to create mesh!");
-        return result;
-    }
-
-    logInfo(m_logger, "[LoadModel] Uploaded: " << allVertices.size() << " vertices, "
-              << allIndices.size() << " indices");
-
-    // ===== 4. 加载第一个材质的漫反射纹理 =====
-    if (scene->mNumMaterials > 0) {
-        aiMaterial* material = scene->mMaterials[0];
-        aiString texPath;
-
-        if (material->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS) {
-            // 4.1 处理纹理路径
-            std::string texStr = texPath.C_Str();
-
-            // 如果路径是相对路径，拼接模型所在目录
-            std::filesystem::path modelPath(path);
-            std::string fullTexPath = texStr;
-
-            // 检查文件是否存在，如果不存在则尝试拼接目录
-            if (!std::filesystem::exists(fullTexPath)) {
-                fullTexPath = modelPath.parent_path().string() + "/" + texStr;
-            }
-
-            // 4.2 加载纹理
-            result.diffuseTexture = CreateTexture(fullTexPath);
-
-            if (result.diffuseTexture == 0) {
-                logError(m_logger, "[LoadModel] Warning: Failed to load texture: " << fullTexPath);
-            } else {
-                logInfo(m_logger, "[LoadModel] Texture loaded!");
-            }
-        } else {
-            logInfo(m_logger, "[LoadModel] No diffuse texture found.");
+        if (meshHandle == 0) {
+            logError(m_logger, "[LoadModel] Failed to create mesh " << m);
+            continue;
         }
+
+        // ---- 加载该网格的材质纹理 ----
+        TextureHandle diffuseTex = 0;   // ★ Bug 2 修复：只声明一次
+
+        if (mesh->mMaterialIndex < scene->mNumMaterials) {
+            aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
+            aiString texPath;
+
+            if (material->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS) {
+                const aiTexture* embedded = scene->GetEmbeddedTexture(texPath.C_Str());
+                std::string texKey = texPath.C_Str();
+
+                auto cacheIt = texCache.find(texKey);
+                if (cacheIt != texCache.end()) {
+                    diffuseTex = cacheIt->second;
+                    logDebug(m_logger, "[LoadModel] Texture cache hit: " << texKey);
+                } else {
+                    if (embedded) {
+                        diffuseTex = CreateTextureFromMemory(embedded);
+                    } else {
+                        std::string texStr = texPath.C_Str();
+                        if (texStr.starts_with("//")) texStr = texStr.substr(2);
+
+                        std::filesystem::path fullTexPath = modelDir / texStr;
+                        if (std::filesystem::exists(fullTexPath)) {
+                            diffuseTex = CreateTexture(fullTexPath.string());
+                        } else {
+                            logWarning(m_logger, "[LoadModel] Texture not found: "
+                                       << fullTexPath.string());
+                        }
+                    }
+                    texCache[texKey] = diffuseTex;
+                }
+            }
+        }
+
+        // ---- 加入 subMeshes ----
+        SubMesh sub;
+        sub.mesh = meshHandle;
+        sub.diffuseTexture = diffuseTex;   // ★ 现在能拿到正确值了
+        result.subMeshes.push_back(sub);
+
+        logDebug(m_logger, "[LoadModel] SubMesh " << m << ": "
+                 << vertices.size() << " verts, tex=" << diffuseTex);
     }
 
-    logInfo(m_logger, "[LoadModel] Done!");
+    if (result.subMeshes.empty()) {
+        logError(m_logger, "[LoadModel] No valid submeshes!");
+        return result;
+    }
+
+    logInfo(m_logger, "[LoadModel] Done! SubMeshes: " << result.subMeshes.size());
     return result;
 }
 
@@ -624,6 +753,10 @@ void OpenGLAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
             glBindTexture(GL_TEXTURE_2D, texIt->second.textureID);
             SetUniform(shader, "uDiffuseTexture", 0);
         }
+    } else {
+        // ★ 绑定默认白色纹理，避免"继承"上一个纹理
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
     }
     // 镜面纹理
     if (material.specular != 0) {
@@ -653,10 +786,64 @@ void OpenGLAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+void OpenGLAPI::DrawMeshInstanced(MeshHandle mesh,
+                                   ShaderHandle shader,
+                                   const Material& material,
+                                   const std::vector<glm::mat4>& transforms) {
+    if (transforms.empty()) return;
+
+    auto meshIt = m_meshes.find(mesh);
+    auto shaderIt = m_shaders.find(shader);
+    if (meshIt == m_meshes.end() || shaderIt == m_shaders.end()) return;
+
+    auto& meshData = meshIt->second;
+    GLuint program = shaderIt->second.program;
+
+    glUseProgram(program);
+
+    // ---- 上传实例矩阵 ----
+    glBindBuffer(GL_ARRAY_BUFFER, meshData.instanceVBO);
+    glBufferData(GL_ARRAY_BUFFER,
+                 transforms.size() * sizeof(glm::mat4),
+                 transforms.data(),
+                 GL_DYNAMIC_DRAW);
+
+    // ---- 绑定纹理 ----
+    if (material.diffuse != 0) {
+        auto texIt = m_textures.find(material.diffuse);
+        if (texIt != m_textures.end()) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, texIt->second.textureID);
+            glUniform1i(glGetUniformLocation(program, "uDiffuseTexture"), 0);
+        }
+    } else {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
+        glUniform1i(glGetUniformLocation(program, "uDiffuseTexture"), 0);
+    }
+
+    // ---- 上传通用 uniform ----
+    glUniformMatrix4fv(glGetUniformLocation(program, "uView"), 1, GL_FALSE,
+                       glm::value_ptr(m_viewMatrix));
+    glUniformMatrix4fv(glGetUniformLocation(program, "uProjection"), 1, GL_FALSE,
+                       glm::value_ptr(m_projectionMatrix));
+    glUniform1f(glGetUniformLocation(program, "uShininess"), material.shininess);
+
+    // ---- 一次性绘制所有实例 ----
+    glBindVertexArray(meshData.vao);
+    if (meshData.ebo) {
+        glDrawElementsInstanced(GL_TRIANGLES, (GLsizei)meshData.indexCount,
+                                meshData.indexType, 0,
+                                (GLsizei)transforms.size());
+    } else {
+        glDrawArraysInstanced(GL_TRIANGLES, 0, (GLsizei)meshData.indexCount,
+                              (GLsizei)transforms.size());
+    }
+    glBindVertexArray(0);
+}
+
 void OpenGLAPI::DrawSkybox(TextureHandle cubemap, const glm::mat4& view) {
     if (!m_initialized) return;
-
-    glDisable(GL_CULL_FACE);
 
     auto texIt = m_textures.find(cubemap);
     auto shaderIt = m_shaders.find(m_skyboxShader);
@@ -665,11 +852,8 @@ void OpenGLAPI::DrawSkybox(TextureHandle cubemap, const glm::mat4& view) {
     GLuint program = shaderIt->second.program;
     GLuint cubeMapID = texIt->second.textureID;
 
-    GLboolean depthMaskWas = GL_FALSE;
-    GLint depthFuncWas = GL_LESS;
-    glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMaskWas);
-    glGetIntegerv(GL_DEPTH_FUNC, &depthFuncWas);
-
+    // ★ 直接设置天空盒所需的深度状态，不读、不恢复
+    glDisable(GL_CULL_FACE);
     glDepthFunc(GL_LEQUAL);
     glDepthMask(GL_FALSE);
 
@@ -677,15 +861,13 @@ void OpenGLAPI::DrawSkybox(TextureHandle cubemap, const glm::mat4& view) {
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, cubeMapID);
-    GLint loc = glGetUniformLocation(program, "uSkybox");
-    if (loc != -1) glUniform1i(loc, 0);
+    glUniform1i(glGetUniformLocation(program, "uSkybox"), 0);
 
     glm::mat4 skyboxView = glm::mat4(glm::mat3(view));
-    GLint viewLoc = glGetUniformLocation(program, "uView");
-    if (viewLoc != -1) glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(skyboxView));
-
-    GLint projLoc = glGetUniformLocation(program, "uProjection");
-    if (projLoc != -1) glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
+    glUniformMatrix4fv(glGetUniformLocation(program, "uView"), 1, GL_FALSE,
+                       glm::value_ptr(skyboxView));
+    glUniformMatrix4fv(glGetUniformLocation(program, "uProjection"), 1, GL_FALSE,
+                       glm::value_ptr(m_projectionMatrix));
 
     if (m_skyboxVAO) {
         glBindVertexArray(m_skyboxVAO);
@@ -693,13 +875,13 @@ void OpenGLAPI::DrawSkybox(TextureHandle cubemap, const glm::mat4& view) {
         glBindVertexArray(0);
     }
 
-    glDepthMask(depthMaskWas);
-    glDepthFunc(depthFuncWas);
+    // ★ 恢复为"3D 场景默认状态"
+    glEnable(GL_CULL_FACE);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
-
-    glEnable(GL_CULL_FACE);
 }
 
 void OpenGLAPI::DrawFullscreenQuad(TextureHandle textureID) {

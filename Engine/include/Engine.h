@@ -2,20 +2,21 @@
 
 //standards
 #include <memory>
-#include <vector>
 #include <string>
 
 //core
 #include "IGame.h"
 #include "core/Log.h"
+#include "core/NetworkChannel.h"
+#include "core/NetworkServer.h"
+#include "core/MessageWriter.h"
+#include "core/MessageReader.h"
 
 //client
+#include "client/Input.h"
 #include "client/Window.h"
 #include "client/WindowManager.h"
 #include "client/Render/RenderAPI.h"
-#include "client/Input.h"
-
-//net
 
 //server
 
@@ -31,6 +32,7 @@ enum class Mode {
 struct EngineConfig {
     Mode mode;
     std::string name;
+    bool enableNetwork = false;
 };
 
 class Engine {

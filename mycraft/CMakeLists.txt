@@ -1,6 +1,7 @@
 add_executable(mycraft
     ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Game.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server.cpp
 )
 
 target_include_directories(mycraft PRIVATE

@@ -2,7 +2,6 @@
 #include <string>
 #include <fstream>
 #include <mutex>
-#include <iomanip>
 #include <sstream>
 
 namespace Eng {
@@ -24,6 +23,7 @@ public:
     void SetConsoleOutput(bool enable);
     void SetFileOutput(const std::string filepath);
     void SetMinLevel(LogLevel level);
+    bool isEnabled(LogLevel level) const ;
 
     void log(LogLevel level, std::string message);
 private:
@@ -40,39 +40,19 @@ private:
 };
 
 
-#define logDebug(logger, message) \
-    do { \
-        std::stringstream ss; \
-        ss << message; \
-        logger->log(Eng::LogLevel::DEBUG, ss.str()); \
+#define LOG_IMPL(logger, level, message) do { \
+        auto&& _log_logger = (logger); \
+        if (_log_logger->isEnabled(level)) { \
+            std::ostringstream _log_oss; \
+            _log_oss << message; \
+            _log_logger->log(level, _log_oss.str()); \
+        } \
     } while(0)
 
-#define logInfo(logger, message) \
-    do { \
-        std::stringstream ss; \
-        ss << message; \
-        logger->log(Eng::LogLevel::INFO, ss.str()); \
-    } while(0)
-
-#define logWarning(logger, message) \
-    do { \
-        std::stringstream ss; \
-        ss << message; \
-        logger->log(Eng::LogLevel::WARNING, ss.str()); \
-    } while(0)
-
-#define logError(logger, message) \
-    do { \
-        std::stringstream ss; \
-        ss << message; \
-        logger->log(Eng::LogLevel::ERROR, ss.str()); \
-    } while(0)
-
-#define logFatal(logger, message) \
-    do { \
-        std::stringstream ss; \
-        ss << message; \
-        logger->log(Eng::LogLevel::FATAL, ss.str()); \
-    } while(0)
+#define logDebug(logger, message)   LOG_IMPL(logger, Eng::LogLevel::DEBUG,   message)
+#define logInfo(logger, message)    LOG_IMPL(logger, Eng::LogLevel::INFO,    message)
+#define logWarning(logger, message) LOG_IMPL(logger, Eng::LogLevel::WARNING, message)
+#define logError(logger, message)   LOG_IMPL(logger, Eng::LogLevel::ERROR,   message)
+#define logFatal(logger, message)   LOG_IMPL(logger, Eng::LogLevel::FATAL,   message)
 
 }

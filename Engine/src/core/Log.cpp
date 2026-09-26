@@ -1,5 +1,6 @@
 #include "core/Log.h"
 #include <iostream>
+#include <print>
 #include <chrono>
 #include <format>
 #include <filesystem>
@@ -57,6 +58,14 @@ void Log::SetMinLevel(LogLevel level) {
     m_minLevel = level;
 }
 
+bool Log::isEnabled(LogLevel level) const {
+    if (level >= m_minLevel) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
 void Log::log(LogLevel level, std::string message) {
     switch (level) {
 #ifdef _DEBUG
@@ -95,7 +104,7 @@ void Log::out(LogLevel level, std::string& message) {
         m_file << "[" << GetTime() << " " << LevelToString(level) << "]: " << message << std::endl;
     }
     if (m_consoleOutput) {
-        std::cout << "[" << GetTime() << " " << LevelToString(level) << "]: " << message << std::endl;
+        std::println("[{} {}]: {}", GetTime(), LevelToString(level), message);
     }
 }
 
