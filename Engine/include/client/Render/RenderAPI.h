@@ -107,6 +107,8 @@ public:
     virtual void SetViewMatrix(const glm::mat4& view) = 0;
     virtual void SetProjectionMatrix(const glm::mat4& proj) = 0;
     virtual void SetModelMatrix(const glm::mat4& model) = 0;
+    virtual void SetLightPosition(const glm::vec3& pos) = 0;
+    virtual void SetViewPosition(const glm::vec3& pos) = 0;
 
     // 资源创建
     virtual MeshHandle CreateMesh(const MeshData& data) = 0;

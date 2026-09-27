@@ -1,12 +1,21 @@
 #pragma once
 
 #include "Engine.h"
+#include "Protocol.h"
 #include "core/NetworkChannel.h"
 #include "game/GameServer.h"
 
 namespace game {
 
 class MyGame : public Eng::IGame {
+public:
+    void OnStart(Eng::Engine& engine);
+
+    bool OnUpdate(Eng::Engine& engine, float deltaTime);
+
+    void OnRender(Eng::Engine& engine);
+
+    void OnShutdown(Eng::Engine& engine);
 private:
     //resources
     Eng::client::WindowManager* winMgr;
@@ -29,6 +38,9 @@ private:
 
     Eng::NetworkChannel m_client;
     std::unique_ptr<game::GameServer> m_server;
+
+    uint32_t m_myClientId = 0;
+    std::vector<net::PlayerState> m_otherPlayers;
 
     static constexpr float zNear = 0.5f;
 
@@ -64,14 +76,8 @@ private:
     bool resizeEvents(const SDL_Event& event);
     bool cursorEvents(const SDL_Event& event);
     bool scrollEvents(const SDL_Event& event);
-public:
-    void OnStart(Eng::Engine& engine);
 
-    bool OnUpdate(Eng::Engine& engine, float deltaTime);
-
-    void OnRender(Eng::Engine& engine);
-
-    void OnShutdown(Eng::Engine& engine);
+    void HandleServerMessage(const std::vector<uint8_t>& data);
 };
 
 }

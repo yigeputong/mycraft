@@ -19,11 +19,14 @@ public:
     bool PollAccept();
 
     void Broadcast(std::span<const uint8_t> data);
+    bool SendTo(int clientId, std::span<const uint8_t> data);
 
     using MessageCallback = std::function<void(int clientId, const std::vector<uint8_t>&)>;
+    using ConnectCallback = std::function<void(int clientId)>;
     using DisconnectCallback = std::function<void(int clientId)>;
 
     void SetMessageCallback(MessageCallback cb) { m_messageCb = std::move(cb); }
+    void SetConnectCallback(DisconnectCallback cb) { m_connectCb = std::move(cb); }
     void SetDisconnectCallback(DisconnectCallback cb) { m_disconnectCb = std::move(cb); }
 
     void Update();
@@ -46,6 +49,7 @@ private:
     int m_nextClientId = 1;
 
     MessageCallback m_messageCb;
+    ConnectCallback m_connectCb;
     DisconnectCallback m_disconnectCb;
 };
 

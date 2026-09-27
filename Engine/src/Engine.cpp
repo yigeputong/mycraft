@@ -68,15 +68,12 @@ void Engine::Run() {
 
     m_running = true;
 
-    using namespace std::chrono;
-    auto lastTime = steady_clock::now();
-    constexpr float fixedDelta = 1.0f / 20.0f;
-    float accumulator = 0.0f;
+    auto lastTime = std::chrono::steady_clock::now();
 
     m_logger->log(LogLevel::INFO, "[Engine] Run main loop");
     while (m_running) {
-        auto currentTime = steady_clock::now();
-        float deltaTime = duration<float>(currentTime - lastTime).count();
+        auto currentTime = std::chrono::steady_clock::now();
+        float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
         lastTime = currentTime;
         if (deltaTime > 0.1f) deltaTime = 0.1f;
 
@@ -90,9 +87,7 @@ void Engine::Run() {
             }
         }
 
-        accumulator += deltaTime;
-
-        if (m_game->OnUpdate(*this, fixedDelta)) {
+        if (m_game->OnUpdate(*this, deltaTime)) {
             break;
         }
 

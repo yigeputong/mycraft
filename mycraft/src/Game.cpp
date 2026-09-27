@@ -2,6 +2,8 @@
 
 #include "Engine.h"
 #include "core/Log.h"
+#include "core/MessageWriter.h"
+#include "game/Protocol.h"
 #include "game/GameServer.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
@@ -128,7 +130,7 @@ void MyGame::OnStart(Eng::Engine& engine) {
 
     m_cubeMesh = renderer->CreateMesh(data);
     m_cubeShader = renderer->CreateShader("./assets/shaders/OpenGL/model/model.vert", "./assets/shaders/OpenGL/model/model.frag");
-    m_cubeTexture = renderer->CreateTexture("./assets/textures/grass_block.png");
+    m_cubeTexture = renderer->CreateTexture("./assets/textures/stone.png");
     m_cubeMaterial.diffuse = m_cubeTexture;
 
     m_model = renderer->LoadModel("./assets/objects/testBlock0.obj");
@@ -162,85 +164,84 @@ void MyGame::OnStart(Eng::Engine& engine) {
 
 bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
     using namespace Eng::client;
-    static int updateCount = 0;
-    if (updateCount < 5) {
-        logInfo(logger, "[Frame] OnUpdate #" << updateCount);
-        updateCount++;
-    }
 
-    // 按 ESC 退出
+    // ==================== 按 ESC 退出 ====================
     if (Input::IsKeyPressed(KeyCode::Escape)) {
         return true;
     }
 
-    // ★ 接收服务端消息（非阻塞）
-    std::vector<uint8_t> data;
-    while (m_client.Receive(data)) {
-        logInfo(logger, "[Client] Received " << data.size() << " bytes");
-    }
-
-    // ★ 发送输入（每帧一次）
-    std::vector<uint8_t> input = { 0x10 };  // 类型：PlayerInput
-    // TODO: 把 WASD 状态、鼠标角度追加进去
-    m_client.Send(input);
-
-    // WASD 移动
-    float speed = s.Speed * deltaTime;
-    glm::vec3 front = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
-    glm::vec3 right = glm::normalize(glm::cross(front, cameraUp));
-
-    if (Input::IsKeyDown(KeyCode::W)) cameraPos += front * speed;
-    if (Input::IsKeyDown(KeyCode::S)) cameraPos -= front * speed;
-    if (Input::IsKeyDown(KeyCode::A)) cameraPos -= right * speed;
-    if (Input::IsKeyDown(KeyCode::D)) cameraPos += right * speed;
-    
-    if (Input::IsKeyDown(KeyCode::Space))  cameraPos.y += speed;
-    if (Input::IsKeyDown(KeyCode::LShift)) cameraPos.y -= speed;
-
+    // ==================== F11 全屏切换 ====================
     if (Input::IsKeyPressed(KeyCode::F11)) {
         auto& configs = mainWin->GetConfigs();
-        if (configs.fullscreen) {
-            configs.fullscreen = false;
-        } else {
-            configs.fullscreen = true;
-        }
+        configs.fullscreen = !configs.fullscreen;
         mainWin->SetFullscreen(configs.fullscreen);
-        fbo = renderer->CreateFramebuffer(mainWin->GetConfigs().windowPixelWidth, mainWin->GetConfigs().windowPixelHeight);
+        fbo = renderer->CreateFramebuffer(
+            mainWin->GetConfigs().windowPixelWidth,
+            mainWin->GetConfigs().windowPixelHeight);
     }
 
-    glm::vec2 delta = Input::GetMouseDelta();
+    // ==================== 鼠标视角 ====================
+    glm::vec2 mouseDelta = Input::GetMouseDelta();
     ImGuiIO& io = ImGui::GetIO();
     if (!io.WantCaptureMouse) {
-        Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), true);
-        yaw   += delta.x * 0.1f;
-        pitch -= delta.y * 0.1f;
+        Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), true);
+        yaw   += mouseDelta.x * 0.1f;
+        pitch -= mouseDelta.y * 0.1f;
         pitch = glm::clamp(pitch, -89.0f, 89.0f);
     } else {
-        Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), false);
+        Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), false);
     }
 
+    // 滚轮 FOV
     float scroll = Input::GetScrollDelta();
     if (scroll != 0.0f) {
-        s.fov -= scroll * 2.0f; // 向上滚缩小 FOV（拉近视野），向下滚放大
-        s.fov = glm::clamp(s.fov, 30.0f, 120.0f); // 限制范围（1~120度）
+        s.fov -= scroll * 2.0f;
+        s.fov = glm::clamp(s.fov, 30.0f, 120.0f);
     }
 
-    // 更新 cameraFront
+    // 鼠标键盘输入
     glm::vec3 mousefront;
     mousefront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
     mousefront.y = sin(glm::radians(pitch));
     mousefront.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
     cameraFront = glm::normalize(mousefront);
+    glm::vec3 forward = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
+    glm::vec3 right   = glm::normalize(glm::cross(forward, glm::vec3(0, 1, 0)));
+    glm::vec3 moveDir = glm::vec3(0.0f);
+    if (Input::IsKeyDown(KeyCode::W)) moveDir += forward;
+    if (Input::IsKeyDown(KeyCode::S)) moveDir -= forward;
+    if (Input::IsKeyDown(KeyCode::D)) moveDir += right;
+    if (Input::IsKeyDown(KeyCode::A)) moveDir -= right;
+    if (Input::IsKeyDown(KeyCode::Space))  moveDir.y += 1.0f;
+    if (Input::IsKeyDown(KeyCode::LShift)) moveDir.y -= 1.0f;
+    if (glm::length(moveDir) > 0.001f) {
+        moveDir = glm::normalize(moveDir);
+    }
+    game::net::PlayerInput input;
+    input.moveDir = moveDir;
+    input.look    = glm::vec2(glm::radians(yaw), glm::radians(pitch));
+    input.jump    = Input::IsKeyDown(KeyCode::Space);
+
+    Eng::MessageWriter w;
+    w.Write(static_cast<uint8_t>(game::net::MessageType::PlayerInput));
+    w.WriteVec3(input.moveDir);   // ★ vec3
+    w.WriteVec2(input.look);
+    w.Write(static_cast<uint8_t>(input.jump ? 1 : 0));
+    m_client.Send(w.GetBuffer());
+    //本地预测
+    float speed = 5.0f * deltaTime;
+    cameraPos += input.moveDir * speed;
+
+    // ==================== 接收服务端状态 ====================
+    std::vector<uint8_t> data;
+    while (m_client.Receive(data)) {
+        HandleServerMessage(data);
+    }
 
     return false;
 }
 
 void MyGame::OnRender(Eng::Engine& engine) {
-    static int renderCount = 0;
-    if (renderCount < 5) {
-        logInfo(logger, "[Frame] OnRender #" << renderCount);
-        renderCount++;
-    }
 
     renderer->BindFramebuffer(fbo);
 
@@ -251,6 +252,9 @@ void MyGame::OnRender(Eng::Engine& engine) {
         renderer->SetProjectionMatrix(projection);
 
     renderer->Clear();
+
+        renderer->SetLightPosition({1.0f, 2.0f, 3.0f});
+        renderer->SetViewPosition(cameraPos);
 
         std::vector<glm::mat4> transforms;
         transforms.reserve(m_objects.size());
@@ -271,6 +275,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
             mat,
             transforms
         );
+
         renderer->DrawSkybox(m_skybox, view);
 
     renderer->UnbindFramebuffer();
@@ -307,6 +312,49 @@ void MyGame::OnShutdown(Eng::Engine& engine) {
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
     winMgr->DestroyWindow(m_win);
+}
+
+void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
+    if (data.empty()) return;
+
+    auto type = static_cast<game::net::MessageType>(data[0]);
+    Eng::MessageReader r(std::span<const uint8_t>(data).subspan(1));
+
+    switch (type) {
+        case game::net::MessageType::WorldState: {
+            uint32_t count = r.ReadU32BE();
+            for (uint32_t i = 0; i < count; ++i) {
+                game::net::PlayerState ps;
+                ps.id       = r.ReadU32BE();
+                ps.position = r.ReadVec3();
+                ps.yaw      = r.Read<float>();
+                ps.pitch    = r.Read<float>();
+
+                if (ps.id == m_myClientId) {
+                    glm::vec3 serverPos = ps.position;
+                    glm::vec3 diff = serverPos - cameraPos;
+                    float dist = glm::length(diff);
+
+                    if (dist > 2.0f) {
+                        // 偏差太大，直接校正（瞬移）
+                        cameraPos = serverPos;
+                    } else if (dist > 0.1f) {
+                        // 偏差小，平滑修正
+                        cameraPos += diff * 0.2f;   // 每帧修正 20%
+                    }
+                } else {
+                    // 其他玩家，存入玩家表（渲染时用）
+                    m_otherPlayers[ps.id] = ps;
+                }
+            }
+            break;
+        }
+        case net::MessageType::PlayerId: {  // YourId
+            m_myClientId = r.ReadU32BE();
+            logInfo(logger, "[Net] My client ID: " << m_myClientId);
+            break;
+        }
+    }
 }
 
 }

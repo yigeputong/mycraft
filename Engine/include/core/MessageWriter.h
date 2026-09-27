@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cstdint>
 #include <SDL3/SDL_endian.h>
+#include <glm/glm.hpp>
 
 namespace Eng {
 
@@ -15,6 +16,13 @@ public:
     void Write(const T& value) {
         const uint8_t* p = reinterpret_cast<const uint8_t*>(&value);
         m_buffer.insert(m_buffer.end(), p, p + sizeof(T));
+    }
+
+    void WriteVec2(const glm::vec2& v) {
+        Write(v.x); Write(v.y);
+    }
+    void WriteVec3(const glm::vec3& v) {
+        Write(v.x); Write(v.y); Write(v.z);
     }
 
     void WriteU32BE(uint32_t v) {

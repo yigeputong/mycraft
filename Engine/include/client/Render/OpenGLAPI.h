@@ -28,6 +28,8 @@ public:
     void SetViewMatrix(const glm::mat4& view) override;
     void SetProjectionMatrix(const glm::mat4& proj) override;
     void SetModelMatrix(const glm::mat4& model) override;
+    void SetLightPosition(const glm::vec3& pos) override;
+    void SetViewPosition(const glm::vec3& pos) override;
 
     // 资源创建（返回句柄）
     MeshHandle CreateMesh(const MeshData& data) override;
@@ -115,6 +117,13 @@ private:
     glm::mat4 m_viewMatrix = glm::mat4(1.0f);
     glm::mat4 m_projectionMatrix = glm::mat4(1.0f);
     glm::mat4 m_modelMatrix = glm::mat4(1.0f);
+    glm::vec3 m_lightPos = glm::vec3(1.0f, 2.0f, 3.0f);
+    glm::vec3 m_viewPos  = glm::vec3(0.0f);
+
+    glm::vec3 m_lightDir   = glm::vec3(0.5f, -1.0f, 0.3f);  // 斜向下照
+    glm::vec3 m_lightColor = glm::vec3(1.0f, 0.98f, 0.9f);    // 略暖的白
+    float     m_lightAmbient   = 0.3f;
+    float     m_lightIntensity = 1.0f;
 
     // 视口和清屏
     int m_viewportX = 0, m_viewportY = 0;

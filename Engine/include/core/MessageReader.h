@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <span>
 #include <SDL3/SDL_endian.h>
+#include <glm/glm.hpp>
 
 namespace Eng {
 
@@ -18,6 +19,15 @@ public:
         std::memcpy(&value, m_data.data() + m_offset, sizeof(T));
         m_offset += sizeof(T);
         return value;
+    }
+
+    glm::vec2 ReadVec2() {
+        float x = Read<float>(), y = Read<float>();
+        return {x, y};
+    }
+    glm::vec3 ReadVec3() {
+        float x = Read<float>(), y = Read<float>(), z = Read<float>();
+        return {x, y, z};
     }
 
     uint32_t ReadU32BE() {

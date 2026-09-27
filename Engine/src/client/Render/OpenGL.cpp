@@ -108,6 +108,14 @@ void OpenGLAPI::SetModelMatrix(const glm::mat4& model) {
     m_modelMatrix = model;
 }
 
+void OpenGLAPI::SetLightPosition(const glm::vec3& pos) {
+    m_lightPos = pos;
+}
+
+void OpenGLAPI::SetViewPosition(const glm::vec3& pos) {
+    m_viewPos = pos;
+}
+
 // ---------- 资源创建 ----------
 MeshHandle OpenGLAPI::CreateMesh(const MeshData& data) {
     if (!m_initialized) return 0;
@@ -218,10 +226,10 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
     GLenum internalFormat = GL_RGBA;
     GLenum format = GL_RGBA;
     if (bpp == 4) {
-        internalFormat = GL_RGBA;
+        internalFormat = GL_SRGB8_ALPHA8;
         format = GL_RGBA;
     } else if (bpp == 3) {
-        internalFormat = GL_RGB;
+        internalFormat = GL_SRGB8;
         format = GL_RGB;
     } else {
         logError(m_logger, "[Texture] Unsupported BPP: " << bpp);
@@ -317,7 +325,7 @@ TextureHandle OpenGLAPI::CreateTextureFromMemory(const aiTexture* embedded) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8,
                  converted->w, converted->h, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, converted->pixels);
 
@@ -407,7 +415,7 @@ TextureHandle OpenGLAPI::CreateSkybox(const std::vector<std::string>& path) {
         w = converted->w;
         h = converted->h;
         glTexImage2D(static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i),
-                     0, GL_RGBA, converted->w, converted->h, 0,
+                     0, GL_SRGB8_ALPHA8, converted->w, converted->h, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, converted->pixels);
         SDL_DestroySurface(converted);
     }
@@ -739,10 +747,15 @@ void OpenGLAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
     // 使用着色器
     glUseProgram(program);
 
-    // 设置矩阵 uniform（如果着色器中有这些 uniform）
-    SetUniform(shader, "uModel", m_modelMatrix);
-    SetUniform(shader, "uView", m_viewMatrix);
+    // ---- 上传 uniform ----
+    SetUniform(shader, "uView",       m_viewMatrix);
     SetUniform(shader, "uProjection", m_projectionMatrix);
+    SetUniform(shader, "uShininess",  material.shininess);
+    SetUniform(shader, "uLightDir",       glm::normalize(m_lightDir));
+    SetUniform(shader, "uLightColor",     m_lightColor);
+    SetUniform(shader, "uLightAmbient",   m_lightAmbient);
+    SetUniform(shader, "uLightIntensity", m_lightIntensity);
+    SetUniform(shader, "uViewPos",        m_viewPos);
 
     // 设置材质纹理
     // 漫反射纹理
@@ -822,12 +835,15 @@ void OpenGLAPI::DrawMeshInstanced(MeshHandle mesh,
         glUniform1i(glGetUniformLocation(program, "uDiffuseTexture"), 0);
     }
 
-    // ---- 上传通用 uniform ----
-    glUniformMatrix4fv(glGetUniformLocation(program, "uView"), 1, GL_FALSE,
-                       glm::value_ptr(m_viewMatrix));
-    glUniformMatrix4fv(glGetUniformLocation(program, "uProjection"), 1, GL_FALSE,
-                       glm::value_ptr(m_projectionMatrix));
-    glUniform1f(glGetUniformLocation(program, "uShininess"), material.shininess);
+    // ---- 上传 uniform ----
+    SetUniform(shader, "uView",       m_viewMatrix);
+    SetUniform(shader, "uProjection", m_projectionMatrix);
+    SetUniform(shader, "uShininess",  material.shininess);
+    SetUniform(shader, "uLightDir",       glm::normalize(m_lightDir));
+    SetUniform(shader, "uLightColor",     m_lightColor);
+    SetUniform(shader, "uLightAmbient",   m_lightAmbient);
+    SetUniform(shader, "uLightIntensity", m_lightIntensity);
+    SetUniform(shader, "uViewPos",        m_viewPos);
 
     // ---- 一次性绘制所有实例 ----
     glBindVertexArray(meshData.vao);
@@ -894,6 +910,7 @@ void OpenGLAPI::DrawFullscreenQuad(TextureHandle textureID) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, textureID);
     glUniform1i(glGetUniformLocation(shader, "screenTexture"), 0);
+    SetUniform(m_fullscreenShader, "uGamma", 2.2f);
 
     glBindVertexArray(m_fullscreenVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
