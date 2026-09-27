@@ -68,8 +68,13 @@ public:
     static constexpr int api_major = 4;
     static constexpr int api_minor = 6;
 private:
-    Window* m_window;
-    std::unique_ptr<Log> m_logger = std::make_unique<Log>("OpenGL.log");
+    // 状态
+    bool m_initialized = false;
+
+    // 资源句柄生成器
+    MeshHandle m_nextMeshHandle = 1;
+    TextureHandle m_nextTextureHandle = 1;
+    ShaderHandle m_nextShaderHandle = 1;
 
     // 内部数据结构
     struct MeshDataInternal {
@@ -80,14 +85,6 @@ private:
         size_t indexCount = 0;
         GLenum indexType = GL_NONE;
     };
-
-    GLuint m_skyboxVAO = 0;
-    GLuint m_skyboxVBO = 0;
-    ShaderHandle m_skyboxShader = 0;
-
-    GLuint m_fullscreenVAO = 0;
-    GLuint m_fullscreenVBO = 0;
-    ShaderHandle m_fullscreenShader = 0;
 
     struct TextureDataInternal {
         GLuint textureID = 0;
@@ -101,38 +98,54 @@ private:
         // std::unordered_map<std::string, GLint> uniformCache;
     };
 
-    // 成员变量
-    std::unordered_map<MeshHandle, MeshDataInternal> m_meshes;
-    std::unordered_map<TextureHandle, TextureDataInternal> m_textures;
-    std::unordered_map<ShaderHandle, ShaderDataInternal> m_shaders;
-    std::unordered_map<std::string, TextureHandle> m_textureCache;
- 
+    // 资源表
+    std::unordered_map<MeshHandle,      MeshDataInternal>       m_meshes;
+    std::unordered_map<TextureHandle,   TextureDataInternal>    m_textures;
+    std::unordered_map<ShaderHandle,    ShaderDataInternal>     m_shaders;
+    std::unordered_map<std::string,     TextureHandle>          m_textureCache;
+
+    // 默认纹理
     TextureHandle m_defaultTexture = 0;
 
-    MeshHandle m_nextMeshHandle = 1;
-    TextureHandle m_nextTextureHandle = 1;
-    ShaderHandle m_nextShaderHandle = 1;
-
-    // 当前矩阵
-    glm::mat4 m_viewMatrix = glm::mat4(1.0f);
+    // 变换矩阵
+    glm::mat4 m_viewMatrix       = glm::mat4(1.0f);
     glm::mat4 m_projectionMatrix = glm::mat4(1.0f);
-    glm::mat4 m_modelMatrix = glm::mat4(1.0f);
-    glm::vec3 m_lightPos = glm::vec3(1.0f, 2.0f, 3.0f);
-    glm::vec3 m_viewPos  = glm::vec3(0.0f);
+    glm::mat4 m_modelMatrix      = glm::mat4(1.0f);
 
-    glm::vec3 m_lightDir   = glm::vec3(0.5f, -1.0f, 0.3f);  // 斜向下照
-    glm::vec3 m_lightColor = glm::vec3(1.0f, 0.98f, 0.9f);    // 略暖的白
+    // 相机/光源参数
+    glm::vec3 m_lightPos       = glm::vec3(1.0f, 2.0f, 3.0f);
+    glm::vec3 m_viewPos        = glm::vec3(0.0f);
+    glm::vec3 m_lightDir       = glm::vec3(0.5f, -1.0f, 0.3f);  // 斜向下照
+    glm::vec3 m_lightColor     = glm::vec3(1.0f, 0.98f, 0.9f);    // 略暖的白
     float     m_lightAmbient   = 0.3f;
     float     m_lightIntensity = 1.0f;
 
+    // UBO
+    GLuint m_globalUBO   = 0;   // binding = 0，存相机 + 光源
+    GLuint m_materialUBO = 0;   // binding = 1，存材质
+
+    // 天空盒
+    GLuint m_skyboxVAO = 0;
+    GLuint m_skyboxVBO = 0;
+    ShaderHandle m_skyboxShader = 0;
+
+    // 全屏四边形
+    GLuint m_fullscreenVAO = 0;
+    GLuint m_fullscreenVBO = 0;
+    ShaderHandle m_fullscreenShader = 0;
+
+    // 记录日志
+    std::unique_ptr<Log> m_logger = std::make_unique<Log>("OpenGL.log");
+
     // 视口和清屏
+    Window* m_window;
     int m_viewportX = 0, m_viewportY = 0;
     int m_viewportWidth = 0, m_viewportHeight = 0;
     float m_clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 
-    bool m_initialized = false;
-
     // 辅助函数
+    void UpdateGlobalUBO();
+    void UpdateMaterialUBO(float shininess);
     GLuint CompileShader(GLenum type, const std::string& source);
     GLuint LinkProgram(GLuint vertexShader, GLuint fragmentShader);
     std::string ReadFile(const std::string& path);

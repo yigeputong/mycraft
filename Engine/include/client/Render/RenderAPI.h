@@ -90,6 +90,26 @@ struct RenderConfig {
     void Reset();
 };
 
+// ============ Global UBO (binding = 0) ============
+struct GlobalUBOData {
+    glm::mat4 view;           // 0   ~ 63
+    glm::mat4 projection;     // 64  ~ 127
+    glm::vec3 viewPos;        // 128 ~ 139
+    float     _pad0;          // 140 ~ 143
+    glm::vec3 lightDir;       // 144 ~ 155
+    float     lightIntensity; // 156 ~ 159
+    glm::vec3 lightColor;     // 160 ~ 171
+    float     lightAmbient;   // 172 ~ 175
+};
+static_assert(sizeof(GlobalUBOData) == 176, "GlobalUBO size mismatch");
+
+// ============ Material UBO (binding = 1) ============
+struct MaterialUBOData {
+    float shininess;          // 0 ~ 3
+    float _pad[3];            // 4 ~ 15
+};
+static_assert(sizeof(MaterialUBOData) == 16, "MaterialUBO size mismatch");
+
 class IRenderAPI {
 public:
     virtual ~IRenderAPI() = default;

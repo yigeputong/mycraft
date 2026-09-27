@@ -47,11 +47,30 @@ bool OpenGLAPI::Initialize(int width, int height, Window* window) {
     // 默认纹理
     m_defaultTexture = CreateTexture("./assets/textures/missing_texture.png");
 
+    // ★ Global UBO
+    glGenBuffers(1, &m_globalUBO);
+    glBindBuffer(GL_UNIFORM_BUFFER, m_globalUBO);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(Eng::client::GlobalUBOData),
+                 nullptr, GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 0, m_globalUBO);
+
+    // ★ Material UBO
+    glGenBuffers(1, &m_materialUBO);
+    glBindBuffer(GL_UNIFORM_BUFFER, m_materialUBO);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(Eng::client::MaterialUBOData),
+                 nullptr, GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 1, m_materialUBO);
+
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
     return true;
 }
 
 void OpenGLAPI::Shutdown() {
     if (!m_initialized) return;
+
+    if (m_globalUBO)   { glDeleteBuffers(1, &m_globalUBO);   m_globalUBO = 0; }
+    if (m_materialUBO) { glDeleteBuffers(1, &m_materialUBO); m_materialUBO = 0; }
 
     for (auto& [handle, mesh] : m_meshes) {
         if (mesh.vao) glDeleteVertexArrays(1, &mesh.vao);
@@ -743,66 +762,64 @@ void OpenGLAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
 
     const auto& meshData = meshIt->second;
     GLuint program = shaderIt->second.program;
+    if (program == 0) return;
 
-    // 使用着色器
     glUseProgram(program);
 
-    // ---- 上传 uniform ----
-    SetUniform(shader, "uView",       m_viewMatrix);
-    SetUniform(shader, "uProjection", m_projectionMatrix);
-    SetUniform(shader, "uShininess",  material.shininess);
-    SetUniform(shader, "uLightDir",       glm::normalize(m_lightDir));
-    SetUniform(shader, "uLightColor",     m_lightColor);
-    SetUniform(shader, "uLightAmbient",   m_lightAmbient);
-    SetUniform(shader, "uLightIntensity", m_lightIntensity);
-    SetUniform(shader, "uViewPos",        m_viewPos);
+    // ============ 1. 更新 UBO ============
+    UpdateGlobalUBO();                              // binding 0：相机 + 光源
+    UpdateMaterialUBO(material.shininess);          // binding 1：材质
 
-    // 设置材质纹理
-    // 漫反射纹理
+    // ============ 2. 模型矩阵（对应 Vulkan 的 Push Constant）============
+    SetUniform(shader, "uModel", m_modelMatrix);
+
+    // ============ 3. 绑定纹理 ============
+    // 漫反射
+    glActiveTexture(GL_TEXTURE0);
     if (material.diffuse != 0) {
         auto texIt = m_textures.find(material.diffuse);
-        if (texIt != m_textures.end() && texIt->second.textureID) {
-            glActiveTexture(GL_TEXTURE0);
+        if (texIt != m_textures.end() && texIt->second.textureID != 0) {
             glBindTexture(GL_TEXTURE_2D, texIt->second.textureID);
-            SetUniform(shader, "uDiffuseTexture", 0);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
         }
     } else {
-        // ★ 绑定默认白色纹理，避免"继承"上一个纹理
-        glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
     }
-    // 镜面纹理
+
+    // 镜面
+    glActiveTexture(GL_TEXTURE1);
     if (material.specular != 0) {
         auto texIt = m_textures.find(material.specular);
-        if (texIt != m_textures.end() && texIt->second.textureID) {
-            glActiveTexture(GL_TEXTURE1);
+        if (texIt != m_textures.end() && texIt->second.textureID != 0) {
             glBindTexture(GL_TEXTURE_2D, texIt->second.textureID);
-            SetUniform(shader, "uSpecularTexture", 1);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
         }
-    }
-    // 高光强度
-    SetUniform(shader, "uShininess", material.shininess);
-
-    // 绑定 VAO 并绘制
-    glBindVertexArray(meshData.vao);
-    if (meshData.ebo) {
-        glDrawElements(GL_TRIANGLES, (GLsizei)meshData.indexCount, meshData.indexType, 0);
     } else {
-        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)meshData.indexCount);
+        glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
+    }
+
+    // ============ 4. 绘制 ============
+    glBindVertexArray(meshData.vao);
+    if (meshData.ebo != 0) {
+        glDrawElements(GL_TRIANGLES,
+                       static_cast<GLsizei>(meshData.indexCount),
+                       meshData.indexType,
+                       0);
+    } else {
+        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(meshData.indexCount));
     }
     glBindVertexArray(0);
 
-    // 解绑纹理（可选）
+    // ============ 5. 解绑纹理 ============
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-void OpenGLAPI::DrawMeshInstanced(MeshHandle mesh,
-                                   ShaderHandle shader,
-                                   const Material& material,
-                                   const std::vector<glm::mat4>& transforms) {
+void OpenGLAPI::DrawMeshInstanced(MeshHandle mesh, ShaderHandle shader, const Material& material, const std::vector<glm::mat4>& transforms) {
     if (transforms.empty()) return;
 
     auto meshIt = m_meshes.find(mesh);
@@ -811,51 +828,70 @@ void OpenGLAPI::DrawMeshInstanced(MeshHandle mesh,
 
     auto& meshData = meshIt->second;
     GLuint program = shaderIt->second.program;
+    if (program == 0) return;
 
     glUseProgram(program);
 
-    // ---- 上传实例矩阵 ----
+    // ============ 1. 更新 UBO ============
+    UpdateGlobalUBO();                              // binding 0：相机 + 光源
+    UpdateMaterialUBO(material.shininess);          // binding 1：材质
+
+    // ============ 2. 上传实例矩阵 ============
     glBindBuffer(GL_ARRAY_BUFFER, meshData.instanceVBO);
     glBufferData(GL_ARRAY_BUFFER,
                  transforms.size() * sizeof(glm::mat4),
                  transforms.data(),
                  GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);   // 解绑，避免影响其他状态
 
-    // ---- 绑定纹理 ----
+    // ============ 3. 绑定纹理 ============
+    // 漫反射
+    glActiveTexture(GL_TEXTURE0);
     if (material.diffuse != 0) {
         auto texIt = m_textures.find(material.diffuse);
-        if (texIt != m_textures.end()) {
-            glActiveTexture(GL_TEXTURE0);
+        if (texIt != m_textures.end() && texIt->second.textureID != 0) {
             glBindTexture(GL_TEXTURE_2D, texIt->second.textureID);
-            glUniform1i(glGetUniformLocation(program, "uDiffuseTexture"), 0);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
         }
     } else {
-        glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
-        glUniform1i(glGetUniformLocation(program, "uDiffuseTexture"), 0);
     }
 
-    // ---- 上传 uniform ----
-    SetUniform(shader, "uView",       m_viewMatrix);
-    SetUniform(shader, "uProjection", m_projectionMatrix);
-    SetUniform(shader, "uShininess",  material.shininess);
-    SetUniform(shader, "uLightDir",       glm::normalize(m_lightDir));
-    SetUniform(shader, "uLightColor",     m_lightColor);
-    SetUniform(shader, "uLightAmbient",   m_lightAmbient);
-    SetUniform(shader, "uLightIntensity", m_lightIntensity);
-    SetUniform(shader, "uViewPos",        m_viewPos);
-
-    // ---- 一次性绘制所有实例 ----
-    glBindVertexArray(meshData.vao);
-    if (meshData.ebo) {
-        glDrawElementsInstanced(GL_TRIANGLES, (GLsizei)meshData.indexCount,
-                                meshData.indexType, 0,
-                                (GLsizei)transforms.size());
+    // 镜面
+    glActiveTexture(GL_TEXTURE1);
+    if (material.specular != 0) {
+        auto texIt = m_textures.find(material.specular);
+        if (texIt != m_textures.end() && texIt->second.textureID != 0) {
+            glBindTexture(GL_TEXTURE_2D, texIt->second.textureID);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
+        }
     } else {
-        glDrawArraysInstanced(GL_TRIANGLES, 0, (GLsizei)meshData.indexCount,
-                              (GLsizei)transforms.size());
+        glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
+    }
+
+    // ============ 4. 一次性绘制所有实例 ============
+    glBindVertexArray(meshData.vao);
+    if (meshData.ebo != 0) {
+        glDrawElementsInstanced(GL_TRIANGLES,
+                                static_cast<GLsizei>(meshData.indexCount),
+                                meshData.indexType,
+                                0,
+                                static_cast<GLsizei>(transforms.size()));
+    } else {
+        glDrawArraysInstanced(GL_TRIANGLES,
+                              0,
+                              static_cast<GLsizei>(meshData.indexCount),
+                              static_cast<GLsizei>(transforms.size()));
     }
     glBindVertexArray(0);
+
+    // ============ 5. 解绑纹理 ============
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 void OpenGLAPI::DrawSkybox(TextureHandle cubemap, const glm::mat4& view) {
@@ -963,6 +999,38 @@ GLuint OpenGLAPI::LinkProgram(GLuint vertexShader, GLuint fragmentShader) {
         return 0;
     }
     return program;
+}
+
+void OpenGLAPI::UpdateGlobalUBO() {
+    Eng::client::GlobalUBOData data;
+    data.view           = m_viewMatrix;
+    data.projection     = m_projectionMatrix;
+    data.viewPos        = m_viewPos;
+    data._pad0          = 0.0f;
+    data.lightDir       = glm::normalize(m_lightDir);
+    data.lightIntensity = m_lightIntensity;
+    data.lightColor     = m_lightColor;
+    data.lightAmbient   = m_lightAmbient;
+
+    glBindBuffer(GL_UNIFORM_BUFFER, m_globalUBO);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(data), &data);
+
+    GLenum err = glGetError();
+    if (err != GL_NO_ERROR) {
+        logError(m_logger, "[OpenGLAPI: UpdateGlobalUBO()] glBufferSubData error: " << err);
+    }
+
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+}
+
+void OpenGLAPI::UpdateMaterialUBO(float shininess) {
+    Eng::client::MaterialUBOData data;
+    data.shininess = shininess;
+    data._pad[0] = data._pad[1] = data._pad[2] = 0.0f;
+
+    glBindBuffer(GL_UNIFORM_BUFFER, m_materialUBO);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(data), &data);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
     
 } // namespace Eng
