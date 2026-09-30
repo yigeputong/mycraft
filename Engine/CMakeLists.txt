@@ -38,9 +38,3 @@ target_link_libraries(engine PRIVATE
     Vulkan::Vulkan
     nlohmann_json::nlohmann_json
 )
-
-target_compile_options(engine PRIVATE
-    $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX- /utf-8>
-    $<$<CXX_COMPILER_ID:GNU>:-Wall -Wextra -Wpedantic>
-    $<$<CXX_COMPILER_ID:Clang>:-Wall -Wextra -Wpedantic>
-)

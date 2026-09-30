@@ -10,6 +10,7 @@
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 #include "client/Window.h"
+#include "core/Log.h"
 
 
 
@@ -137,47 +138,62 @@ void OpenGLAPI::SetViewPosition(const glm::vec3& pos) {
 
 // ---------- 资源创建 ----------
 MeshHandle OpenGLAPI::CreateMesh(const MeshData& data) {
+    return CreateMeshInternal(data, false);
+}
+
+MeshHandle OpenGLAPI::CreateMeshInstance(const MeshData& data) {
+    return CreateMeshInternal(data, true);
+}
+
+MeshHandle OpenGLAPI::CreateMeshInternal(const MeshData& data, bool instanced) {
     if (!m_initialized) return 0;
 
     MeshDataInternal internal;
     glGenVertexArrays(1, &internal.vao);
     glBindVertexArray(internal.vao);
 
-    // 创建 VBO
+    // ============ 顶点 VBO ============
     glGenBuffers(1, &internal.vbo);
     glBindBuffer(GL_ARRAY_BUFFER, internal.vbo);
-    glBufferData(GL_ARRAY_BUFFER, data.vertices.size() * sizeof(Vertex), data.vertices.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER,
+                 data.vertices.size() * sizeof(Vertex),
+                 data.vertices.data(),
+                 GL_STATIC_DRAW);
 
     // 顶点属性
-    // position (location = 0)
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, position));
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          (void*)offsetof(Vertex, position));
     glEnableVertexAttribArray(0);
-    // normal (location = 1)
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal));
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          (void*)offsetof(Vertex, normal));
     glEnableVertexAttribArray(1);
-    // uv (location = 2)
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, uv));
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          (void*)offsetof(Vertex, uv));
     glEnableVertexAttribArray(2);
 
-    // 实例 VBO
-    glGenBuffers(1, &internal.instanceVBO);
-    glBindBuffer(GL_ARRAY_BUFFER, internal.instanceVBO);
-    // 先分配空空间（每帧更新）
-    glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+    // ============ 实例 VBO（仅实例化时）============
+    internal.instanceVBO = 0;
+    if (instanced) {
+        glGenBuffers(1, &internal.instanceVBO);
+        glBindBuffer(GL_ARRAY_BUFFER, internal.instanceVBO);
+        glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
 
-    // 实例矩阵是 mat4，占 4 个 vec4 属性槽（location = 3,4,5,6）
-    for (int i = 0; i < 4; ++i) {
-        glEnableVertexAttribArray(3 + i);
-        glVertexAttribPointer(3 + i, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4),
-                              (void*)(sizeof(glm::vec4) * i));
-        glVertexAttribDivisor(3 + i, 1);   // 每个实例读一次
+        for (int i = 0; i < 4; ++i) {
+            glEnableVertexAttribArray(3 + i);
+            glVertexAttribPointer(3 + i, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4),
+                                  (void*)(sizeof(glm::vec4) * i));
+            glVertexAttribDivisor(3 + i, 1);
+        }
     }
 
-    // EBO（索引缓冲）
+    // ============ EBO ============
     if (!data.indices.empty()) {
         glGenBuffers(1, &internal.ebo);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, internal.ebo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, data.indices.size() * sizeof(uint32_t), data.indices.data(), GL_STATIC_DRAW);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     data.indices.size() * sizeof(uint32_t),
+                     data.indices.data(),
+                     GL_STATIC_DRAW);
         internal.indexCount = data.indices.size();
         internal.indexType = GL_UNSIGNED_INT;
     } else {
@@ -188,10 +204,14 @@ MeshHandle OpenGLAPI::CreateMesh(const MeshData& data) {
 
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 
     MeshHandle handle = m_nextMeshHandle++;
     m_meshes[handle] = std::move(internal);
+
+    logDebug(m_logger, "[Mesh] Created " 
+             + std::string(instanced ? "instanced" : "normal")
+             + " mesh handle=" + std::to_string(handle));
+
     return handle;
 }
 
@@ -753,6 +773,10 @@ void OpenGLAPI::SetUniform(ShaderHandle shader, const std::string& name, int val
 }
 
 // ---------- 绘制 ----------
+void OpenGLAPI::BeginFrame() {
+    UpdateGlobalUBO();
+}
+
 void OpenGLAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& material) {
     if (!m_initialized) return;
 
@@ -766,11 +790,9 @@ void OpenGLAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
 
     glUseProgram(program);
 
-    // ============ 1. 更新 UBO ============
-    UpdateGlobalUBO();                              // binding 0：相机 + 光源
-    UpdateMaterialUBO(material.shininess);          // binding 1：材质
+    UpdateMaterialUBO(material.shininess);         // binding 1：材质
 
-    // ============ 2. 模型矩阵（对应 Vulkan 的 Push Constant）============
+    // ============ 2. 模型矩阵============
     SetUniform(shader, "uModel", m_modelMatrix);
 
     // ============ 3. 绑定纹理 ============
@@ -832,9 +854,7 @@ void OpenGLAPI::DrawMeshInstanced(MeshHandle mesh, ShaderHandle shader, const Ma
 
     glUseProgram(program);
 
-    // ============ 1. 更新 UBO ============
-    UpdateGlobalUBO();                              // binding 0：相机 + 光源
-    UpdateMaterialUBO(material.shininess);          // binding 1：材质
+    UpdateMaterialUBO(material.shininess); 
 
     // ============ 2. 上传实例矩阵 ============
     glBindBuffer(GL_ARRAY_BUFFER, meshData.instanceVBO);

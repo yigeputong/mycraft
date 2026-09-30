@@ -39,6 +39,12 @@ public:
         m_buffer.insert(m_buffer.end(), data.begin(), data.end());
     }
 
+    template<typename T>
+    void WriteBytes(const T* data, size_t count) {
+        const uint8_t* ptr = reinterpret_cast<const uint8_t*>(data);
+        m_buffer.insert(m_buffer.end(), ptr, ptr + count * sizeof(T));
+    }
+
     const std::vector<uint8_t>& GetBuffer() const { return m_buffer; }
     size_t Size() const { return m_buffer.size(); }
 

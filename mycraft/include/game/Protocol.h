@@ -7,12 +7,13 @@ namespace game::net {
 enum class MessageType : uint8_t {
     // 客户端 → 服务端
     PlayerInput     = 0x10,
+    ChunkRequest    = 0x11,
 
     // 服务端 → 客户端
-    WorldState      = 0x20,
-    PlayerId        = 0x21,
-    PlayerJoined    = 0x22,
-    PlayerLeft      = 0x23,
+    PlayerId        = 0x20,
+    WorldState      = 0x21,
+    ChunkData       = 0x22, //| 4bype cx | 4byte cy | 4096byte data |
+
 };
 
 struct PlayerInput {
@@ -27,5 +28,7 @@ struct PlayerState {
     float     yaw = 0.0f;
     float     pitch = 0.0f;
 };
+
+constexpr float MOVE_SPEED = 8.0f;
 
 }

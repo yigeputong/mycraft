@@ -12,7 +12,7 @@
 namespace game {
 
 void MyGame::OnStart(Eng::Engine& engine) {
-    m_server = std::make_unique<game::GameServer>();
+    m_server = std::make_unique<game::server::GameServer>();
     if (!m_server->Start(25565)) {
         logError(logger, "[Game] Failed to start server");
         return;
@@ -36,6 +36,10 @@ void MyGame::OnStart(Eng::Engine& engine) {
     m_win = winMgr->CreateWindow(windowConfig);
     mainWin = winMgr->GetWindow(m_win);
     if (!mainWin) return;
+
+    renderer = mainWin->GetAPI();
+    renderer->Initialize(mainWin->GetConfigs().windowWidth, mainWin->GetConfigs().windowHeight, mainWin);
+    renderer->SetClearColor(0.125f,0.125f,0.125f,0.0f);
 
     Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), true);
 
@@ -69,66 +73,16 @@ void MyGame::OnStart(Eng::Engine& engine) {
         }
     };
 
-    renderer = mainWin->GetAPI();
-    renderer->Initialize(mainWin->GetConfigs().windowWidth, mainWin->GetConfigs().windowHeight, mainWin);
-    renderer->SetClearColor(0.125f,0.125f,0.125f,0.0f);
+    for (int cx = 0; cx < 4; ++cx) {
+        for (int cz = 0; cz < 4; ++cz) {
+            Eng::MessageWriter w;
+            w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkRequest));
+            w.Write(cx);
+            w.Write(cz);
+            m_client.Send(w.GetBuffer());
+        }
+    }
 
-    std::vector<Eng::client::Vertex> vertices = {
-        // ===== 后面 (z = -0.5) =====
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {0.0f, 0.0f}},
-        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {1.0f, 0.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {1.0f, 1.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {1.0f, 1.0f}},
-        {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {0.0f, 1.0f}},
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {0.0f, 0.0f}},
-
-        // ===== 前面 (z = 0.5) =====
-        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f,  1.0f}, {0.0f, 0.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f,  1.0f}, {1.0f, 0.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f,  1.0f}, {1.0f, 1.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f,  1.0f}, {1.0f, 1.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f,  1.0f}, {0.0f, 1.0f}},
-        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f,  1.0f}, {0.0f, 0.0f}},
-
-        // ===== 左面 (x = -0.5) =====
-        {{-0.5f,  0.5f,  0.5f}, {-1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-        {{-0.5f,  0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}},
-        {{-0.5f, -0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}},
-        {{-0.5f, -0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}},
-        {{-0.5f, -0.5f,  0.5f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {-1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-
-        // ===== 右面 (x = 0.5) =====
-        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}},
-        {{ 0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}},
-        {{ 0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-
-        // ===== 底面 (y = -0.5) =====
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}, {0.0f, 1.0f}},
-        {{ 0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}, {1.0f, 1.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {0.0f, -1.0f, 0.0f}, {1.0f, 0.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {0.0f, -1.0f, 0.0f}, {1.0f, 0.0f}},
-        {{-0.5f, -0.5f,  0.5f}, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f}},
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}, {0.0f, 1.0f}},
-
-        // ===== 顶面 (y = 0.5) =====
-        {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-        {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}}
-    };
-
-    // 索引（每个三角形三个点，共 12 个三角形）
-    std::vector<uint32_t> indices;
-    for (uint32_t i = 0; i < 36; ++i) indices.push_back(i);
-    Eng::client::MeshData data = {vertices, indices};
-
-    m_cubeMesh = renderer->CreateMesh(data);
     m_cubeShader = renderer->CreateShader("./assets/shaders/OpenGL/model/model.vert", "./assets/shaders/OpenGL/model/model.frag");
     m_cubeTexture = renderer->CreateTexture("./assets/textures/stone.png");
     m_cubeMaterial.diffuse = m_cubeTexture;
@@ -163,6 +117,78 @@ void MyGame::OnStart(Eng::Engine& engine) {
 }
 
 bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
+
+    if (GetInput(deltaTime)) return true;
+
+    std::vector<uint8_t> data;
+    while (m_client.Receive(data)) {
+        HandleServerMessage(data);
+    }
+
+    return false;
+}
+
+void MyGame::OnRender(Eng::Engine& engine) {
+    renderer->BindFramebuffer(fbo);
+
+        view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+        projection = glm::perspective(glm::radians(s.fov), mainWin->GetAspectRatio(), zNear, s.zFar);
+
+        renderer->SetViewMatrix(view);
+        renderer->SetProjectionMatrix(projection);
+        renderer->SetLightPosition({1.0f, 2.0f, 3.0f});
+        renderer->SetViewPosition(cameraPos);
+
+        std::vector<glm::mat4> transforms;
+        transforms.reserve(m_objects.size());
+
+        for (const auto& obj : m_objects) {
+            glm::mat4 model = glm::mat4(1.0f);
+            model = glm::translate(model, obj.position);
+            model = glm::rotate(model, glm::radians(obj.rotation.y), glm::vec3(0, 1, 0));
+            model = glm::scale(model, obj.scale);
+            transforms.push_back(model);
+        }
+
+        Eng::client::Material mat;
+        mat.diffuse = m_cubeTexture;
+
+    renderer->Clear();
+        renderer->BeginFrame();
+
+        // renderer->DrawMeshInstanced(
+        //     m_model.FirstMesh(),
+        //     m_cubeShader,
+        //     mat,
+        //     transforms
+        // );
+        for (auto& [key, cc] : m_chunks) {
+            if (cc.mesh == 0) continue;
+            renderer->SetModelMatrix(glm::mat4(1.0f));
+            renderer->DrawMesh(cc.mesh, m_cubeShader, mat);
+        }
+
+        renderer->DrawSkybox(m_skybox, view);
+
+    renderer->UnbindFramebuffer();
+    
+    renderer->Clear();
+
+        renderer->DrawFullscreenQuad(fbo.colorTexture);
+        
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+
+        // ImGui::ShowDemoWindow();
+
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    winMgr->GetMainWindow()->SwapBuffers();
+}
+
+bool MyGame::GetInput(float dt) {
     using namespace Eng::client;
 
     // ==================== 按 ESC 退出 ====================
@@ -229,71 +255,10 @@ bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
     w.Write(static_cast<uint8_t>(input.jump ? 1 : 0));
     m_client.Send(w.GetBuffer());
     //本地预测
-    float speed = 5.0f * deltaTime;
+    float speed = 5.0f * dt;
     cameraPos += input.moveDir * speed;
 
-    // ==================== 接收服务端状态 ====================
-    std::vector<uint8_t> data;
-    while (m_client.Receive(data)) {
-        HandleServerMessage(data);
-    }
-
     return false;
-}
-
-void MyGame::OnRender(Eng::Engine& engine) {
-
-    renderer->BindFramebuffer(fbo);
-
-        view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-        projection = glm::perspective(glm::radians(s.fov), mainWin->GetAspectRatio(), zNear, s.zFar);
-
-        renderer->SetViewMatrix(view);
-        renderer->SetProjectionMatrix(projection);
-
-    renderer->Clear();
-
-        renderer->SetLightPosition({1.0f, 2.0f, 3.0f});
-        renderer->SetViewPosition(cameraPos);
-
-        std::vector<glm::mat4> transforms;
-        transforms.reserve(m_objects.size());
-
-        for (const auto& obj : m_objects) {
-            glm::mat4 model = glm::mat4(1.0f);
-            model = glm::translate(model, obj.position);
-            model = glm::rotate(model, glm::radians(obj.rotation.y), glm::vec3(0, 1, 0));
-            model = glm::scale(model, obj.scale);
-            transforms.push_back(model);
-        }
-
-        Eng::client::Material mat;
-        mat.diffuse = m_model.subMeshes[0].diffuseTexture;
-        renderer->DrawMeshInstanced(
-            m_model.FirstMesh(),
-            m_cubeShader,
-            mat,
-            transforms
-        );
-
-        renderer->DrawSkybox(m_skybox, view);
-
-    renderer->UnbindFramebuffer();
-    
-    renderer->Clear();
-
-        renderer->DrawFullscreenQuad(fbo.colorTexture);
-        
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
-        ImGui::NewFrame();
-
-        // ImGui::ShowDemoWindow();
-
-        ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-    winMgr->GetMainWindow()->SwapBuffers();
 }
 
 void MyGame::OnShutdown(Eng::Engine& engine) {
@@ -303,7 +268,6 @@ void MyGame::OnShutdown(Eng::Engine& engine) {
         m_server.reset();
     }
 
-    renderer->DestroyMesh(m_cubeMesh);
     renderer->DestroyShader(m_cubeShader);
     renderer->DestroyTexture(m_cubeTexture);
     renderer->DestroyShader(m_fbShader);
@@ -354,7 +318,125 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             logInfo(logger, "[Net] My client ID: " << m_myClientId);
             break;
         }
+        case game::net::MessageType::ChunkData: {
+            int cx = r.Read<int>();
+            int cz = r.Read<int>();
+            uint16_t sy = r.Read<uint16_t>();
+            if (sy != CHUNK_SIZE_Y) {
+                logInfo(logger, "[client] server CHUNK_SIZE_Y=" << static_cast<int>(sy)
+                        << " client=" << static_cast<int>(CHUNK_SIZE_Y) << ", reject chunk");
+                return;
+            }
+
+            ClientChunk cc;
+            cc.chunk.chunk_x = cx;
+            cc.chunk.chunk_z = cz;
+
+            // 读 4096 字节
+            auto bytes = r.ReadBytes(CHUNK_VOLUME);
+            std::memcpy(cc.chunk.blocks.data(), bytes.data(), CHUNK_VOLUME);
+
+            // 生成网格
+            cc.mesh = BuildChunkMesh(cc.chunk);
+            // 快速指纹:对 block 数据做 hash
+            uint32_t hash = 2166136261u;
+            for (auto b : cc.chunk.blocks) {
+                hash = (hash ^ static_cast<uint8_t>(b)) * 16777619u;
+            }
+            logInfo(logger, "[client] chunk(" << cx << "," << cz << ") hash=" << hash
+                    << " mesh_verts=" << /* 你的 mesh 顶点数，如果有接口 */ 0);
+            m_chunks[ChunkKey(cx, cz)] = std::move(cc);
+            break;
+        }
     }
+}
+
+Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
+    std::vector<Eng::client::Vertex> vertices;
+    std::vector<uint32_t> indices;
+
+    int baseX = chunk.chunk_x * CHUNK_SIZE_X;
+    int baseZ = chunk.chunk_z * CHUNK_SIZE_Z;
+
+    // 6 个面的顶点偏移
+    static constexpr int faceOffsets[6][4][3] = {
+        // +X
+        {{1,0,0},{1,1,0},{1,1,1},{1,0,1}},
+        // -X
+        {{0,0,1},{0,1,1},{0,1,0},{0,0,0}},
+        // +Y
+        {{0,1,1},{1,1,1},{1,1,0},{0,1,0}},
+        // -Y
+        {{0,0,0},{1,0,0},{1,0,1},{0,0,1}},
+        // +Z
+        {{1,0,1},{1,1,1},{0,1,1},{0,0,1}},
+        // -Z
+        {{0,0,0},{0,1,0},{1,1,0},{1,0,0}},
+    };
+    static constexpr int faceNormals[6][3] = {
+        { 1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}
+    };
+    static constexpr float faceUVs[4][2] = {
+        {0,0},{0,1},{1,1},{1,0}
+    };
+
+    for (int lx = 0; lx < CHUNK_SIZE_X; ++lx) {
+        for (int ly = 0; ly < CHUNK_SIZE_Y; ++ly) {
+            for (int lz = 0; lz < CHUNK_SIZE_Z; ++lz) {
+                BlockType type = ChunkGet(chunk, lx, ly, lz);
+                if (!IsSolid(type)) continue;
+
+                // 检查 6 个面
+                for (int f = 0; f < 6; ++f) {
+                    int nx = lx + faceNormals[f][0];
+                    int ny = ly + faceNormals[f][1];
+                    int nz = lz + faceNormals[f][2];
+
+                    // 检查相邻方块（跨区块暂时不查，简化）
+                    BlockType neighbor = ChunkGet(chunk, nx, ny, nz);
+                    if (IsSolid(neighbor)) continue;   // 被遮挡，跳过
+
+                    uint32_t baseIndex = (uint32_t)vertices.size();
+
+                    for (int v = 0; v < 4; ++v) {
+                        Eng::client::Vertex vert;
+                        vert.position = {
+                            baseX + lx + faceOffsets[f][v][0],
+                            (float)ly + faceOffsets[f][v][1],
+                            baseZ + lz + faceOffsets[f][v][2]
+                        };
+                        vert.normal = {
+                            (float)faceNormals[f][0],
+                            (float)faceNormals[f][1],
+                            (float)faceNormals[f][2]
+                        };
+                        vert.uv = { faceUVs[v][0], faceUVs[v][1] };
+                        vertices.push_back(vert);
+                    }
+
+                    indices.push_back(baseIndex + 0);
+                    indices.push_back(baseIndex + 1);
+                    indices.push_back(baseIndex + 2);
+                    indices.push_back(baseIndex + 2);
+                    indices.push_back(baseIndex + 3);
+                    indices.push_back(baseIndex + 0);
+                }
+            }
+        }
+    }
+
+    // 上传到 GPU
+    if (vertices.empty()) return 0;
+
+    Eng::client::MeshData data;
+    data.vertices = vertices;
+    data.indices = indices;
+
+    auto handle = renderer->CreateMesh(data);
+
+    uint64_t key = ChunkKey(chunk.chunk_x, chunk.chunk_z);
+
+    return handle;
 }
 
 }

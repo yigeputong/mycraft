@@ -33,6 +33,7 @@ public:
 
     // 资源创建（返回句柄）
     MeshHandle CreateMesh(const MeshData& data) override;
+    MeshHandle CreateMeshInstance(const MeshData& data) override;
     TextureHandle CreateTexture(const std::string& path) override;
     TextureHandle CreateTextureFromMemory(const aiTexture* embedded) override;
     TextureHandle CreateSkybox(const std::vector<std::string>& path) override;
@@ -56,6 +57,7 @@ public:
     void SetUniform(ShaderHandle shader, const std::string& name, int value) override;
 
     // 绘制
+    void BeginFrame() override;
     void DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& material) override;
     void DrawMeshInstanced(MeshHandle mesh,
                                    ShaderHandle shader,
@@ -149,7 +151,7 @@ private:
     GLuint CompileShader(GLenum type, const std::string& source);
     GLuint LinkProgram(GLuint vertexShader, GLuint fragmentShader);
     std::string ReadFile(const std::string& path);
-
+    MeshHandle CreateMeshInternal(const MeshData& data, bool instanced);
 };
     
 }

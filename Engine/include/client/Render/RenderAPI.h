@@ -132,6 +132,7 @@ public:
 
     // 资源创建
     virtual MeshHandle CreateMesh(const MeshData& data) = 0;
+    virtual MeshHandle CreateMeshInstance(const MeshData& data) = 0;
     virtual TextureHandle CreateTexture(const std::string& path) = 0;
     virtual TextureHandle CreateTextureFromMemory(const aiTexture* embedded) = 0;
     //order: right, left, top, bottom, front, back
@@ -157,6 +158,7 @@ public:
     virtual void SetUniform(ShaderHandle shader, const std::string& name, int value) = 0;
 
     // 绘制核心
+    virtual void BeginFrame() = 0;
     virtual void DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& material) = 0;
     virtual void DrawMeshInstanced(MeshHandle mesh,
                                     ShaderHandle shader,

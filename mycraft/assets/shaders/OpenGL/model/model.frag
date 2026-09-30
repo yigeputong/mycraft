@@ -8,7 +8,6 @@ in vec2 uv;
 out vec4 FragColor;
 
 // ==================== 纹理 ====================
-// ★ 用 binding 指定纹理单元，C++ 端不需要 SetUniform
 layout (binding = 0) uniform sampler2D uDiffuseTexture;
 layout (binding = 1) uniform sampler2D uSpecularTexture;
 
@@ -27,6 +26,7 @@ layout (std140, binding = 0) uniform GlobalData {
 // ==================== Material UBO (binding = 1) ====================
 layout (std140, binding = 1) uniform MaterialData {
     float uShininess;
+    float _pad[3];
 };
 
 void main() {

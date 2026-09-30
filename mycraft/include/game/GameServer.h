@@ -1,13 +1,15 @@
 #pragma once
 #include "core/NetworkServer.h"
 #include "core/Log.h"
+#include "core/World.h"
+#include "game/server/WorldGenerator.h"
 #include "game/Protocol.h"
 #include <memory>
 #include <thread>
 #include <atomic>
 #include <glm/glm.hpp>
 
-namespace game {
+namespace game::server {
 
 class GameServer {
 public:
@@ -34,9 +36,20 @@ private:
     std::vector<ServerPlayer> m_players;
     const float m_moveSpeed = 5.0f;
 
+    // ---- 世界 ----
+    TerrainGenerator m_terrain;
+    std::unordered_map<uint64_t, Chunk> m_chunks;
+
+    static uint64_t ChunkKey(int cx, int cz) {
+        return (static_cast<uint64_t>(static_cast<uint32_t>(cx)) << 32)
+             |  static_cast<uint32_t>(cz);
+    }
+
+    // 查得到直接返回引用；查不到就生成一份放进去
+    Chunk& GetOrCreateChunk(int cx, int cz);
+
     void Run();
     void HandleMessage(int clientId, const std::vector<uint8_t>& data);
-
     void ApplyPlayerInput(int clientId, const net::PlayerInput& in);
     void TickWorld(float dt);
     void BroadcastWorldState();

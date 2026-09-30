@@ -1,12 +1,14 @@
 #include "core/Log.h"
-#include "game/GameServer.h"
-#include "game/Protocol.h"
 #include "core/MessageReader.h"
 #include "core/MessageWriter.h"
-#include <SDL3/SDL.h>
 #include "core/NetworkServer.h"
+#include "game/GameServer.h"
+#include "game/Protocol.h"
+#include "game/server/WorldGenerator.h"
+#include <SDL3/SDL.h>
+#include <chrono>
 
-namespace game {
+namespace game::server {
 
 bool GameServer::Start(uint16_t port) {
     if (m_running.load()) return false;
@@ -62,6 +64,9 @@ void GameServer::Run() {
     float accumulator = 0.0f;
 
     logInfo(m_logger, "[Server] Server Run");
+    uint32_t seed = static_cast<uint32_t>(std::time(nullptr)) ^ static_cast<uint32_t>(std::clock());
+    m_terrain = TerrainGenerator(seed);
+    logInfo(m_logger, "[Server] World Seed = " << seed);
 
     while (m_running.load()) {
         // 1. 网络收发
@@ -108,6 +113,23 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
             }
             break;
         }
+        case game::net::MessageType::ChunkRequest: {
+            int cx = r.Read<int>();
+            int cz = r.Read<int>();
+
+            Chunk& chunk = GetOrCreateChunk(cx, cz);   // ★ 拿 map 里的引用
+
+            Eng::MessageWriter w;
+            w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkData));
+            w.Write<uint32_t>(cx);
+            w.Write<uint32_t>(cz);
+            w.Write<uint16_t>(CHUNK_SIZE_Y);
+            w.WriteBytes(reinterpret_cast<const uint8_t*>(chunk.blocks.data()),
+                        chunk.blocks.size() * sizeof(BlockType));
+
+            m_server.SendTo(clientId, w.GetBuffer());
+            break;
+        }
     }
 }
 
@@ -143,6 +165,41 @@ void GameServer::BroadcastWorldState() {
         w.Write(p.pitch);
     }
     m_server.Broadcast(w.GetBuffer());
+}
+
+Chunk& GameServer::GetOrCreateChunk(int cx, int cz) {
+    const uint64_t key = ChunkKey(cx, cz);
+
+    auto it = m_chunks.find(key);
+    if (it != m_chunks.end()) {
+        return it->second;   // 命中缓存，直接返回
+    }
+
+    // 未命中，生成一份
+    it = m_chunks.emplace(key, m_terrain.GenerateChunk(cx, cz)).first;
+    Chunk& chunk = it->second;
+
+    int stoneCount = 0, grassCount = 0, dirtCount = 0,
+        sandCount = 0, airCount = 0, waterCount = 0;
+    for (BlockType b : chunk.blocks) {
+        switch (b) {
+            case BlockType::Stone:      stoneCount++; break;
+            case BlockType::GrassBlock: grassCount++; break;
+            case BlockType::Dirt:       dirtCount++;  break;
+            case BlockType::Sand:       sandCount++;  break;
+            case BlockType::Air:        airCount++;   break;
+            case BlockType::Water:      waterCount++; break;
+            default: break;
+        }
+    }
+    logInfo(m_logger, "[World] chunk(" << cx << "," << cz << ") Stone=" << stoneCount
+               << " Grass=" << grassCount
+               << " Water=" << waterCount
+               << " Air=" << airCount
+               << " Dirt=" << dirtCount
+               << " Sand=" << sandCount);
+
+    return chunk;
 }
 
 } // namespace game

@@ -23,7 +23,12 @@ private:
     Eng::client::Window* mainWin;
     Eng::client::IRenderAPI* renderer;
 
-    Eng::client::MeshHandle m_cubeMesh;
+    struct ClientChunk {
+        Chunk chunk;                        // 原始方块数据（备用）
+        Eng::client::MeshHandle mesh = 0;   // GPU 网格
+    };
+
+    std::unordered_map<uint64_t, ClientChunk> m_chunks;
     Eng::client::ShaderHandle m_cubeShader;
     Eng::client::TextureHandle m_cubeTexture;
     Eng::client::Material m_cubeMaterial;
@@ -37,7 +42,7 @@ private:
     std::unique_ptr<Eng::Log> logger = std::make_unique<Eng::Log>();
 
     Eng::NetworkChannel m_client;
-    std::unique_ptr<game::GameServer> m_server;
+    std::unique_ptr<game::server::GameServer> m_server;
 
     uint32_t m_myClientId = 0;
     std::vector<net::PlayerState> m_otherPlayers;
@@ -78,6 +83,14 @@ private:
     bool scrollEvents(const SDL_Event& event);
 
     void HandleServerMessage(const std::vector<uint8_t>& data);
+
+    bool GetInput(float dt);
+    Eng::client::MeshHandle BuildChunkMesh(const Chunk& chunk);
+
+
+    // 游戏逻辑
+
+
 };
 
 }
