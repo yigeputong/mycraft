@@ -36,6 +36,7 @@ public:
     MeshHandle CreateMeshInstance(const MeshData& data) override;
     TextureHandle CreateTexture(const std::string& path) override;
     TextureHandle CreateTextureFromMemory(const aiTexture* embedded) override;
+    TextureHandle CreateTextureFromPixels(const uint8_t* rgba, int w, int h) override;
     TextureHandle CreateSkybox(const std::vector<std::string>& path) override;
     ShaderHandle CreateShader(const std::string& vertPath, const std::string& fragPath) override;
     Model LoadModel(const std::string& path, bool flipUV = false) override;
@@ -108,6 +109,7 @@ private:
 
     // 默认纹理
     TextureHandle m_defaultTexture = 0;
+    GLuint m_defaultTexID = 0;
 
     // 变换矩阵
     glm::mat4 m_viewMatrix       = glm::mat4(1.0f);
@@ -152,6 +154,13 @@ private:
     GLuint LinkProgram(GLuint vertexShader, GLuint fragmentShader);
     std::string ReadFile(const std::string& path);
     MeshHandle CreateMeshInternal(const MeshData& data, bool instanced);
+    GLuint ResolveTexture(TextureHandle h) const {
+        if (h == 0) return m_defaultTexID;
+        auto it = m_textures.find(h);
+        if (it == m_textures.end() || it->second.textureID == 0)
+            return m_defaultTexID;
+        return it->second.textureID;
+    }
 };
     
 }

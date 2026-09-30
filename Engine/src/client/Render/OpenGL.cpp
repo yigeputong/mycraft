@@ -12,7 +12,11 @@
 #include "client/Window.h"
 #include "core/Log.h"
 
-
+#define CHECK_GL(tag) do { \
+    GLenum e; \
+    while ((e = glGetError()) != GL_NO_ERROR) \
+        logError(m_logger, "[GL] " << tag << " error=" << e); \
+} while(0)
 
 namespace Eng::client {
 
@@ -47,6 +51,7 @@ bool OpenGLAPI::Initialize(int width, int height, Window* window) {
 
     // 默认纹理
     m_defaultTexture = CreateTexture("./assets/textures/missing_texture.png");
+    m_defaultTexID = ResolveTexture(m_defaultTexture);
 
     // ★ Global UBO
     glGenBuffers(1, &m_globalUBO);
@@ -207,10 +212,6 @@ MeshHandle OpenGLAPI::CreateMeshInternal(const MeshData& data, bool instanced) {
 
     MeshHandle handle = m_nextMeshHandle++;
     m_meshes[handle] = std::move(internal);
-
-    logDebug(m_logger, "[Mesh] Created " 
-             + std::string(instanced ? "instanced" : "normal")
-             + " mesh handle=" + std::to_string(handle));
 
     return handle;
 }
@@ -394,6 +395,32 @@ TextureHandle OpenGLAPI::CreateTextureFromMemory(const aiTexture* embedded) {
     logInfo(m_logger, "[Texture] Embedded texture created: " << textureID
               << " (" << w << "x" << h << ")");
 
+    return handle;
+}
+
+TextureHandle OpenGLAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int h) {
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    TextureHandle handle = m_nextTextureHandle++;
+    TextureDataInternal entry;
+    entry.textureID = tex;
+    entry.width = w;
+    entry.height = h;
+    entry.format = GL_RGBA;
+    m_textures[handle] = entry;
+
+    logInfo(m_logger, "[Texture] from pixels: " << w << "x" << h << " handle=" << handle << " glID=" << tex);
     return handle;
 }
 
@@ -790,39 +817,19 @@ void OpenGLAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
 
     glUseProgram(program);
 
-    UpdateMaterialUBO(material.shininess);         // binding 1：材质
+    UpdateMaterialUBO(material.shininess);
 
-    // ============ 2. 模型矩阵============
     SetUniform(shader, "uModel", m_modelMatrix);
 
     // ============ 3. 绑定纹理 ============
-    // 漫反射
     glActiveTexture(GL_TEXTURE0);
-    if (material.diffuse != 0) {
-        auto texIt = m_textures.find(material.diffuse);
-        if (texIt != m_textures.end() && texIt->second.textureID != 0) {
-            glBindTexture(GL_TEXTURE_2D, texIt->second.textureID);
-        } else {
-            glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
-        }
-    } else {
-        glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
-    }
+    glBindTexture(GL_TEXTURE_2D, ResolveTexture(material.diffuse));
 
-    // 镜面
     glActiveTexture(GL_TEXTURE1);
-    if (material.specular != 0) {
-        auto texIt = m_textures.find(material.specular);
-        if (texIt != m_textures.end() && texIt->second.textureID != 0) {
-            glBindTexture(GL_TEXTURE_2D, texIt->second.textureID);
-        } else {
-            glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
-        }
-    } else {
-        glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
-    }
+    glBindTexture(GL_TEXTURE_2D, ResolveTexture(material.specular));
 
     // ============ 4. 绘制 ============
+
     glBindVertexArray(meshData.vao);
     if (meshData.ebo != 0) {
         glDrawElements(GL_TRIANGLES,
@@ -830,7 +837,8 @@ void OpenGLAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
                        meshData.indexType,
                        0);
     } else {
-        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(meshData.indexCount));
+        glDrawArrays(GL_TRIANGLES, 0,
+                     static_cast<GLsizei>(meshData.indexCount));
     }
     glBindVertexArray(0);
 

@@ -8,6 +8,86 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_opengl3.h"
+#include <algorithm>
+
+namespace {
+
+constexpr int ATLAS_TILE = 16;                    // 每格 16x16
+constexpr int ATLAS_COLS = 4;
+constexpr int ATLAS_ROWS = 4;
+constexpr int ATLAS_W    = ATLAS_TILE * ATLAS_COLS;   // 64
+constexpr int ATLAS_H    = ATLAS_TILE * ATLAS_ROWS;   // 64
+constexpr float TILE_UV  = 1.0f / ATLAS_COLS;         // 0.25
+
+// 简单 hash 噪声，让每个像素略有差异，不至于纯色块
+uint8_t HashNoise(int x, int y, uint32_t seed) {
+    uint32_t h = static_cast<uint32_t>(x) * 374761393u
+               + static_cast<uint32_t>(y) * 668265263u
+               + seed * 2246822519u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return static_cast<uint8_t>((h ^ (h >> 16)) & 0xFF);
+}
+
+struct TileSpec { uint8_t r, g, b; int noise; };
+const TileSpec kTiles[6] = {
+    {128, 128, 128, 30},   // 0 stone
+    { 88, 160,  70, 20},   // 1 grass_top
+    { 88, 160,  70, 20},   // 2 grass_side（下面单独画土色下半部分）
+    {110,  75,  50, 25},   // 3 dirt
+    {220, 210, 160, 20},   // 4 sand
+    { 40,  90, 180, 15},   // 5 water
+};
+
+// 生成 RGBA 像素数组，64x64
+std::vector<uint8_t> GenerateAtlasPixels() {
+    std::vector<uint8_t> px(ATLAS_W * ATLAS_H * 4, 0);
+
+    for (int t = 0; t < 6; ++t) {
+        int col = t % ATLAS_COLS;
+        int row = t / ATLAS_COLS;
+        int ox = col * ATLAS_TILE;
+        int oy = row * ATLAS_TILE;
+
+        for (int y = 0; y < ATLAS_TILE; ++y) {
+            for (int x = 0; x < ATLAS_TILE; ++x) {
+                int n = static_cast<int>(HashNoise(x, y, t * 31 + 7)) % (kTiles[t].noise * 2 + 1)
+                        - kTiles[t].noise;
+                int r = kTiles[t].r + n;
+                int g = kTiles[t].g + n;
+                int b = kTiles[t].b + n;
+
+                // grass_side：上半部分绿、下半部分土，交界处锯齿
+                if (t == 2) {
+                    bool grass = (y < 4)
+                              || (y == 4 && ((x + HashNoise(x, 0, 99)) % 3 != 0));
+                    if (!grass) { r = 110 + n; g = 75 + n; b = 50 + n; }
+                }
+
+                int i = ((oy + y) * ATLAS_W + (ox + x)) * 4;
+                px[i + 0] = static_cast<uint8_t>(std::clamp(r, 0, 255));
+                px[i + 1] = static_cast<uint8_t>(std::clamp(g, 0, 255));
+                px[i + 2] = static_cast<uint8_t>(std::clamp(b, 0, 255));
+                px[i + 3] = 255;
+            }
+        }
+    }
+    return px;
+}
+
+// 方块 + 面朝向 -> 图集 tile 索引
+// face: 0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z
+int TileForBlock(game::BlockType b, int face) {
+    switch (b) {
+        case game::BlockType::Stone:      return 0;
+        case game::BlockType::GrassBlock: return (face == 2) ? 1 : 2;   // 顶面草、其余侧面
+        case game::BlockType::Dirt:       return 3;
+        case game::BlockType::Sand:       return 4;
+        case game::BlockType::Water:      return 5;
+        default:                    return 0;
+    }
+}
+
+} // namespace
 
 namespace game {
 
@@ -18,7 +98,7 @@ void MyGame::OnStart(Eng::Engine& engine) {
         return;
     }
 
-    // ★ 客户端连接（主线程，会阻塞几百毫秒）
+    // 客户端连接（主线程，会阻塞几百毫秒）
     if (!m_client.Connect("localhost", 25565)) {
         logError(logger, "[Game] Failed to connect to server");
         return;
@@ -83,12 +163,17 @@ void MyGame::OnStart(Eng::Engine& engine) {
         }
     }
 
+    auto pixels = GenerateAtlasPixels();
+    m_atlasTexture = renderer->CreateTextureFromPixels(
+        pixels.data(), ATLAS_W, ATLAS_H);
+    logInfo(logger, "[MyGame] atlas texture handle=" << m_atlasTexture);
+
     m_cubeShader = renderer->CreateShader("./assets/shaders/OpenGL/model/model.vert", "./assets/shaders/OpenGL/model/model.frag");
-    m_cubeTexture = renderer->CreateTexture("./assets/textures/stone.png");
-    m_cubeMaterial.diffuse = m_cubeTexture;
+    // m_cubeTexture = renderer->CreateTexture("./assets/textures/stone.png");
+    // m_cubeMaterial.diffuse = m_cubeTexture;
 
     m_model = renderer->LoadModel("./assets/objects/testBlock0.obj");
-    m_model.subMeshes[0].diffuseTexture = m_cubeTexture;
+    m_model.subMeshes[0].diffuseTexture = m_atlasTexture;
 
     constexpr int SIZE = 16;
     for (int x = 0; x < SIZE; ++x) {
@@ -151,17 +236,11 @@ void MyGame::OnRender(Eng::Engine& engine) {
         }
 
         Eng::client::Material mat;
-        mat.diffuse = m_cubeTexture;
+        mat.diffuse = m_atlasTexture;
 
     renderer->Clear();
         renderer->BeginFrame();
 
-        // renderer->DrawMeshInstanced(
-        //     m_model.FirstMesh(),
-        //     m_cubeShader,
-        //     mat,
-        //     transforms
-        // );
         for (auto& [key, cc] : m_chunks) {
             if (cc.mesh == 0) continue;
             renderer->SetModelMatrix(glm::mat4(1.0f));
@@ -176,14 +255,14 @@ void MyGame::OnRender(Eng::Engine& engine) {
 
         renderer->DrawFullscreenQuad(fbo.colorTexture);
         
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
-        ImGui::NewFrame();
+        // ImGui_ImplOpenGL3_NewFrame();
+        // ImGui_ImplSDL3_NewFrame();
+        // ImGui::NewFrame();
 
-        // ImGui::ShowDemoWindow();
+        // // ImGui::ShowDemoWindow();
 
-        ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        // ImGui::Render();
+        // ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     winMgr->GetMainWindow()->SwapBuffers();
 }
@@ -269,7 +348,7 @@ void MyGame::OnShutdown(Eng::Engine& engine) {
     }
 
     renderer->DestroyShader(m_cubeShader);
-    renderer->DestroyTexture(m_cubeTexture);
+    // renderer->DestroyTexture(m_cubeTexture);
     renderer->DestroyShader(m_fbShader);
     renderer->DestroyTexture(m_skybox);
     ImGui_ImplOpenGL3_Shutdown();
@@ -343,8 +422,6 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             for (auto b : cc.chunk.blocks) {
                 hash = (hash ^ static_cast<uint8_t>(b)) * 16777619u;
             }
-            logInfo(logger, "[client] chunk(" << cx << "," << cz << ") hash=" << hash
-                    << " mesh_verts=" << /* 你的 mesh 顶点数，如果有接口 */ 0);
             m_chunks[ChunkKey(cx, cz)] = std::move(cc);
             break;
         }
@@ -355,8 +432,40 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
     std::vector<Eng::client::Vertex> vertices;
     std::vector<uint32_t> indices;
 
-    int baseX = chunk.chunk_x * CHUNK_SIZE_X;
-    int baseZ = chunk.chunk_z * CHUNK_SIZE_Z;
+    const int cx = chunk.chunk_x;
+    const int cz = chunk.chunk_z;
+    const int baseX = cx * CHUNK_SIZE_X;
+    const int baseZ = cz * CHUNK_SIZE_Z;
+
+    // ★ 拿 4 个邻居（可能为 null——还没收到）
+    auto findChunk = [this](int ccx, int ccz) -> const Chunk* {
+        auto it = m_chunks.find(ChunkKey(ccx, ccz));
+        if (it == m_chunks.end()) return nullptr;
+        return &it->second.chunk;
+    };
+    const Chunk* nXm = findChunk(cx - 1, cz);
+    const Chunk* nXp = findChunk(cx + 1, cz);
+    const Chunk* nZm = findChunk(cx, cz - 1);
+    const Chunk* nZp = findChunk(cx, cz + 1);
+
+    // ★ 跨区块取方块，接受 lx/lz ∈ [-1, 16]
+    auto getBlock = [&](int lx, int ly, int lz) -> BlockType {
+        if (ly < 0 || ly >= CHUNK_SIZE_Y) return BlockType::Air;
+        if (lx >= 0 && lx < CHUNK_SIZE_X && lz >= 0 && lz < CHUNK_SIZE_Z)
+            return ChunkGet(chunk, lx, ly, lz);
+
+        const Chunk* n = nullptr;
+        int nlx = lx, nlz = lz;
+        if      (lx < 0)                  { n = nXm; nlx = lx + CHUNK_SIZE_X; }
+        else if (lx >= CHUNK_SIZE_X)      { n = nXp; nlx = lx - CHUNK_SIZE_X; }
+        else if (lz < 0)                  { n = nZm; nlz = lz + CHUNK_SIZE_Z; }
+        else if (lz >= CHUNK_SIZE_Z)      { n = nZp; nlz = lz - CHUNK_SIZE_Z; }
+
+        if (!n) return BlockType::Air;   // 邻居没到，当空气（多画一个面）
+        if (nlx < 0 || nlx >= CHUNK_SIZE_X) return BlockType::Air;  // 对角线情况
+        if (nlz < 0 || nlz >= CHUNK_SIZE_Z) return BlockType::Air;
+        return ChunkGet(*n, nlx, ly, nlz);
+    };
 
     // 6 个面的顶点偏移
     static constexpr int faceOffsets[6][4][3] = {
@@ -393,7 +502,7 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
                     int nz = lz + faceNormals[f][2];
 
                     // 检查相邻方块（跨区块暂时不查，简化）
-                    BlockType neighbor = ChunkGet(chunk, nx, ny, nz);
+                    BlockType neighbor = getBlock( nx, ny, nz);
                     if (IsSolid(neighbor)) continue;   // 被遮挡，跳过
 
                     uint32_t baseIndex = (uint32_t)vertices.size();
@@ -410,7 +519,15 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
                             (float)faceNormals[f][1],
                             (float)faceNormals[f][2]
                         };
-                        vert.uv = { faceUVs[v][0], faceUVs[v][1] };
+                        int tile = TileForBlock(type, f);
+                        int tileRow = tile / ATLAS_COLS;
+                        int tileCol = tile % ATLAS_COLS;
+                        float u0 = static_cast<float>(tileCol) * TILE_UV;
+                        float v0 = static_cast<float>(tileRow) * TILE_UV;
+                        vert.uv = {
+                            u0 + faceUVs[v][0] * TILE_UV,
+                            v0 + (1.0f - faceUVs[v][1]) * TILE_UV
+                        };
                         vertices.push_back(vert);
                     }
 

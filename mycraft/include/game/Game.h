@@ -30,9 +30,11 @@ private:
 
     std::unordered_map<uint64_t, ClientChunk> m_chunks;
     Eng::client::ShaderHandle m_cubeShader;
-    Eng::client::TextureHandle m_cubeTexture;
-    Eng::client::Material m_cubeMaterial;
+    // Eng::client::TextureHandle m_cubeTexture;
+    // Eng::client::Material m_cubeMaterial;
     Eng::client::Model m_model;
+
+    Eng::client::TextureHandle m_atlasTexture;
 
     Eng::client::Framebuffer fbo;
     Eng::client::ShaderHandle m_fbShader;
@@ -86,10 +88,6 @@ private:
 
     bool GetInput(float dt);
     Eng::client::MeshHandle BuildChunkMesh(const Chunk& chunk);
-
-
-    // 游戏逻辑
-
 
 };
 

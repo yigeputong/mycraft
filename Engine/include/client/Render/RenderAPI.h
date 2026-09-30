@@ -135,6 +135,7 @@ public:
     virtual MeshHandle CreateMeshInstance(const MeshData& data) = 0;
     virtual TextureHandle CreateTexture(const std::string& path) = 0;
     virtual TextureHandle CreateTextureFromMemory(const aiTexture* embedded) = 0;
+    virtual TextureHandle CreateTextureFromPixels(const uint8_t* rgba, int w, int h) = 0;
     //order: right, left, top, bottom, front, back
     virtual TextureHandle CreateSkybox(const std::vector<std::string>& path) = 0;
     virtual ShaderHandle CreateShader(const std::string& vertPath, const std::string& fragPath) = 0;

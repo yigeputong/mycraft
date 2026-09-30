@@ -30,23 +30,30 @@ bool NetworkServer::PollAccept() {
 }
 
 void NetworkServer::Update() {
-    for (auto it = m_clients.begin(); it != m_clients.end(); ) {
+    // ① 收集所有待处理消息
+    std::vector<std::pair<int, std::vector<uint8_t>>> pending;
+    for (auto& c : m_clients) {
         std::vector<uint8_t> data;
-        while (it->channel.Receive(data)) {
-            if (m_messageCb) {
-                m_messageCb(it->id, data);
-            } else {
-                logError(m_logger, "[NetworkServer] m_messageCb is NULL! Message dropped!");
-            }
-        }
-        if (!it->channel.IsConnected()) {
-            if (m_disconnectCb) m_disconnectCb(it->id);
-            logInfo(m_logger, "[NetworkServer] Client " << it->id << " disconnected");
-            it = m_clients.erase(it);
-        } else {
-            ++it;
+        while (c.channel.Receive(data)) {
+            pending.emplace_back(c.id, std::move(data));
         }
     }
+
+    // ② 分发（此时不在遍历 m_clients）
+    for (auto& [id, data] : pending) {
+        if (m_messageCb) m_messageCb(id, data);
+        else logError(m_logger, "[NetworkServer] m_messageCb is NULL!");
+    }
+
+    // ③ 清理断线
+    std::erase_if(m_clients, [this](Client& c) {
+        if (!c.channel.IsConnected()) {
+            if (m_disconnectCb) m_disconnectCb(c.id);
+            logInfo(m_logger, "[NetworkServer] Client " << c.id << " disconnected");
+            return true;
+        }
+        return false;
+    });
 }
 
 void NetworkServer::Broadcast(std::span<const uint8_t> data) {
