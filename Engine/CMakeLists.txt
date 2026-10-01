@@ -1,6 +1,7 @@
 add_library(engine STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Engine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/Log.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/Platform.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/NetworkChannel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/NetworkServer.cpp
 

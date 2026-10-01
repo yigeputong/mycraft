@@ -2,6 +2,7 @@
 #include "core/Log.h"
 #include <chrono>
 #include <SDL3_image/SDL_image.h>
+#include "core/Platform.h"
 
 namespace Eng {
 
@@ -13,6 +14,8 @@ Engine& Engine::GetInstance() {
 bool Engine::Init(const EngineConfig& config, IGame* game) {
     m_engConfig = config;
     m_game.reset(game);
+
+    EnableAnsiConsole();
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         logError(m_logger, "[Engine] SDL_Init failed: " << SDL_GetError());

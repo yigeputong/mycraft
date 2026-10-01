@@ -11,13 +11,29 @@ std::string GetTime() {
     using namespace std::chrono;
 
     auto now = system_clock::now();
-
     auto secs = floor<seconds>(now);
-
     auto ms = duration_cast<milliseconds>(now - secs);
 
-    return std::format("{:%m-%d %H:%M:%S}.{:03d}", secs, ms.count());
+    // 转本地时区
+    auto local = zoned_time{current_zone(), secs};
+
+    return std::format("{:%m-%d %H:%M:%S}.{:03d}",
+                       local.get_local_time(), ms.count());
 }
+
+enum class Color { Reset, Red, Yellow, Blue, Gray };
+
+static const char* ColorCode(LogLevel lv) {
+    switch (lv) {
+        case LogLevel::FATAL:   return "\033[31m";   // 红
+        case LogLevel::ERROR:   return "\033[31m";   // 红
+        case LogLevel::WARNING: return "\033[33m";   // 黄
+        case LogLevel::INFO:    return "\033[90m";   // 灰
+        case LogLevel::DEBUG:   return "\033[36m";   // 青
+    }
+    return "";
+}
+constexpr const char* kReset = "\033[0m";
 
 Log::Log(bool console) {
     m_consoleOutput = console;
@@ -104,7 +120,12 @@ void Log::out(LogLevel level, std::string& message) {
         m_file << "[" << GetTime() << " " << LevelToString(level) << "]: " << message << std::endl;
     }
     if (m_consoleOutput) {
-        std::println("[{} {}]: {}", GetTime(), LevelToString(level), message);
+        std::print("{}{} {}]: {}{}\n",
+                   ColorCode(level),
+                   "[" + GetTime(),
+                   LevelToString(level),
+                   message,
+                   kReset);
     }
 }
 

@@ -137,6 +137,15 @@ void OpenGLAPI::SetLightPosition(const glm::vec3& pos) {
     m_lightPos = pos;
 }
 
+void OpenGLAPI::SetLightColor(const glm::vec3& color, const float intensity) {
+    m_lightColor = color;
+    m_lightIntensity = intensity;
+}
+
+void OpenGLAPI::SetLightAmbient(const glm::vec3& amb) {
+    m_lightAmbient = amb;
+}
+
 void OpenGLAPI::SetViewPosition(const glm::vec3& pos) {
     m_viewPos = pos;
 }
@@ -175,6 +184,9 @@ MeshHandle OpenGLAPI::CreateMeshInternal(const MeshData& data, bool instanced) {
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                           (void*)offsetof(Vertex, uv));
     glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          (void*)offsetof(Vertex, ao));
+    glEnableVertexAttribArray(3);
 
     // ============ 实例 VBO（仅实例化时）============
     internal.instanceVBO = 0;
@@ -424,86 +436,6 @@ TextureHandle OpenGLAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int
     return handle;
 }
 
-TextureHandle OpenGLAPI::CreateSkybox(const std::vector<std::string>& path) {
-    if (!m_initialized) return 0;
-
-    logInfo(m_logger, "[OpenGLAPI] Loading Skybox textures");
-
-    if (!m_skyboxVAO) {
-         float vertices[] = {
-            -1.0f, -1.0f, -1.0f,   1.0f, -1.0f, -1.0f,   1.0f,  1.0f, -1.0f,
-             1.0f,  1.0f, -1.0f,  -1.0f,  1.0f, -1.0f,  -1.0f, -1.0f, -1.0f,
-            -1.0f, -1.0f,  1.0f,   1.0f, -1.0f,  1.0f,   1.0f,  1.0f,  1.0f,
-             1.0f,  1.0f,  1.0f,  -1.0f,  1.0f,  1.0f,  -1.0f, -1.0f,  1.0f,
-            -1.0f,  1.0f,  1.0f,  -1.0f,  1.0f, -1.0f,  -1.0f, -1.0f, -1.0f,
-            -1.0f, -1.0f, -1.0f,  -1.0f, -1.0f,  1.0f,  -1.0f,  1.0f,  1.0f,
-             1.0f,  1.0f,  1.0f,   1.0f,  1.0f, -1.0f,   1.0f, -1.0f, -1.0f,
-             1.0f, -1.0f, -1.0f,   1.0f, -1.0f,  1.0f,   1.0f,  1.0f,  1.0f,
-            -1.0f, -1.0f, -1.0f,   1.0f, -1.0f, -1.0f,   1.0f, -1.0f,  1.0f,
-             1.0f, -1.0f,  1.0f,  -1.0f, -1.0f,  1.0f,  -1.0f, -1.0f, -1.0f,
-            -1.0f,  1.0f, -1.0f,   1.0f,  1.0f, -1.0f,   1.0f,  1.0f,  1.0f,
-             1.0f,  1.0f,  1.0f,  -1.0f,  1.0f,  1.0f,  -1.0f,  1.0f, -1.0f
-        };
-
-        glGenVertexArrays(1, &m_skyboxVAO);
-        glGenBuffers(1, &m_skyboxVBO);
-        glBindVertexArray(m_skyboxVAO);
-        glBindBuffer(GL_ARRAY_BUFFER, m_skyboxVBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
-        glBindVertexArray(0);
-    }
-
-    if (!m_skyboxShader) {
-        m_skyboxShader = CreateShader("./assets/shaders/Engine/OpenGL/skybox/skybox.vert", "./assets/shaders/Engine/OpenGL/skybox/skybox.frag");
-    }
-
-    GLuint textureID;
-    glGenTextures(1, &textureID);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, textureID);
-
-    int w = 0;
-    int h = 0;
-
-    for (size_t i = 0; i < path.size(); ++i) {
-        SDL_Surface* surf = IMG_Load(path[i].c_str());
-        if (!surf) {
-            logError(m_logger, "Failed to load cube face: " << path[i]);
-            return 0;
-        }
-        SDL_Surface* converted = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_ABGR8888);
-        SDL_DestroySurface(surf);
-        if (!converted) {
-            logError(m_logger, "Conversion failed for: " << path[i]);
-            return 0;
-        }
-        w = converted->w;
-        h = converted->h;
-        glTexImage2D(static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i),
-                     0, GL_SRGB8_ALPHA8, converted->w, converted->h, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, converted->pixels);
-        SDL_DestroySurface(converted);
-    }
-
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-
-    TextureHandle handle = m_nextTextureHandle++;
-    TextureDataInternal data;
-    data.textureID = textureID;
-    data.width = w;
-    data.height = h;
-    data.format = GL_RGBA;
-    m_textures[handle] = data;
-
-    logInfo(m_logger, "[Texture] OpenGL CubeMap texture created: " << textureID);
-    return handle;
-}
-
 ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath, const std::string& fragPath) {
     if (!m_initialized) return 0;
 
@@ -530,6 +462,11 @@ ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath, const std::str
     glDeleteShader(fragment);
 
     if (!program) return 0;
+
+    GLuint blockIdx = glGetUniformBlockIndex(program, "GlobalData");
+    GLint blockSize = 0;
+    glGetActiveUniformBlockiv(program, blockIdx, GL_UNIFORM_BLOCK_DATA_SIZE, &blockSize);
+    logInfo(m_logger, "[OpenGLAPI] Shader created: " << vertPath);
 
     // 存储
     ShaderHandle handle = m_nextShaderHandle++;
@@ -770,33 +707,41 @@ uint32_t OpenGLAPI::GetFramebufferTexture(const Framebuffer& fb) const {
 void OpenGLAPI::SetUniform(ShaderHandle shader, const std::string& name, const glm::mat4& value) {
     auto it = m_shaders.find(shader);
     if (it == m_shaders.end() || !it->second.program) return;
+    glUseProgram(it->second.program);
     GLint loc = glGetUniformLocation(it->second.program, name.c_str());
     if (loc == -1) return;
     glUniformMatrix4fv(loc, 1, GL_FALSE, glm::value_ptr(value));
+    CHECK_GL("SetUniform(mat4)");
 }
 
 void OpenGLAPI::SetUniform(ShaderHandle shader, const std::string& name, const glm::vec3& value) {
     auto it = m_shaders.find(shader);
     if (it == m_shaders.end() || !it->second.program) return;
+    glUseProgram(it->second.program);
     GLint loc = glGetUniformLocation(it->second.program, name.c_str());
     if (loc == -1) return;
     glUniform3fv(loc, 1, glm::value_ptr(value));
+    CHECK_GL("SetUniform(vec3)");
 }
 
 void OpenGLAPI::SetUniform(ShaderHandle shader, const std::string& name, float value) {
     auto it = m_shaders.find(shader);
     if (it == m_shaders.end() || !it->second.program) return;
+    glUseProgram(it->second.program);
     GLint loc = glGetUniformLocation(it->second.program, name.c_str());
     if (loc == -1) return;
     glUniform1f(loc, value);
+    CHECK_GL("SetUniform(float)");
 }
 
 void OpenGLAPI::SetUniform(ShaderHandle shader, const std::string& name, int value) {
     auto it = m_shaders.find(shader);
     if (it == m_shaders.end() || !it->second.program) return;
+    glUseProgram(it->second.program);
     GLint loc = glGetUniformLocation(it->second.program, name.c_str());
     if (loc == -1) return;
     glUniform1i(loc, value);
+    CHECK_GL("SetUniform(int)");
 }
 
 // ---------- 绘制 ----------
@@ -922,46 +867,29 @@ void OpenGLAPI::DrawMeshInstanced(MeshHandle mesh, ShaderHandle shader, const Ma
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-void OpenGLAPI::DrawSkybox(TextureHandle cubemap, const glm::mat4& view) {
-    if (!m_initialized) return;
+void OpenGLAPI::DrawSkybox(ShaderHandle shader) {
+    auto it = m_shaders.find(shader);
+    if (it == m_shaders.end()) return;
+    GLuint program = it->second.program;
+    if (program == 0) return;
 
-    auto texIt = m_textures.find(cubemap);
-    auto shaderIt = m_shaders.find(m_skyboxShader);
-    if (texIt == m_textures.end() || shaderIt == m_shaders.end()) return;
-
-    GLuint program = shaderIt->second.program;
-    GLuint cubeMapID = texIt->second.textureID;
-
-    // ★ 直接设置天空盒所需的深度状态，不读、不恢复
-    glDisable(GL_CULL_FACE);
-    glDepthFunc(GL_LEQUAL);
+    // 天空盒状态：不写深度、不剔面
     glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glDepthFunc(GL_LEQUAL);   // shader 里 gl_Position.xyww 会得到 z=1，LEQUAL 才能通过
 
     glUseProgram(program);
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, cubeMapID);
-    glUniform1i(glGetUniformLocation(program, "uSkybox"), 0);
+    // 天空盒不需要 model / material / 纹理
+    glBindVertexArray(m_meshes[GetSkyCubeMesh()].vao);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
+    glBindVertexArray(0);
 
-    glm::mat4 skyboxView = glm::mat4(glm::mat3(view));
-    glUniformMatrix4fv(glGetUniformLocation(program, "uView"), 1, GL_FALSE,
-                       glm::value_ptr(skyboxView));
-    glUniformMatrix4fv(glGetUniformLocation(program, "uProjection"), 1, GL_FALSE,
-                       glm::value_ptr(m_projectionMatrix));
-
-    if (m_skyboxVAO) {
-        glBindVertexArray(m_skyboxVAO);
-        glDrawArrays(GL_TRIANGLES, 0, 36);
-        glBindVertexArray(0);
-    }
-
-    // ★ 恢复为"3D 场景默认状态"
+    // 恢复状态
+    glDepthMask(GL_TRUE);
     glEnable(GL_CULL_FACE);
     glDepthFunc(GL_LESS);
-    glDepthMask(GL_TRUE);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+    glUseProgram(0);
 }
 
 void OpenGLAPI::DrawFullscreenQuad(TextureHandle textureID) {
@@ -1030,6 +958,12 @@ GLuint OpenGLAPI::LinkProgram(GLuint vertexShader, GLuint fragmentShader) {
 }
 
 void OpenGLAPI::UpdateGlobalUBO() {
+    while (glGetError() != GL_NO_ERROR) {}
+
+    if (m_globalUBO == 0) {
+        logError(m_logger, "[OpenGLAPI] m_globalUBO == 0!");
+        return;
+    }
     Eng::client::GlobalUBOData data;
     data.view           = m_viewMatrix;
     data.projection     = m_projectionMatrix;
@@ -1059,6 +993,40 @@ void OpenGLAPI::UpdateMaterialUBO(float shininess) {
     glBindBuffer(GL_UNIFORM_BUFFER, m_materialUBO);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(data), &data);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
+}
+
+MeshHandle OpenGLAPI::GetSkyCubeMesh() {
+    if (m_skyCubeMesh != 0) return m_skyCubeMesh;
+
+    // 36 顶点（每面 6 个），NDC 空间的单位立方体
+    const float s = 1.0f;
+    float verts[] = {
+        // +X
+         s,-s,-s,  s,-s, s,  s, s, s,   s, s, s,  s, s,-s,  s,-s,-s,
+        // -X
+        -s,-s, s, -s,-s,-s, -s, s,-s,  -s, s,-s, -s, s, s, -s,-s, s,
+        // +Y
+        -s, s,-s,  s, s,-s,  s, s, s,   s, s, s, -s, s, s, -s, s,-s,
+        // -Y
+        -s,-s, s,  s,-s, s,  s,-s,-s,   s,-s,-s, -s,-s,-s, -s,-s, s,
+        // +Z
+        -s,-s, s,  s,-s, s,  s, s, s,   s, s, s, -s, s, s, -s,-s, s,
+        // -Z
+         s,-s,-s, -s,-s,-s, -s, s,-s,  -s, s,-s,  s, s,-s,  s,-s,-s,
+    };
+
+    std::vector<Eng::client::Vertex> v(36);
+    for (int i = 0; i < 36; ++i) {
+        v[i].position = {verts[i*3], verts[i*3+1], verts[i*3+2]};
+        v[i].normal   = {0.0f, 0.0f, 0.0f};
+        v[i].uv       = {0.0f, 0.0f};
+    }
+
+    Eng::client::MeshData md;
+    md.vertices = std::move(v);
+    // indices 留空 → glDrawArrays
+    m_skyCubeMesh = CreateMesh(md);
+    return m_skyCubeMesh;
 }
     
 } // namespace Eng

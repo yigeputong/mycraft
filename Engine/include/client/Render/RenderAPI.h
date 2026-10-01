@@ -21,6 +21,7 @@ struct Vertex {
     glm::vec3 position;
     glm::vec3 normal;
     glm::vec2 uv;
+    float     ao = 1.0f;
 };
 
 struct MeshData {
@@ -62,16 +63,18 @@ struct Framebuffer {
 
 // ============ Global UBO (binding = 0) ============
 struct GlobalUBOData {
-    glm::mat4 view;           // 0   ~ 63
-    glm::mat4 projection;     // 64  ~ 127
-    glm::vec3 viewPos;        // 128 ~ 139
-    float     _pad0;          // 140 ~ 143
-    glm::vec3 lightDir;       // 144 ~ 155
-    float     lightIntensity; // 156 ~ 159
-    glm::vec3 lightColor;     // 160 ~ 171
-    float     lightAmbient;   // 172 ~ 175
+    glm::mat4 view;
+    glm::mat4 projection;
+    glm::vec3 viewPos;
+    float     _pad0;
+    glm::vec3 lightDir;
+    float     lightIntensity;
+    glm::vec3 lightColor;
+    float     _pad1;
+    glm::vec3 lightAmbient;
+    float     _pad2;
 };
-static_assert(sizeof(GlobalUBOData) == 176, "GlobalUBO size mismatch");
+static_assert(sizeof(GlobalUBOData) == 192, "GlobalUBO size mismatch");
 
 // ============ Material UBO (binding = 1) ============
 struct MaterialUBOData {
@@ -98,6 +101,8 @@ public:
     virtual void SetProjectionMatrix(const glm::mat4& proj) = 0;
     virtual void SetModelMatrix(const glm::mat4& model) = 0;
     virtual void SetLightPosition(const glm::vec3& pos) = 0;
+    virtual void SetLightColor(const glm::vec3& color, const float intensity) = 0;
+    virtual void SetLightAmbient(const glm::vec3& amb) = 0;
     virtual void SetViewPosition(const glm::vec3& pos) = 0;
 
     // 资源创建
@@ -106,8 +111,6 @@ public:
     virtual TextureHandle CreateTexture(const std::string& path) = 0;
     virtual TextureHandle CreateTextureFromMemory(const aiTexture* embedded) = 0;
     virtual TextureHandle CreateTextureFromPixels(const uint8_t* rgba, int w, int h) = 0;
-    //order: right, left, top, bottom, front, back
-    virtual TextureHandle CreateSkybox(const std::vector<std::string>& path) = 0;
     virtual ShaderHandle CreateShader(const std::string& vertPath, const std::string& fragPath) = 0;
     virtual Model LoadModel(const std::string& path, bool flipUV = false) = 0;
 
@@ -137,7 +140,7 @@ public:
                                     const std::vector<glm::mat4>& transforms) = 0;
 
     // 特殊绘制（天空盒、UI等）
-    virtual void DrawSkybox(TextureHandle cubemap, const glm::mat4& view) = 0;
+    virtual void DrawSkybox(ShaderHandle shader) = 0;
     virtual void DrawFullscreenQuad(TextureHandle textureID) = 0;
 };
 

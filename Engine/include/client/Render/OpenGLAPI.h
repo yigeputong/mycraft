@@ -29,6 +29,8 @@ public:
     void SetProjectionMatrix(const glm::mat4& proj) override;
     void SetModelMatrix(const glm::mat4& model) override;
     void SetLightPosition(const glm::vec3& pos) override;
+    void SetLightColor(const glm::vec3& color, const float intensity) override;
+    void SetLightAmbient(const glm::vec3& amb) override;
     void SetViewPosition(const glm::vec3& pos) override;
 
     // 资源创建（返回句柄）
@@ -37,7 +39,6 @@ public:
     TextureHandle CreateTexture(const std::string& path) override;
     TextureHandle CreateTextureFromMemory(const aiTexture* embedded) override;
     TextureHandle CreateTextureFromPixels(const uint8_t* rgba, int w, int h) override;
-    TextureHandle CreateSkybox(const std::vector<std::string>& path) override;
     ShaderHandle CreateShader(const std::string& vertPath, const std::string& fragPath) override;
     Model LoadModel(const std::string& path, bool flipUV = false) override;
 
@@ -65,7 +66,7 @@ public:
                                    const Material& material,
                                    const std::vector<glm::mat4>& transforms) override;
 
-    void DrawSkybox(TextureHandle cubemap, const glm::mat4& view) override;
+    void DrawSkybox(ShaderHandle shader) override;
     void DrawFullscreenQuad(TextureHandle textureID) override;
 
     static constexpr int api_major = 4;
@@ -121,7 +122,7 @@ private:
     glm::vec3 m_viewPos        = glm::vec3(0.0f);
     glm::vec3 m_lightDir       = glm::vec3(0.5f, -1.0f, 0.3f);  // 斜向下照
     glm::vec3 m_lightColor     = glm::vec3(1.0f, 0.98f, 0.9f);    // 略暖的白
-    float     m_lightAmbient   = 0.3f;
+    glm::vec3 m_lightAmbient   = glm::vec3(0.3f);
     float     m_lightIntensity = 1.0f;
 
     // UBO
@@ -129,9 +130,7 @@ private:
     GLuint m_materialUBO = 0;   // binding = 1，存材质
 
     // 天空盒
-    GLuint m_skyboxVAO = 0;
-    GLuint m_skyboxVBO = 0;
-    ShaderHandle m_skyboxShader = 0;
+    MeshHandle m_skyCubeMesh = 0;
 
     // 全屏四边形
     GLuint m_fullscreenVAO = 0;
@@ -148,6 +147,7 @@ private:
     float m_clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 
     // 辅助函数
+    MeshHandle GetSkyCubeMesh();
     void UpdateGlobalUBO();
     void UpdateMaterialUBO(float shininess);
     GLuint CompileShader(GLenum type, const std::string& source);

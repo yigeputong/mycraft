@@ -195,7 +195,7 @@ void MyGame::OnStart(Eng::Engine& engine) {
         "./assets/textures/skybox/front.jpg",
         "./assets/textures/skybox/back.jpg"
     };
-    m_skybox = renderer->CreateSkybox(skyboxFaces);
+    m_skyShader = renderer->CreateShader("./assets/shaders/OpenGL/sky/sky.vert", "./assets/shaders/OpenGL/sky/sky.frag");
 }
 
 bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
@@ -225,6 +225,32 @@ bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
     cameraPos      += m_positionError * t;
     m_positionError *= (1.0f - t);
 
+    // 一天 5 分钟，24 小时 = 300 秒
+    float hoursPerSec = 24.0f / kDayLengthSec;
+    m_timeOfDay = std::fmod(m_timeOfDay + hoursPerSec * deltaTime, 24.0f);
+
+    // ---- 太阳方向 ----
+    float angle = (m_timeOfDay / 24.0f) * 6.2831853f - 1.5707963f;
+    glm::vec3 sunDir = glm::normalize(glm::vec3(cos(angle), sin(angle), 0.3f));
+    float sunH = sunDir.y;
+
+    // ---- 光强：夜晚为 0，白天为 1 ----
+    float sunI = glm::clamp(sunH * 4.0f, 0.0f, 1.0f);
+
+    // ---- 光色：正午白，黄昏偏橙 ----
+    float warm = 1.0f - glm::clamp(sunH * 3.0f, 0.0f, 1.0f);
+    glm::vec3 sunColor = glm::mix(glm::vec3(1.0f, 1.0f, 1.0f),
+                                glm::vec3(1.0f, 0.5f, 0.2f), warm);
+
+    // ---- 环境光：夜暗蓝，昼亮白 ----
+    glm::vec3 ambient = glm::mix(glm::vec3(0.05f, 0.06f, 0.12f),
+                                glm::vec3(0.35f, 0.4f, 0.5f),
+                                glm::clamp(sunH * 2.0f, 0.0f, 1.0f));
+
+    // ---- 传给渲染器 ----
+    renderer->SetLightPosition(sunDir);
+    renderer->SetLightColor(sunColor, sunI);
+    renderer->SetLightAmbient(ambient);
 
     if (GetInput(deltaTime)) return true;
 
@@ -283,145 +309,158 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->Clear();
         renderer->BeginFrame();
 
+        renderer->SetUniform(m_cubeShader, "uAOStrength", engine.GetConfig().render.m_aoStrength);
         for (auto& [key, cc] : m_chunks) {
             if (cc.mesh == 0) continue;
             renderer->SetModelMatrix(glm::mat4(1.0f));
             renderer->DrawMesh(cc.mesh, m_cubeShader, mat);
         }
 
-        renderer->DrawSkybox(m_skybox, view);
+        renderer->SetUniform(m_skyShader, "uTimeOfDay", m_timeOfDay);
+        renderer->DrawSkybox(m_skyShader);
 
     renderer->UnbindFramebuffer();
     
     renderer->Clear();
 
         renderer->DrawFullscreenQuad(fbo.colorTexture);
-        
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
-        ImGui::NewFrame();
 
-        // 准心
-        if (!m_menuOpen) {
-            ImGuiIO& io = ImGui::GetIO();
-            ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-            ImDrawList* dl = ImGui::GetForegroundDrawList();   // ★ 前景层，画在所有窗口之上
-
-            constexpr float LEN    = 8.0f;   // 每条臂的长度
-            constexpr float THICK  = 2.0f;   // 线宽
-            constexpr float GAP    = 2.0f;   // 中心留空
-            ImU32 color = IM_COL32(255, 255, 255, 200);
-
-            dl->AddLine(ImVec2(center.x - GAP - LEN, center.y),
-                        ImVec2(center.x - GAP,       center.y), color, THICK);
-            dl->AddLine(ImVec2(center.x + GAP,       center.y),
-                        ImVec2(center.x + GAP + LEN, center.y), color, THICK);
-            dl->AddLine(ImVec2(center.x, center.y - GAP - LEN),
-                        ImVec2(center.x, center.y - GAP),       color, THICK);
-            dl->AddLine(ImVec2(center.x, center.y + GAP),
-                        ImVec2(center.x, center.y + GAP + LEN), color, THICK);
-        }
-
-        // 物品栏
-        if (!m_menuOpen) {
-            ImGuiIO& io = ImGui::GetIO();
-            constexpr float SLOT = 50.0f;
-            constexpr float GAP  = 4.0f;
-            float totalW = kHotbarSize * SLOT + (kHotbarSize - 1) * GAP;
-            float startX = (io.DisplaySize.x - totalW) * 0.5f;
-            float y      = io.DisplaySize.y - SLOT - 20.0f;
-
-            ImDrawList* dl = ImGui::GetForegroundDrawList();
-            for (int i = 0; i < kHotbarSize; ++i) {
-                float x = startX + i * (SLOT + GAP);
-                ImVec2 p0(x, y), p1(x + SLOT, y + SLOT);
-
-                ImU32 bg = (i == m_hotbarIndex) ? IM_COL32(255, 255, 255, 200)
-                                                : IM_COL32(0, 0, 0, 120);
-                dl->AddRectFilled(p0, p1, bg);
-                dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 255), 0, 0, 2.0f);
-
-                // 用方块名或者一小段纯色表示（后面有纹理再说）
-                const char* names[] = {"Stone", "Dirt", "Grass", "Sand", "Water"};
-                dl->AddText(ImVec2(x + 4, y + SLOT - 18),
-                            IM_COL32(255, 255, 255, 255), names[i]);
-            }
-        }
-
-        // 调试面板
-        if (m_showDebug) {
-            ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowBgAlpha(0.5f);
-            if (ImGui::Begin("Debug", &m_showDebug, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav)) {
-                ImGui::SetWindowFontScale(1.5f);
-                ImGuiIO& dio = ImGui::GetIO();
-                ImGui::Text("%.0f FPS  |  Frame: %.2f ms (avg %.2f, peak %.2f)",
-                            1000.0f / std::max(m_lastFrameMs, 0.001f),
-                            m_lastFrameMs, m_frameMsAvg, m_frameMsMax);
-                ImGui::Text("Server tick: %.2f ms (avg %.2f, peak %.2f)",
-                            m_serverTickMs, m_serverTickAvg, m_serverTickMax);
-                ImGui::Text("Pos: %.2f, %.2f, %.2f", cameraPos.x, cameraPos.y, cameraPos.z);
-                ImGui::Text("Yaw/Pitch: %.1f / %.1f", yaw, pitch);
-                ImGui::Separator();
-                ImGui::Text("Chunks loaded: %zu", m_chunks.size());
-                ImGui::Text("Chunks: %zu | pending: %zu", m_chunks.size(), m_pending.size());
-                ImGui::Text("Render R: %d", m_renderDistance);
-                ImGui::Text("Player ID: %d", m_myClientId);
-            }
-            ImGui::End();
-        }
-
-        // ============ 主菜单 ============
-        if (m_menuOpen) {
-            ImGuiIO& io2 = ImGui::GetIO();
-            ImGui::SetNextWindowPos(
-                ImVec2(io2.DisplaySize.x * 0.5f, io2.DisplaySize.y * 0.5f),
-                ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));   // 居中，只第一次
-            ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_Always);
-
-            if (ImGui::Begin("Menu", nullptr,
-                    ImGuiWindowFlags_NoCollapse |
-                    ImGuiWindowFlags_NoResize |
-                    ImGuiWindowFlags_NoMove)) {
-                ImGui::SetWindowFontScale(1.5f);
-
-                if (ImGui::Button("Resume", ImVec2(-1, 44))) {
-                    m_menuOpen = false;
-                }
-
-                ImGui::Separator();
-
-                // ---- 窗口 ----
-                auto& wcfg = mainWin->GetConfigs();
-                if (ImGui::Checkbox("VSync", &wcfg.vsync)) {
-                    SDL_GL_SetSwapInterval(wcfg.vsync ? 1 : 0);
-                }
-
-                bool fs = wcfg.fullscreen;
-                if (ImGui::Checkbox("Fullscreen", &fs)) {
-                    wcfg.fullscreen = fs;
-                    mainWin->SetFullscreen(fs);
-                    fbo = renderer->CreateFramebuffer(
-                        mainWin->GetConfigs().windowPixelWidth,
-                        mainWin->GetConfigs().windowPixelHeight);
-                }
-
-                // ---- 相机 ----
-                ImGui::SliderFloat("FOV", &engine.GetConfig().render.fov, 30.0f, 120.0f, "%.0f");
-
-                ImGui::Separator();
-
-                if (ImGui::Button("Quit", ImVec2(-1, 44))) {
-                    m_shouldQuit = true;
-                }
-            }
-            ImGui::End();
-        }
-
-        ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        DrawUI(engine);
 
     winMgr->GetMainWindow()->SwapBuffers();
+}
+
+void MyGame::DrawUI(Eng::Engine& engine) {
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
+    ImGui::NewFrame();
+
+    // 准心
+    if (!m_menuOpen) {
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+        ImDrawList* dl = ImGui::GetForegroundDrawList();   // ★ 前景层，画在所有窗口之上
+
+        constexpr float LEN    = 8.0f;   // 每条臂的长度
+        constexpr float THICK  = 2.0f;   // 线宽
+        constexpr float GAP    = 2.0f;   // 中心留空
+        ImU32 color = IM_COL32(255, 255, 255, 200);
+
+        dl->AddLine(ImVec2(center.x - GAP - LEN, center.y),
+                    ImVec2(center.x - GAP,       center.y), color, THICK);
+        dl->AddLine(ImVec2(center.x + GAP,       center.y),
+                    ImVec2(center.x + GAP + LEN, center.y), color, THICK);
+        dl->AddLine(ImVec2(center.x, center.y - GAP - LEN),
+                    ImVec2(center.x, center.y - GAP),       color, THICK);
+        dl->AddLine(ImVec2(center.x, center.y + GAP),
+                    ImVec2(center.x, center.y + GAP + LEN), color, THICK);
+    }
+
+    // 物品栏
+    if (!m_menuOpen) {
+        ImGuiIO& io = ImGui::GetIO();
+        constexpr float SLOT = 50.0f;
+        constexpr float GAP  = 4.0f;
+        float totalW = kHotbarSize * SLOT + (kHotbarSize - 1) * GAP;
+        float startX = (io.DisplaySize.x - totalW) * 0.5f;
+        float y      = io.DisplaySize.y - SLOT - 20.0f;
+
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        for (int i = 0; i < kHotbarSize; ++i) {
+            float x = startX + i * (SLOT + GAP);
+            ImVec2 p0(x, y), p1(x + SLOT, y + SLOT);
+
+            ImU32 bg = (i == m_hotbarIndex) ? IM_COL32(255, 255, 255, 200)
+                                            : IM_COL32(0, 0, 0, 120);
+            dl->AddRectFilled(p0, p1, bg);
+            dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 255), 0, 0, 2.0f);
+
+            // 用方块名或者一小段纯色表示（后面有纹理再说）
+            const char* names[] = {"Stone", "Dirt", "Grass", "Sand", "Water"};
+            dl->AddText(ImVec2(x + 4, y + SLOT - 18),
+                        IM_COL32(255, 255, 255, 255), names[i]);
+        }
+    }
+
+    // 调试面板
+    if (m_showDebug) {
+        ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowBgAlpha(0.5f);
+        if (ImGui::Begin("Debug", &m_showDebug, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav)) {
+            ImGui::SetWindowFontScale(1.5f);
+            ImGui::Text("%.0f FPS  |  Frame: %.2f ms (avg %.2f, peak %.2f)",
+                        1000.0f / std::max(m_lastFrameMs, 0.001f),
+                        m_lastFrameMs, m_frameMsAvg, m_frameMsMax);
+            ImGui::Text("Server tick: %.2f ms (avg %.2f, peak %.2f)",
+                        m_serverTickMs, m_serverTickAvg, m_serverTickMax);
+            ImGui::Text("Pos: %.2f, %.2f, %.2f", cameraPos.x, cameraPos.y, cameraPos.z);
+            ImGui::Text("Yaw/Pitch: %.1f / %.1f", yaw, pitch);
+            ImGui::Separator();
+            ImGui::Text("Chunks loaded: %zu", m_chunks.size());
+            ImGui::Text("Chunks: %zu | pending: %zu", m_chunks.size(), m_pending.size());
+            ImGui::Text("Render R: %d", m_renderDistance);
+            ImGui::Text("Player ID: %d", m_myClientId);
+            int hh = (int)m_timeOfDay;
+            int mm = (int)((m_timeOfDay - hh) * 60);
+            ImGui::Text("Time: %02d:%02d", hh, mm);
+        }
+        ImGui::End();
+    }
+
+    // ============ 主菜单 ============
+    if (m_menuOpen) {
+        ImGuiIO& io2 = ImGui::GetIO();
+        ImGui::SetNextWindowPos(
+            ImVec2(io2.DisplaySize.x * 0.5f, io2.DisplaySize.y * 0.5f),
+            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));   // 居中，只第一次
+        ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_Always);
+
+        if (ImGui::Begin("Menu", nullptr,
+                ImGuiWindowFlags_NoCollapse |
+                ImGuiWindowFlags_NoResize |
+                ImGuiWindowFlags_NoMove)) {
+            ImGui::SetWindowFontScale(1.5f);
+
+            if (ImGui::Button("Resume", ImVec2(-1, 44))) {
+                m_menuOpen = false;
+            }
+
+            ImGui::Separator();
+
+            // ---- 窗口 ----
+            auto& wcfg = mainWin->GetConfigs();
+            if (ImGui::Checkbox("VSync", &wcfg.vsync)) {
+                SDL_GL_SetSwapInterval(wcfg.vsync ? 1 : 0);
+            }
+
+            bool fs = wcfg.fullscreen;
+            if (ImGui::Checkbox("Fullscreen", &fs)) {
+                wcfg.fullscreen = fs;
+                mainWin->SetFullscreen(fs);
+                fbo = renderer->CreateFramebuffer(
+                    mainWin->GetConfigs().windowPixelWidth,
+                    mainWin->GetConfigs().windowPixelHeight);
+            }
+
+            bool ao = engine.GetConfig().render.m_aoStrength > 0.5f;
+            if (ImGui::Checkbox("AO", &ao)) {
+                engine.GetConfig().render.m_aoStrength = ao ? 1.0f : 0.0f;
+            }
+
+            // ---- 相机 ----
+            ImGui::SliderFloat("FOV", &engine.GetConfig().render.fov, 30.0f, 120.0f, "%.0f");
+
+            ImGui::Separator();
+
+            if (ImGui::Button("Quit", ImVec2(-1, 44))) {
+                m_shouldQuit = true;
+            }
+        }
+        ImGui::End();
+    }
+
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
 bool MyGame::GetInput(float dt) {
@@ -543,7 +582,7 @@ void MyGame::OnShutdown(Eng::Engine& engine) {
     renderer->DestroyShader(m_cubeShader);
     // renderer->DestroyTexture(m_cubeTexture);
     renderer->DestroyShader(m_fbShader);
-    renderer->DestroyTexture(m_skybox);
+    renderer->DestroyShader(m_skyShader);
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
@@ -668,7 +707,7 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
     const int baseX = cx * CHUNK_SIZE_X;
     const int baseZ = cz * CHUNK_SIZE_Z;
 
-    // ★ 拿 4 个邻居（可能为 null——还没收到）
+    // 拿 4 个邻居（可能为 null——还没收到）
     auto findChunk = [this](int ccx, int ccz) -> const Chunk* {
         auto it = m_chunks.find(ChunkKey(ccx, ccz));
         if (it == m_chunks.end()) return nullptr;
@@ -679,7 +718,7 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
     const Chunk* nZm = findChunk(cx, cz - 1);
     const Chunk* nZp = findChunk(cx, cz + 1);
 
-    // ★ 跨区块取方块，接受 lx/lz ∈ [-1, 16]
+    // 跨区块取方块，接受 lx/lz ∈ [-1, 16]
     auto getBlock = [&](int lx, int ly, int lz) -> BlockType {
         if (ly < 0 || ly >= CHUNK_SIZE_Y) return BlockType::Air;
         if (lx >= 0 && lx < CHUNK_SIZE_X && lz >= 0 && lz < CHUNK_SIZE_Z)
@@ -696,6 +735,11 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
         if (nlx < 0 || nlx >= CHUNK_SIZE_X) return BlockType::Air;  // 对角线情况
         if (nlz < 0 || nlz >= CHUNK_SIZE_Z) return BlockType::Air;
         return ChunkGet(*n, nlx, ly, nlz);
+    };
+
+    auto isSolidAt = [&](int lx, int ly, int lz) -> bool {
+        BlockType b = getBlock(lx, ly, lz);
+        return b != BlockType::Air && b != BlockType::Water;
     };
 
     // 6 个面的顶点偏移
@@ -726,14 +770,21 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
                 BlockType type = ChunkGet(chunk, lx, ly, lz);
                 if (!IsSolid(type)) continue;
 
-                // 检查 6 个面
                 for (int f = 0; f < 6; ++f) {
                     int nx = lx + faceNormals[f][0];
                     int ny = ly + faceNormals[f][1];
                     int nz = lz + faceNormals[f][2];
 
-                    BlockType neighbor = getBlock( nx, ny, nz);
-                    if (IsSolid(neighbor)) continue;   // 被遮挡，跳过
+                    BlockType neighbor = getBlock(nx, ny, nz);
+                    if (IsSolid(neighbor)) continue;
+
+                    // 法线方向决定两个切向轴
+                    int N_axis = (faceNormals[f][0] != 0) ? 0
+                               : (faceNormals[f][1] != 0) ? 1 : 2;
+                    int U_axis = (N_axis + 1) % 3;
+                    int V_axis = (N_axis + 2) % 3;
+
+                    glm::ivec3 N(faceNormals[f][0], faceNormals[f][1], faceNormals[f][2]);
 
                     uint32_t baseIndex = (uint32_t)vertices.size();
 
@@ -758,6 +809,21 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
                             u0 + faceUVs[v][0] * TILE_UV,
                             v0 + (1.0f - faceUVs[v][1]) * TILE_UV
                         };
+
+                        // AO 计算
+                        int du = (faceOffsets[f][v][U_axis] == 0) ? -1 : +1;
+                        int dv = (faceOffsets[f][v][V_axis] == 0) ? -1 : +1;
+
+                        glm::ivec3 U(0), V(0);
+                        U[U_axis] = du;
+                        V[V_axis] = dv;
+
+                        int s1 = isSolidAt(lx + N.x + U.x, ly + N.y + U.y, lz + N.z + U.z) ? 1 : 0;
+                        int s2 = isSolidAt(lx + N.x + V.x, ly + N.y + V.y, lz + N.z + V.z) ? 1 : 0;
+                        int sc = isSolidAt(lx + N.x + U.x + V.x, ly + N.y + U.y + V.y, lz + N.z + U.z + V.z) ? 1 : 0;
+
+                        vert.ao = (s1 && s2) ? 0.4f : 1.0f - 0.2f * (s1 + s2 + sc);
+
                         vertices.push_back(vert);
                     }
 
@@ -843,12 +909,6 @@ void MyGame::UpdateChunkStreaming() {
         m_client.Send(w.GetBuffer());
 
         m_pending.insert(ChunkKey(n.cx, n.cz));
-    }
-    if (sent > 0) {
-        logInfo(logger, "[Stream] (" << pcx << "," << pcz << ")"
-                << " loaded=" << m_chunks.size()
-                << " pending=" << m_pending.size()
-                << " sent=" << sent);
     }
 }
 

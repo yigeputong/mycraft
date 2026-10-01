@@ -30,7 +30,7 @@ private:
     Eng::client::TextureHandle  m_atlasTexture;
     Eng::client::ShaderHandle   m_fbShader;
     Eng::client::Framebuffer    fbo;
-    Eng::client::TextureHandle  m_skybox;
+    Eng::client::ShaderHandle   m_skyShader;
     Eng::client::Model          m_model;        // 遗留测试模型
     struct SceneObject {
         Eng::client::Model model;
@@ -63,6 +63,9 @@ private:
     int m_lastPlayerChunkX  = INT_MIN;
     int m_lastPlayerChunkZ  = INT_MIN;
     static constexpr int kRequestsPerTick = 1;
+
+    float m_timeOfDay = 8.0f;                          // 0~24 小时
+    static constexpr float kDayLengthSec = 300.0f;     // 一整天 = 5 分钟
 
     // ==================== 相机 ====================
     glm::vec3 cameraPos{0.0f, 40.0f, 0.0f};
@@ -125,13 +128,14 @@ private:
     std::unique_ptr<Eng::Log> logger = std::make_unique<Eng::Log>();
 
     // 方法
+    void DrawUI(Eng::Engine& engine);
+
     bool keyEvents(const SDL_Event& event);
     bool resizeEvents(const SDL_Event& event);
     bool cursorEvents(const SDL_Event& event);
     bool scrollEvents(const SDL_Event& event);
 
     void HandleServerMessage(const std::vector<uint8_t>& data);
-
     bool GetInput(float dt);
     Eng::client::MeshHandle BuildChunkMesh(const Chunk& chunk);
     void UpdateChunkStreaming();

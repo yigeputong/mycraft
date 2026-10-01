@@ -54,8 +54,8 @@ bool GameServer::Start(uint16_t port) {
 void GameServer::Stop() {
     if (!m_running.load()) return;
     m_running.store(false);
-    m_server.Shutdown();
     if (m_thread.joinable()) m_thread.join();
+    m_server.Shutdown();
 }
 
 void GameServer::Run() {
@@ -217,12 +217,6 @@ Chunk& GameServer::GetOrCreateChunk(int cx, int cz) {
             default: break;
         }
     }
-    logInfo(m_logger, "[World] chunk(" << cx << "," << cz << ") Stone=" << stoneCount
-               << " Grass=" << grassCount
-               << " Water=" << waterCount
-               << " Air=" << airCount
-               << " Dirt=" << dirtCount
-               << " Sand=" << sandCount);
 
     return chunk;
 }

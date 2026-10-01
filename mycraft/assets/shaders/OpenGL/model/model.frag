@@ -4,6 +4,7 @@
 in vec3 FragPos;
 in vec3 Normal;
 in vec2 uv;
+in float ao;
 
 out vec4 FragColor;
 
@@ -20,7 +21,9 @@ layout (std140, binding = 0) uniform GlobalData {
     vec3 uLightDir;
     float uLightIntensity;
     vec3 uLightColor;
-    float uLightAmbient;
+    float _pad1;
+    vec3 uLightAmbient;
+    float _pad2;
 };
 
 // ==================== Material UBO (binding = 1) ====================
@@ -29,15 +32,26 @@ layout (std140, binding = 1) uniform MaterialData {
     float _pad[3];
 };
 
+uniform float uAOStrength = 1.0;
+
 void main() {
     vec3 texColor = texture(uDiffuseTexture, uv).rgb;
-
-    // 环境光 + 漫反射
     vec3 norm = normalize(Normal);
+
+    // 平行光
     vec3 lightDir = normalize(-uLightDir);
     float diff = max(dot(norm, lightDir), 0.0);
-    vec3 result = uLightAmbient * texColor
-                + diff * uLightColor * uLightIntensity * texColor;
+    vec3 lit = uLightAmbient * texColor
+             + diff * uLightColor * uLightIntensity * texColor;
 
-    FragColor = vec4(result, 1.0);
+    // 面朝向固定亮度
+    float faceShade;
+    if      (norm.y >  0.5) faceShade = 1.00;
+    else if (norm.y < -0.5) faceShade = 0.55;
+    else if (abs(norm.x) > 0.5) faceShade = 0.75;
+    else                        faceShade = 0.85;
+
+    vec3 result = lit * faceShade;
+
+    FragColor = vec4(result * mix(1.0, ao, uAOStrength), 1.0);
 }

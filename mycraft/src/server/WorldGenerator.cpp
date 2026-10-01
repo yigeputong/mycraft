@@ -235,7 +235,6 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
             minH = std::min(minH, h);
             maxH = std::max(maxH, h);
         }
-    std::println("[Terrain] chunk({},{}) h_range={}~{}", cx, cz, minH, maxH);
 
     return chunk;   // ★ 移到循环外
 }
