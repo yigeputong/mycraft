@@ -7,6 +7,7 @@
 //core
 #include "IGame.h"
 #include "core/Log.h"
+#include "core/Configs.h"
 #include "core/NetworkChannel.h"
 #include "core/NetworkServer.h"
 #include "core/MessageWriter.h"
@@ -52,7 +53,7 @@ public:
     bool IsRunning() const { return m_running; }
     float GetDeltaTime() const;
     client::WindowManager* GetWindowManager() { return m_windowManager.get(); }
-    EngineConfig GetConfig() { return m_engConfig; }
+    AppConfig& GetConfig() { return m_appConfig; }
 
 private:
     Engine() = default;
@@ -65,6 +66,7 @@ private:
     uint64_t m_lastFrameTime = 0;
     std::string m_lastError;
     EngineConfig m_engConfig;
+    AppConfig m_appConfig;
 
     bool IsClient = false;
     bool IsServer = false;

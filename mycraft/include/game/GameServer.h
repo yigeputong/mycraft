@@ -8,6 +8,7 @@
 #include <thread>
 #include <atomic>
 #include <glm/glm.hpp>
+#include <queue>
 
 namespace game::server {
 
@@ -35,11 +36,18 @@ private:
     static constexpr float REACH_DISTANCE = 5.0f;
 
     std::vector<ServerPlayer> m_players;
-    const float m_moveSpeed = 5.0f;
 
     // ---- 世界 ----
     TerrainGenerator m_terrain;
     std::unordered_map<uint64_t, Chunk> m_chunks;
+
+    struct PendingChunkRequest {
+        int clientId;
+        int cx, cz;
+    };
+    std::queue<PendingChunkRequest> m_chunkQueue;
+
+    float m_lastTickMs = 0.0f;
 
     // 查得到直接返回引用；查不到就生成一份放进去
     Chunk& GetOrCreateChunk(int cx, int cz);
@@ -54,7 +62,7 @@ private:
     bool IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz);
 
     void HandleDig(ServerPlayer& p);
-    void HandlePlace(ServerPlayer& p);
+    void HandlePlace(ServerPlayer& p, BlockType type);
 
     void BroadcastWorldState();
     void BroadcastBlockChange(int bx, int by, int bz, BlockType type);

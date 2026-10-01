@@ -198,6 +198,16 @@ void MyGame::OnStart(Eng::Engine& engine) {
 }
 
 bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
+    float frameMs = deltaTime * 1000.0f;
+    m_lastFrameMs = frameMs;
+    m_frameMsAvg  = m_frameMsAvg * 0.95f + frameMs * 0.05f;
+    m_frameMsMax  = std::max(m_frameMsMax * 0.99f, frameMs); 
+
+    constexpr float CORRECTION_RATE = 8.0f;
+    float t = 1.0f - std::exp(-CORRECTION_RATE * deltaTime);
+    cameraPos      += m_positionError * t;
+    m_positionError *= (1.0f - t);
+
     if (m_minimized) {
         SDL_Delay(16);
         return false;
@@ -212,6 +222,16 @@ bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
 
     UpdateChunkStreaming();
 
+    if (!m_meshQueue.empty()) {
+        auto pm = std::move(m_meshQueue.front());
+        m_meshQueue.pop();
+
+        auto it = m_chunks.find(pm.chunkKey);
+        if (it != m_chunks.end() && it->second.mesh == 0) {
+            it->second.mesh = BuildChunkMesh(pm.chunk);
+        }
+    }
+
     return false;
 }
 
@@ -222,7 +242,10 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->BindFramebuffer(fbo);
 
         view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-        projection = glm::perspective(glm::radians(s.fov), mainWin->GetAspectRatio(), zNear, s.zFar);
+        projection = glm::perspective(glm::radians(engine.GetConfig().render.fov), 
+                                mainWin->GetAspectRatio(), 
+                                engine.GetConfig().render.zNear, 
+                                engine.GetConfig().render.zFar);
 
         renderer->SetViewMatrix(view);
         renderer->SetProjectionMatrix(projection);
@@ -265,23 +288,51 @@ void MyGame::OnRender(Eng::Engine& engine) {
         ImGui::NewFrame();
 
         // 准心
-        ImGuiIO& io = ImGui::GetIO();
-        ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-        ImDrawList* dl = ImGui::GetForegroundDrawList();   // ★ 前景层，画在所有窗口之上
+        if (!m_menuOpen) {
+            ImGuiIO& io = ImGui::GetIO();
+            ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+            ImDrawList* dl = ImGui::GetForegroundDrawList();   // ★ 前景层，画在所有窗口之上
 
-        constexpr float LEN    = 8.0f;   // 每条臂的长度
-        constexpr float THICK  = 2.0f;   // 线宽
-        constexpr float GAP    = 2.0f;   // 中心留空
-        ImU32 color = IM_COL32(255, 255, 255, 200);
+            constexpr float LEN    = 8.0f;   // 每条臂的长度
+            constexpr float THICK  = 2.0f;   // 线宽
+            constexpr float GAP    = 2.0f;   // 中心留空
+            ImU32 color = IM_COL32(255, 255, 255, 200);
 
-        dl->AddLine(ImVec2(center.x - GAP - LEN, center.y),
-                    ImVec2(center.x - GAP,       center.y), color, THICK);
-        dl->AddLine(ImVec2(center.x + GAP,       center.y),
-                    ImVec2(center.x + GAP + LEN, center.y), color, THICK);
-        dl->AddLine(ImVec2(center.x, center.y - GAP - LEN),
-                    ImVec2(center.x, center.y - GAP),       color, THICK);
-        dl->AddLine(ImVec2(center.x, center.y + GAP),
-                    ImVec2(center.x, center.y + GAP + LEN), color, THICK);
+            dl->AddLine(ImVec2(center.x - GAP - LEN, center.y),
+                        ImVec2(center.x - GAP,       center.y), color, THICK);
+            dl->AddLine(ImVec2(center.x + GAP,       center.y),
+                        ImVec2(center.x + GAP + LEN, center.y), color, THICK);
+            dl->AddLine(ImVec2(center.x, center.y - GAP - LEN),
+                        ImVec2(center.x, center.y - GAP),       color, THICK);
+            dl->AddLine(ImVec2(center.x, center.y + GAP),
+                        ImVec2(center.x, center.y + GAP + LEN), color, THICK);
+        }
+
+        // 物品栏
+        if (!m_menuOpen) {
+            ImGuiIO& io = ImGui::GetIO();
+            constexpr float SLOT = 50.0f;
+            constexpr float GAP  = 4.0f;
+            float totalW = kHotbarSize * SLOT + (kHotbarSize - 1) * GAP;
+            float startX = (io.DisplaySize.x - totalW) * 0.5f;
+            float y      = io.DisplaySize.y - SLOT - 20.0f;
+
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
+            for (int i = 0; i < kHotbarSize; ++i) {
+                float x = startX + i * (SLOT + GAP);
+                ImVec2 p0(x, y), p1(x + SLOT, y + SLOT);
+
+                ImU32 bg = (i == m_hotbarIndex) ? IM_COL32(255, 255, 255, 200)
+                                                : IM_COL32(0, 0, 0, 120);
+                dl->AddRectFilled(p0, p1, bg);
+                dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 255), 0, 0, 2.0f);
+
+                // 用方块名或者一小段纯色表示（后面有纹理再说）
+                const char* names[] = {"Stone", "Dirt", "Grass", "Sand", "Water"};
+                dl->AddText(ImVec2(x + 4, y + SLOT - 18),
+                            IM_COL32(255, 255, 255, 255), names[i]);
+            }
+        }
 
         // 调试面板
         if (m_showDebug) {
@@ -290,14 +341,18 @@ void MyGame::OnRender(Eng::Engine& engine) {
             if (ImGui::Begin("Debug", &m_showDebug, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav)) {
                 ImGui::SetWindowFontScale(1.5f);
                 ImGuiIO& dio = ImGui::GetIO();
-                ImGui::Text("FPS: %.1f (%.2f ms)", dio.Framerate, 1000.0f / dio.Framerate);
+                ImGui::Text("%.0f FPS  |  Frame: %.2f ms (avg %.2f, peak %.2f)",
+                            1000.0f / std::max(m_lastFrameMs, 0.001f),
+                            m_lastFrameMs, m_frameMsAvg, m_frameMsMax);
+                ImGui::Text("Server tick: %.2f ms (avg %.2f, peak %.2f)",
+                            m_serverTickMs, m_serverTickAvg, m_serverTickMax);
                 ImGui::Text("Pos: %.2f, %.2f, %.2f", cameraPos.x, cameraPos.y, cameraPos.z);
                 ImGui::Text("Yaw/Pitch: %.1f / %.1f", yaw, pitch);
                 ImGui::Separator();
                 ImGui::Text("Chunks loaded: %zu", m_chunks.size());
                 ImGui::Text("Chunks: %zu | pending: %zu", m_chunks.size(), m_pending.size());
                 ImGui::Text("Render R: %d", m_renderDistance);
-                ImGui::Text("Player ID: %d", m_myClientId);   // 如果存了
+                ImGui::Text("Player ID: %d", m_myClientId);
             }
             ImGui::End();
         }
@@ -338,7 +393,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
                 }
 
                 // ---- 相机 ----
-                ImGui::SliderFloat("FOV", &s.fov, 30.0f, 120.0f, "%.0f");
+                ImGui::SliderFloat("FOV", &engine.GetConfig().render.fov, 30.0f, 120.0f, "%.0f");
 
                 ImGui::Separator();
 
@@ -394,14 +449,6 @@ bool MyGame::GetInput(float dt) {
     } else {
         Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), false);
     }
-
-    // 滚轮 FOV
-    float scroll = Input::GetScrollDelta();
-    if (scroll != 0.0f) {
-        s.fov -= scroll * 2.0f;
-        s.fov = glm::clamp(s.fov, 30.0f, 120.0f);
-    }
-
     // 鼠标键盘输入
     glm::vec3 mousefront;
     mousefront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
@@ -420,12 +467,25 @@ bool MyGame::GetInput(float dt) {
     if (glm::length(moveDir) > 0.001f) {
         moveDir = glm::normalize(moveDir);
     }
+
     game::net::PlayerInput input;
     input.moveDir = moveDir;
     input.look    = glm::vec2(glm::radians(yaw), glm::radians(pitch));
     input.jump    = Input::IsKeyDown(KeyCode::Space);
     input.dig     = Input::IsKeyPressed(KeyCode::MouseLeft);
     input.place   = Input::IsKeyPressed(KeyCode::MouseRight);
+
+    // 滚轮切换物品
+    float scroll = Input::GetScrollDelta();
+    if (scroll > 0) m_hotbarIndex = (m_hotbarIndex - 1 + kHotbarSize) % kHotbarSize;
+    if (scroll < 0) m_hotbarIndex = (m_hotbarIndex + 1) % kHotbarSize;
+    // 也可以数字键 1~5 直接选
+    if (Input::IsKeyPressed(KeyCode::Num1)) m_hotbarIndex = 0;
+    if (Input::IsKeyPressed(KeyCode::Num2)) m_hotbarIndex = 1;
+    if (Input::IsKeyPressed(KeyCode::Num3)) m_hotbarIndex = 2;
+    if (Input::IsKeyPressed(KeyCode::Num4)) m_hotbarIndex = 3;
+    if (Input::IsKeyPressed(KeyCode::Num5)) m_hotbarIndex = 4;
+    input.placeBlock = static_cast<uint16_t>(kHotbar[m_hotbarIndex]);
 
     Eng::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::PlayerInput));
@@ -434,6 +494,7 @@ bool MyGame::GetInput(float dt) {
     w.Write(static_cast<uint8_t>(input.jump  ? 1 : 0));
     w.Write(static_cast<uint8_t>(input.dig   ? 1 : 0));
     w.Write(static_cast<uint8_t>(input.place ? 1 : 0));
+    w.Write<uint16_t>(input.placeBlock);
     m_client.Send(w.GetBuffer());
     //本地预测
     float speed = 5.0f * dt;
@@ -468,6 +529,11 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
     switch (type) {
         case game::net::MessageType::WorldState: {
             uint32_t count = r.ReadU32BE();
+
+            m_serverTickMs = r.Read<float>();
+            m_serverTickAvg = m_serverTickAvg * 0.95f + m_serverTickMs * 0.05f;
+            if (m_serverTickMs > m_serverTickMax) m_serverTickMax = m_serverTickMs;
+
             for (uint32_t i = 0; i < count; ++i) {
                 game::net::PlayerState ps;
                 ps.id       = r.ReadU32BE();
@@ -476,16 +542,12 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
                 ps.pitch    = r.Read<float>();
 
                 if (ps.id == m_myClientId) {
-                    glm::vec3 serverPos = ps.position;
-                    glm::vec3 diff = serverPos - cameraPos;
-                    float dist = glm::length(diff);
-
-                    if (dist > 2.0f) {
-                        // 偏差太大，直接校正（瞬移）
-                        cameraPos = serverPos;
-                    } else if (dist > 0.1f) {
-                        // 偏差小，平滑修正
-                        cameraPos += diff * 0.2f;   // 每帧修正 20%
+                    glm::vec3 diff = ps.position - cameraPos;
+                    if (glm::length(diff) > 3.0f) {
+                        cameraPos = ps.position;          // 偏差过大才瞬移
+                        m_positionError = glm::vec3(0.0f);
+                    } else {
+                        m_positionError = diff;           // ★ 只记录
                     }
                 } else {
                     // 其他玩家，存入玩家表（渲染时用）
@@ -512,19 +574,18 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             ClientChunk cc;
             cc.chunk.chunk_x = cx;
             cc.chunk.chunk_z = cz;
-
-            // 读 4096 字节
             auto bytes = r.ReadBytes(CHUNK_VOLUME);
             std::memcpy(cc.chunk.blocks.data(), bytes.data(), CHUNK_VOLUME);
+            cc.mesh = 0;
 
-            // 生成网格
-            cc.mesh = BuildChunkMesh(cc.chunk);
-            // 快速指纹:对 block 数据做 hash
-            uint32_t hash = 2166136261u;
-            for (auto b : cc.chunk.blocks) {
-                hash = (hash ^ static_cast<uint8_t>(b)) * 16777619u;
-            }
-            m_chunks[ChunkKey(cx, cz)] = std::move(cc);
+            uint64_t key = ChunkKey(cx, cz);
+            m_chunks[key] = std::move(cc);
+            m_pending.erase(key);
+
+            PendingMesh pm;
+            pm.chunkKey = key;
+            pm.chunk = m_chunks[key].chunk;
+            m_meshQueue.push(std::move(pm));
 
             m_pending.erase(ChunkKey(cx, cz));
             break;
@@ -640,7 +701,6 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
                     int ny = ly + faceNormals[f][1];
                     int nz = lz + faceNormals[f][2];
 
-                    // 检查相邻方块（跨区块暂时不查，简化）
                     BlockType neighbor = getBlock( nx, ny, nz);
                     if (IsSolid(neighbor)) continue;   // 被遮挡，跳过
 

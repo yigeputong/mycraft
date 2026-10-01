@@ -81,8 +81,30 @@ void GameServer::Run() {
 
         // 3. 固定步长 tick
         while (accumulator >= TICK_INTERVAL) {
+
+            auto tickStart = std::chrono::steady_clock::now();
+
+            constexpr int kChunksPerTick = 4;
+            for (int i = 0; i < kChunksPerTick && !m_chunkQueue.empty(); ++i) {
+                auto req = m_chunkQueue.front();
+                m_chunkQueue.pop();
+                Chunk& chunk = GetOrCreateChunk(req.cx, req.cz);
+                Eng::MessageWriter w;
+                w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkData));
+                w.Write<int32_t>(req.cx);
+                w.Write<int32_t>(req.cz);
+                w.Write<uint16_t>(CHUNK_SIZE_Y);
+                w.WriteBytes(reinterpret_cast<const uint8_t*>(chunk.blocks.data()),
+                            chunk.blocks.size() * sizeof(BlockType));
+                m_server.SendTo(req.clientId, w.GetBuffer());
+            }
+
             TickWorld(TICK_INTERVAL);
             BroadcastWorldState();
+
+            auto tickEnd = std::chrono::steady_clock::now();
+            m_lastTickMs = std::chrono::duration<float, std::milli>(tickEnd - tickStart).count();
+
             accumulator -= TICK_INTERVAL;
         }
 
@@ -104,6 +126,7 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
             in.jump    = r.Read<uint8_t>() != 0;
             in.dig     = r.Read<uint8_t>() != 0;
             in.place   = r.Read<uint8_t>() != 0;
+            in.placeBlock = r.Read<uint16_t>();
 
             for (auto& p : m_players) {
                 if (p.id == (uint32_t)clientId) {
@@ -111,7 +134,7 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
                     p.yaw     = in.look.x;
                     p.pitch   = in.look.y;
                     if (in.dig)   HandleDig(p);
-                    if (in.place) HandlePlace(p);
+                    if (in.place) HandlePlace(p, static_cast<BlockType>(in.placeBlock));
                     break;
                 }
             }
@@ -121,17 +144,19 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
             int cx = r.Read<int>();
             int cz = r.Read<int>();
 
-            Chunk& chunk = GetOrCreateChunk(cx, cz);
+            m_chunkQueue.push({clientId, cx, cz});
 
-            Eng::MessageWriter w;
-            w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkData));
-            w.Write<uint32_t>(cx);
-            w.Write<uint32_t>(cz);
-            w.Write<uint16_t>(CHUNK_SIZE_Y);
-            w.WriteBytes(reinterpret_cast<const uint8_t*>(chunk.blocks.data()),
-                        chunk.blocks.size() * sizeof(BlockType));
+            // Chunk& chunk = GetOrCreateChunk(cx, cz);
 
-            m_server.SendTo(clientId, w.GetBuffer());
+            // Eng::MessageWriter w;
+            // w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkData));
+            // w.Write<uint32_t>(cx);
+            // w.Write<uint32_t>(cz);
+            // w.Write<uint16_t>(CHUNK_SIZE_Y);
+            // w.WriteBytes(reinterpret_cast<const uint8_t*>(chunk.blocks.data()),
+            //             chunk.blocks.size() * sizeof(BlockType));
+
+            // m_server.SendTo(clientId, w.GetBuffer());
             break;
         }
     }
@@ -152,7 +177,7 @@ void GameServer::TickWorld(float dt) {
     for (auto& p : m_players) {
         if (glm::length(p.moveDir) > 0.001f) {
             glm::vec3 delta = glm::normalize(p.moveDir);
-            p.position += delta * m_moveSpeed * dt;
+            p.position += delta * net::PLAYER_MOVE_SPEED * dt;
         }
     }
 }
@@ -208,7 +233,7 @@ void GameServer::HandleDig(ServerPlayer& p) {
     BroadcastBlockChange(hit.bx, hit.by, hit.bz, BlockType::Air);
 }
 
-void GameServer::HandlePlace(ServerPlayer& p) {
+void GameServer::HandlePlace(ServerPlayer& p, BlockType type) {
     glm::vec3 front;
     front.x = cos(p.yaw) * cos(p.pitch);
     front.y = sin(p.pitch);
@@ -226,9 +251,10 @@ void GameServer::HandlePlace(ServerPlayer& p) {
 
     // 别把方块放进自己身体里
     if (IsInsidePlayer(p, px, py, pz)) return;
+    if (GetBlockAt(px, py, pz) != BlockType::Air) return;
 
-    SetBlockAt(px, py, pz, BlockType::Stone);   // 先都放石头
-    BroadcastBlockChange(px, py, pz, BlockType::Stone);
+    SetBlockAt(px, py, pz, type);
+    BroadcastBlockChange(px, py, pz, type);
 }
 
 BlockType GameServer::GetBlockAt(int wx, int wy, int wz) const {
@@ -277,6 +303,7 @@ void GameServer::BroadcastWorldState() {
     Eng::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::WorldState));
     w.WriteU32BE((uint32_t)m_players.size());
+    w.Write<float>(m_lastTickMs);
 
     for (auto& p : m_players) {
         w.WriteU32BE(p.id);

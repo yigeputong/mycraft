@@ -1,61 +1,53 @@
 #pragma once
 #include <string>
 
-namespace Eng::client {
+namespace Eng {
 
-enum class RenderAPItype {
-    OPENGL,
-    VULKAN,
-    DIRECTX12,
-    METAL
-};
+    namespace client {
 
-struct WindowConfig {
-    RenderAPItype apitype = RenderAPItype::OPENGL;
-    std::string   title   = "Engine Window";
+        enum class RenderAPItype {
+            OPENGL,
+            VULKAN,
+            DIRECTX12,
+            METAL
+        };
 
-    int  windowWidth      = 800;
-    int  windowHeight     = 600;
-    int  windowPixelWidth = windowWidth;      // 高 DPI 下与 windowWidth 不同
-    int  windowPixelHeight= windowHeight;
+        struct WindowConfig {
+            RenderAPItype apitype = RenderAPItype::OPENGL;
+            std::string   title   = "Engine Window";
 
-    bool resizable            = false;
-    bool fullscreen           = false;
-    bool borderlessFullscreen = true;
-    bool relativeMode         = false;
+            int  windowWidth      = 800;
+            int  windowHeight     = 600;
+            int  windowPixelWidth = windowWidth;      // 高 DPI 下与 windowWidth 不同
+            int  windowPixelHeight= windowHeight;
 
-    bool vsync = false;   // SDL_GL_SetSwapInterval处理
-};
+            bool resizable            = false;
+            bool fullscreen           = false;
+            bool borderlessFullscreen = true;
+            bool relativeMode         = false;
 
-struct RenderConfig {
-    // ===== 渲染分辨率 =====
-    int  renderWidth  = 0;   // 0 = 跟随窗口
-    int  renderHeight = 0;
+            bool vsync = false;   // SDL_GL_SetSwapInterval处理
+        };
 
-    // ===== 相机 / 后处理 =====
-    float fov        = 60.0f;
-    float gamma      = 2.2f;
-    float anisotropy = 0.0f;
+        struct RenderConfig {
+            float zNear = 0.5f;
+            float zFar  = 1000.0f;
+            float fov   = 75.0f;
+            float gamma = 2.2f;
+            bool  wireframeMode = false;
+        };
 
-    bool enableBloom      = false;
-    bool enableSSAO       = false;
-    bool enableMotionBlur = false;
+        struct InputConfig {           // ★ 新建
+            float mouseSensitivity = 0.01f;
+        };
+    
+    }
 
-    // ===== 性能 / 质量 =====
-    int maxFPS        = 0;      // 0 = 不限帧
-    int refreshRate   = 0;      // 0 = 自动
-    int shadowMapSize = 2048;
-    int maxLights     = 16;
-
-    // ===== 调试显示 =====
-    bool showFPS       = true;
-    bool showNormals   = false;
-    bool wireframeMode = false;
-};
 
 struct AppConfig {
-    WindowConfig window;
-    RenderConfig render;
+    client::WindowConfig window;
+    client::RenderConfig render;
+    client::InputConfig  input;
 
     // TODO：从文件加载 / 保存
     // void LoadFromJson(const std::string& path);

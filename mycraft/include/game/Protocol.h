@@ -23,6 +23,7 @@ struct PlayerInput {
     bool jump = false;
     bool dig   = false;   // 挖
     bool place = false;   // 放
+    uint16_t placeBlock = 1; // 放的方块
 };
 
 struct PlayerState {
@@ -32,6 +33,6 @@ struct PlayerState {
     float     pitch = 0.0f;
 };
 
-constexpr float MOVE_SPEED = 8.0f;
+constexpr float PLAYER_MOVE_SPEED = 8.0f;
 
 }

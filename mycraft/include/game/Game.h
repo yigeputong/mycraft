@@ -6,6 +6,7 @@
 #include "game/GameServer.h"
 #include <unordered_map>
 #include <unordered_set>
+#include <queue>
 
 namespace game {
 
@@ -45,6 +46,16 @@ private:
     uint32_t m_myClientId = 0;
     std::vector<net::PlayerState> m_otherPlayers;
 
+    static constexpr BlockType kHotbar[] = {
+        BlockType::Stone,
+        BlockType::Dirt,
+        BlockType::GrassBlock,
+        BlockType::Sand,
+        BlockType::Water,
+    };
+    static constexpr int kHotbarSize = std::size(kHotbar);
+    int m_hotbarIndex = 0;
+
     static constexpr float zNear = 0.5f;
 
     //camera
@@ -58,11 +69,7 @@ private:
     glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
 
     struct Settings {
-        bool fullscreen = false;
-        float fov = 75.0f;
         float Speed = 3.0f;
-        float Sensitivity = 0.01f;
-        float zFar = 1000.0f;
     } s;
 #ifdef NDEBUG
     bool m_showDebug = false;   // Release
@@ -93,6 +100,21 @@ private:
     int m_lastPlayerChunkZ = INT_MIN;
     constexpr static int kRequestsPerTick = 1;   // 每 tick 最多发几个
     std::vector<SceneObject> m_objects;
+
+    struct PendingMesh {
+        uint64_t chunkKey;
+        Chunk    chunk;
+    };
+    std::queue<PendingMesh> m_meshQueue;
+
+    float m_serverTickMs = 0.0f;
+    float m_serverTickAvg = 0.0f;
+    float m_serverTickMax = 0.0f;
+    float m_lastFrameMs = 0.0f;    // 最近一帧的帧时间
+    float m_frameMsAvg  = 0.0f;    // 滑动平均
+    float m_frameMsMax  = 0.0f;    // 近期峰值
+
+    glm::vec3 m_positionError{0.0f};
 
     bool keyEvents(const SDL_Event& event);
     bool resizeEvents(const SDL_Event& event);
