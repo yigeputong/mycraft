@@ -30,7 +30,7 @@ namespace Eng {
         };
 
         struct RenderConfig {
-            float zNear = 0.5f;
+            float zNear = 0.1f;
             float zFar  = 1000.0f;
             float fov   = 75.0f;
             float gamma = 2.2f;

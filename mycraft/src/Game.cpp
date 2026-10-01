@@ -5,6 +5,7 @@
 #include "core/MessageWriter.h"
 #include "game/Protocol.h"
 #include "game/GameServer.h"
+#include "game/core/Physics.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_opengl3.h"
@@ -198,20 +199,32 @@ void MyGame::OnStart(Eng::Engine& engine) {
 }
 
 bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
+    if (m_minimized) {
+        SDL_Delay(16);
+        return false;
+    }
     float frameMs = deltaTime * 1000.0f;
     m_lastFrameMs = frameMs;
     m_frameMsAvg  = m_frameMsAvg * 0.95f + frameMs * 0.05f;
     m_frameMsMax  = std::max(m_frameMsMax * 0.99f, frameMs); 
+
+    PlayerMotion me;
+    me.position = cameraPos;
+    me.velocity = m_playerVelocity;
+    me.onGround = m_playerOnGround;
+
+    game::StepPlayer(me, m_lastMoveDir, m_jumpHoldTimer > 0.0f, deltaTime,
+        [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
+
+    cameraPos        = me.position;
+    m_playerVelocity = me.velocity;
+    m_playerOnGround = me.onGround;
 
     constexpr float CORRECTION_RATE = 8.0f;
     float t = 1.0f - std::exp(-CORRECTION_RATE * deltaTime);
     cameraPos      += m_positionError * t;
     m_positionError *= (1.0f - t);
 
-    if (m_minimized) {
-        SDL_Delay(16);
-        return false;
-    }
 
     if (GetInput(deltaTime)) return true;
 
@@ -241,7 +254,8 @@ void MyGame::OnRender(Eng::Engine& engine) {
     }
     renderer->BindFramebuffer(fbo);
 
-        view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+        glm::vec3 eye = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
+        view = glm::lookAt(eye, eye + cameraFront, cameraUp);
         projection = glm::perspective(glm::radians(engine.GetConfig().render.fov), 
                                 mainWin->GetAspectRatio(), 
                                 engine.GetConfig().render.zNear, 
@@ -462,18 +476,34 @@ bool MyGame::GetInput(float dt) {
     if (Input::IsKeyDown(KeyCode::S)) moveDir -= forward;
     if (Input::IsKeyDown(KeyCode::D)) moveDir += right;
     if (Input::IsKeyDown(KeyCode::A)) moveDir -= right;
-    if (Input::IsKeyDown(KeyCode::Space))  moveDir.y += 1.0f;
-    if (Input::IsKeyDown(KeyCode::LShift)) moveDir.y -= 1.0f;
+    // if (Input::IsKeyDown(KeyCode::Space))  moveDir.y += 1.0f;    // 不飞了
+    // if (Input::IsKeyDown(KeyCode::LShift)) moveDir.y -= 1.0f;
     if (glm::length(moveDir) > 0.001f) {
         moveDir = glm::normalize(moveDir);
     }
 
     game::net::PlayerInput input;
     input.moveDir = moveDir;
+        m_lastMoveDir = moveDir;   // 供本地物理用
     input.look    = glm::vec2(glm::radians(yaw), glm::radians(pitch));
-    input.jump    = Input::IsKeyDown(KeyCode::Space);
-    input.dig     = Input::IsKeyPressed(KeyCode::MouseLeft);
-    input.place   = Input::IsKeyPressed(KeyCode::MouseRight);
+        if (Input::IsKeyDown(KeyCode::Space)) {
+            m_jumpHoldTimer = 0.2f;   // 按下就续期
+        }
+        m_jumpHoldTimer = std::max(0.0f, m_jumpHoldTimer - dt);
+    input.jump = (m_jumpHoldTimer > 0.0f);
+        // 冷却递减
+        m_placeCooldown = std::max(0.0f, m_placeCooldown - dt);
+        m_digCooldown   = std::max(0.0f, m_digCooldown   - dt);
+
+        // 按住鼠标 + 冷却完了 → 触发一次，重置冷却
+        bool wantDig   = Input::IsKeyDown(KeyCode::MouseLeft);
+        bool wantPlace = Input::IsKeyDown(KeyCode::MouseRight);
+
+    input.dig   = (wantDig   && m_digCooldown   <= 0.0f);
+    input.place = (wantPlace && m_placeCooldown <= 0.0f);
+
+        if (input.dig)   m_digCooldown   = kDigInterval;
+        if (input.place) m_placeCooldown = kPlaceInterval;
 
     // 滚轮切换物品
     float scroll = Input::GetScrollDelta();
@@ -496,9 +526,9 @@ bool MyGame::GetInput(float dt) {
     w.Write(static_cast<uint8_t>(input.place ? 1 : 0));
     w.Write<uint16_t>(input.placeBlock);
     m_client.Send(w.GetBuffer());
-    //本地预测
-    float speed = 5.0f * dt;
-    cameraPos += input.moveDir * speed;
+    // 本地预测
+    // float speed = 5.0f * dt;
+    // cameraPos += input.moveDir * speed;
 
     return m_shouldQuit;
 }
@@ -544,10 +574,11 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
                 if (ps.id == m_myClientId) {
                     glm::vec3 diff = ps.position - cameraPos;
                     if (glm::length(diff) > 3.0f) {
-                        cameraPos = ps.position;          // 偏差过大才瞬移
-                        m_positionError = glm::vec3(0.0f);
+                        cameraPos = ps.position;
+                        m_playerVelocity = glm::vec3(0.0f);
+                        m_positionError  = glm::vec3(0.0f);
                     } else {
-                        m_positionError = diff;           // ★ 只记录
+                        m_positionError = diff;
                     }
                 } else {
                     // 其他玩家，存入玩家表（渲染时用）
@@ -819,6 +850,37 @@ void MyGame::UpdateChunkStreaming() {
                 << " pending=" << m_pending.size()
                 << " sent=" << sent);
     }
+}
+
+BlockType MyGame::GetBlockAt(int wx, int wy, int wz) const {
+    if (wy < 0 || wy >= CHUNK_SIZE_Y) return BlockType::Air;
+    int cx = wx >> 4;
+    int cz = wz >> 4;
+    int lx = wx & 15;
+    int lz = wz & 15;
+    auto it = m_chunks.find(ChunkKey(cx, cz));
+    if (it == m_chunks.end()) return BlockType::Air;
+    return ChunkGet(it->second.chunk, lx, wy, lz);
+}
+
+bool MyGame::IsSolidAt(int wx, int wy, int wz) const {
+    BlockType b = GetBlockAt(wx, wy, wz);
+    return b != BlockType::Air && b != BlockType::Water;
+}
+
+bool MyGame::AABBCollides(const glm::vec3& pos) const {
+    int minX = (int)std::floor(pos.x - PLAYER_HALF_W);
+    int maxX = (int)std::floor(pos.x + PLAYER_HALF_W);
+    int minY = (int)std::floor(pos.y);
+    int maxY = (int)std::floor(pos.y + PLAYER_HEIGHT);
+    int minZ = (int)std::floor(pos.z - PLAYER_HALF_W);
+    int maxZ = (int)std::floor(pos.z + PLAYER_HALF_W);
+
+    for (int x = minX; x <= maxX; ++x)
+        for (int y = minY; y <= maxY; ++y)
+            for (int z = minZ; z <= maxZ; ++z)
+                if (IsSolidAt(x, y, z)) return true;
+    return false;
 }
 
 }

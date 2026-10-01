@@ -133,6 +133,7 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
                     p.moveDir = in.moveDir;     // 存世界方向
                     p.yaw     = in.look.x;
                     p.pitch   = in.look.y;
+                    p.jump    = in.jump;
                     if (in.dig)   HandleDig(p);
                     if (in.place) HandlePlace(p, static_cast<BlockType>(in.placeBlock));
                     break;
@@ -168,6 +169,7 @@ void GameServer::ApplyPlayerInput(int clientId, const net::PlayerInput& in) {
             p.moveDir = in.moveDir;
             p.yaw     = in.look.x;
             p.pitch   = in.look.y;
+            p.jump    = in.jump;
             return;
         }
     }
@@ -175,13 +177,20 @@ void GameServer::ApplyPlayerInput(int clientId, const net::PlayerInput& in) {
 
 void GameServer::TickWorld(float dt) {
     for (auto& p : m_players) {
-        if (glm::length(p.moveDir) > 0.001f) {
-            glm::vec3 delta = glm::normalize(p.moveDir);
-            p.position += delta * net::PLAYER_MOVE_SPEED * dt;
-        }
+        PlayerMotion me;
+        me.position = p.position;
+        me.velocity = p.velocity;
+        me.onGround = p.onGround;
+
+        game::StepPlayer(me, p.moveDir, p.jump, dt,
+            [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
+
+        p.position = me.position;
+        p.velocity = me.velocity;
+        p.onGround = me.onGround;
+        p.jump = false;
     }
 }
-
 
 Chunk& GameServer::GetOrCreateChunk(int cx, int cz) {
     const uint64_t key = ChunkKey(cx, cz);
@@ -225,7 +234,9 @@ void GameServer::HandleDig(ServerPlayer& p) {
     front.z = sin(p.yaw) * cos(p.pitch);
     front = glm::normalize(front);
 
-    auto hit = RayCast(p.position, front, REACH_DISTANCE,
+    glm::vec3 eye = p.position + glm::vec3(0.0f, game::PLAYER_EYE, 0.0f);
+
+    auto hit = game::RayCast(eye, front, REACH_DISTANCE,
         [this](int x, int y, int z) { return GetBlockAt(x, y, z); });
     if (!hit.hit) return;
 
@@ -240,7 +251,9 @@ void GameServer::HandlePlace(ServerPlayer& p, BlockType type) {
     front.z = sin(p.yaw) * cos(p.pitch);
     front = glm::normalize(front);
 
-    auto hit = RayCast(p.position, front, REACH_DISTANCE,
+    glm::vec3 eye = p.position + glm::vec3(0.0f, game::PLAYER_EYE, 0.0f);
+
+    auto hit = game::RayCast(eye, front, REACH_DISTANCE,
         [this](int x, int y, int z) { return GetBlockAt(x, y, z); });
     if (!hit.hit) return;
 
@@ -280,12 +293,9 @@ void GameServer::SetBlockAt(int wx, int wy, int wz, BlockType bt) {
 }
 
 bool GameServer::IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz) {
-    // 玩家 AABB：以 position 为脚底中心
-    constexpr float HALF_W = 0.3f;   // 半宽
-    constexpr float HEIGHT = 1.8f;
 
-    glm::vec3 pmin{p.position.x - HALF_W, p.position.y,        p.position.z - HALF_W};
-    glm::vec3 pmax{p.position.x + HALF_W, p.position.y + HEIGHT, p.position.z + HALF_W};
+    glm::vec3 pmin{p.position.x - PLAYER_HALF_W, p.position.y,        p.position.z - PLAYER_HALF_W};
+    glm::vec3 pmax{p.position.x + PLAYER_HALF_W, p.position.y + PLAYER_HEIGHT, p.position.z + PLAYER_HALF_W};
 
     // 方块 AABB：[bx, bx+1] × [by, by+1] × [bz, bz+1]
     glm::vec3 bmin{(float)bx, (float)by, (float)bz};
@@ -297,6 +307,26 @@ bool GameServer::IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz) {
     bool overlapZ = pmin.z < bmax.z && pmax.z > bmin.z;
 
     return overlapX && overlapY && overlapZ;
+}
+
+bool GameServer::AABBCollides(const glm::vec3& pos) const {
+    int minX = (int)std::floor(pos.x - PLAYER_HALF_W);
+    int maxX = (int)std::floor(pos.x + PLAYER_HALF_W);
+    int minY = (int)std::floor(pos.y);
+    int maxY = (int)std::floor(pos.y + PLAYER_HEIGHT);
+    int minZ = (int)std::floor(pos.z - PLAYER_HALF_W);
+    int maxZ = (int)std::floor(pos.z + PLAYER_HALF_W);
+
+    for (int x = minX; x <= maxX; ++x)
+        for (int y = minY; y <= maxY; ++y)
+            for (int z = minZ; z <= maxZ; ++z)
+                if (IsSolidAt(x, y, z)) return true;
+    return false;
+}
+
+bool GameServer::IsSolidAt(int wx, int wy, int wz) const {
+    BlockType b = GetBlockAt(wx, wy, wz);
+    return b != BlockType::Air && b != BlockType::Water;
 }
 
 void GameServer::BroadcastWorldState() {

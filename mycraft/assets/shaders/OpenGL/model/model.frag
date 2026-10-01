@@ -30,25 +30,14 @@ layout (std140, binding = 1) uniform MaterialData {
 };
 
 void main() {
-    // 采样纹理
     vec3 texColor = texture(uDiffuseTexture, uv).rgb;
 
-    // ---- 环境光 ----
-    vec3 ambient = uLightAmbient * texColor;
-
-    // ---- 漫反射 ----
+    // 环境光 + 漫反射
     vec3 norm = normalize(Normal);
-    vec3 lightDir = normalize(-uLightDir);          // 指向光源的方向
+    vec3 lightDir = normalize(-uLightDir);
     float diff = max(dot(norm, lightDir), 0.0);
-    vec3 diffuse = diff * uLightColor * uLightIntensity * texColor;
+    vec3 result = uLightAmbient * texColor
+                + diff * uLightColor * uLightIntensity * texColor;
 
-    // ---- 镜面高光 ----
-    vec3 viewDir = normalize(uViewPos - FragPos);
-    vec3 reflectDir = reflect(-lightDir, norm);
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0), uShininess);
-    vec3 specular = spec * uLightColor * 0.3;
-
-    // ---- 合成 ----
-    vec3 result = ambient + diffuse + specular;
     FragColor = vec4(result, 1.0);
 }

@@ -20,66 +20,18 @@ public:
 
     void OnShutdown(Eng::Engine& engine);
 private:
-    //resources
-    Eng::client::WindowManager* winMgr;
-    uint32_t m_win;
-    Eng::client::Window* mainWin;
-    Eng::client::IRenderAPI* renderer;
+    // ==================== 引擎资源 ====================
+    Eng::client::WindowManager* winMgr = nullptr;
+    Eng::client::Window*       mainWin = nullptr;
+    Eng::client::IRenderAPI*   renderer = nullptr;
+    uint32_t m_win = 0;
 
-    Eng::client::ShaderHandle m_cubeShader;
-    // Eng::client::TextureHandle m_cubeTexture;
-    // Eng::client::Material m_cubeMaterial;
-    Eng::client::Model m_model;
-
-    Eng::client::TextureHandle m_atlasTexture;
-
-    Eng::client::Framebuffer fbo;
-    Eng::client::ShaderHandle m_fbShader;
-
-    Eng::client::TextureHandle m_skybox;
-
-    std::unique_ptr<Eng::Log> logger = std::make_unique<Eng::Log>();
-
-    Eng::NetworkChannel m_client;
-    std::unique_ptr<game::server::GameServer> m_server;
-
-    uint32_t m_myClientId = 0;
-    std::vector<net::PlayerState> m_otherPlayers;
-
-    static constexpr BlockType kHotbar[] = {
-        BlockType::Stone,
-        BlockType::Dirt,
-        BlockType::GrassBlock,
-        BlockType::Sand,
-        BlockType::Water,
-    };
-    static constexpr int kHotbarSize = std::size(kHotbar);
-    int m_hotbarIndex = 0;
-
-    static constexpr float zNear = 0.5f;
-
-    //camera
-    glm::mat4 model = glm::mat4(1.0);
-    glm::mat4 projection = glm::mat4(1.0);
-    float yaw = -90.0f;
-    float pitch = 0.0f;
-    glm::vec3 cameraPos = glm::vec3(0.0f, 40.0f,  0.0f);
-    glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
-    glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
-    glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-
-    struct Settings {
-        float Speed = 3.0f;
-    } s;
-#ifdef NDEBUG
-    bool m_showDebug = false;   // Release
-#else
-    bool m_showDebug = true;    // Debug
-#endif
-    bool m_menuOpen = false;
-    bool m_shouldQuit = false;
-    bool m_minimized = false;
-
+    Eng::client::ShaderHandle   m_cubeShader;
+    Eng::client::TextureHandle  m_atlasTexture;
+    Eng::client::ShaderHandle   m_fbShader;
+    Eng::client::Framebuffer    fbo;
+    Eng::client::TextureHandle  m_skybox;
+    Eng::client::Model          m_model;        // 遗留测试模型
     struct SceneObject {
         Eng::client::Model model;
         glm::vec3 position{0.0f};
@@ -87,35 +39,92 @@ private:
         glm::vec3 scale{1.0f};
         bool visible = true;
     };
+    std::vector<SceneObject>    m_objects;      // 场景对象（遗留）
 
+    // ==================== 网络 ====================
+    Eng::NetworkChannel  m_client;
+    std::unique_ptr<game::server::GameServer> m_server;
+    uint32_t m_myClientId = 0;
+    std::vector<net::PlayerState> m_otherPlayers;
+
+    // ==================== 世界 ====================
     struct ClientChunk {
         Chunk chunk;                        // 原始方块数据（备用）
         Eng::client::MeshHandle mesh = 0;   // GPU 网格
     };
-
-    std::unordered_map<uint64_t, ClientChunk> m_chunks;
-    std::unordered_set<uint64_t> m_pending;   // 已请求未收到
-    int m_renderDistance = 8;                 // 半径（区块数），以后放设置菜单
-    int m_lastPlayerChunkX = INT_MIN;
-    int m_lastPlayerChunkZ = INT_MIN;
-    constexpr static int kRequestsPerTick = 1;   // 每 tick 最多发几个
-    std::vector<SceneObject> m_objects;
-
     struct PendingMesh {
         uint64_t chunkKey;
         Chunk    chunk;
     };
-    std::queue<PendingMesh> m_meshQueue;
+    std::unordered_map<uint64_t, ClientChunk> m_chunks;
+    std::unordered_set<uint64_t>              m_pending;
+    std::queue<PendingMesh>                   m_meshQueue;
+    int m_renderDistance    = 8;
+    int m_lastPlayerChunkX  = INT_MIN;
+    int m_lastPlayerChunkZ  = INT_MIN;
+    static constexpr int kRequestsPerTick = 1;
 
-    float m_serverTickMs = 0.0f;
+    // ==================== 相机 ====================
+    glm::vec3 cameraPos{0.0f, 40.0f, 0.0f};
+    glm::vec3 cameraFront{0.0f, 0.0f, -1.0f};
+    glm::vec3 cameraUp{0.0f, 1.0f, 0.0f};
+    float yaw   = -90.0f;
+    float pitch =  0.0f;
+    glm::mat4 view       = glm::mat4(1.0f);
+    glm::mat4 projection = glm::mat4(1.0f);
+
+    // ==================== Hotbar ====================
+    static constexpr BlockType kHotbar[] = {
+        BlockType::Stone,
+        BlockType::Dirt,
+        BlockType::GrassBlock,
+        BlockType::Sand
+    };
+    static constexpr int kHotbarSize = std::size(kHotbar);
+    int m_hotbarIndex = 0;
+
+    // ==================== 设置 ====================
+    struct Settings {
+        float fov         = 75.0f;
+        float speed       = 3.0f;
+        float sensitivity = 0.01f;
+        float zNear       = 0.5f;
+        float zFar        = 1000.0f;
+    } s;
+
+    // ==================== 状态标志 ====================
+    bool m_shouldQuit = false;
+    bool m_menuOpen   = false;
+    bool m_minimized  = false;
+#ifdef NDEBUG
+    bool m_showDebug = false;
+#else
+    bool m_showDebug = true;
+#endif
+
+    // ==================== 指标 ====================
+    float m_lastFrameMs  = 0.0f;
+    float m_frameMsAvg   = 0.0f;
+    float m_frameMsMax   = 0.0f;
+    float m_serverTickMs  = 0.0f;
     float m_serverTickAvg = 0.0f;
     float m_serverTickMax = 0.0f;
-    float m_lastFrameMs = 0.0f;    // 最近一帧的帧时间
-    float m_frameMsAvg  = 0.0f;    // 滑动平均
-    float m_frameMsMax  = 0.0f;    // 近期峰值
 
+    // ==================== 位置平滑 ====================
     glm::vec3 m_positionError{0.0f};
+    glm::vec3 m_playerVelocity{0.0f};
+    bool      m_playerOnGround = false;
+    glm::vec3 m_lastMoveDir{0.0f};   // 最近一次输入的移动方向
+    float m_jumpHoldTimer = 0.0f;
+    float m_placeCooldown = 0.0f;   // 距离下次可放还剩多少秒
+    float m_digCooldown   = 0.0f;
+    static constexpr float kPlaceInterval = 0.2f;   // 放一个后等 0.2 秒
+    static constexpr float kDigInterval   = 0.2f;
 
+    // ==================== 日志 ====================
+    std::unique_ptr<Eng::Log> logger = std::make_unique<Eng::Log>();
+
+    // 方法
     bool keyEvents(const SDL_Event& event);
     bool resizeEvents(const SDL_Event& event);
     bool cursorEvents(const SDL_Event& event);
@@ -126,6 +135,10 @@ private:
     bool GetInput(float dt);
     Eng::client::MeshHandle BuildChunkMesh(const Chunk& chunk);
     void UpdateChunkStreaming();
+
+    BlockType GetBlockAt(int wx, int wy, int wz) const;
+    bool AABBCollides(const glm::vec3& pos) const;
+    bool IsSolidAt(int wx, int wy, int wz) const;
 
 };
 
