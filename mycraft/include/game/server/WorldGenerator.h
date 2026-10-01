@@ -38,7 +38,7 @@ public:
     explicit TerrainGenerator(uint32_t seed = 0);
     Chunk GenerateChunk(int cx, int cz) const;
 
-    static constexpr int SEA_LEVEL = 8;
+    static constexpr int SEA_LEVEL = 25;
 
 private:
     PerlinNoise m_noise;

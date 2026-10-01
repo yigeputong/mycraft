@@ -52,7 +52,7 @@ private:
     glm::mat4 projection = glm::mat4(1.0);
     float yaw = -90.0f;
     float pitch = 0.0f;
-    glm::vec3 cameraPos = glm::vec3(0.0f, 0.0f,  3.0f);
+    glm::vec3 cameraPos = glm::vec3(0.0f, 40.0f,  0.0f);
     glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
     glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
     glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
@@ -62,7 +62,7 @@ private:
         float fov = 75.0f;
         float Speed = 3.0f;
         float Sensitivity = 0.01f;
-        float zFar = 256.0f;
+        float zFar = 1000.0f;
     } s;
 #ifdef NDEBUG
     bool m_showDebug = false;   // Release

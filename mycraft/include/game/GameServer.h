@@ -27,7 +27,7 @@ private:
 
     struct ServerPlayer {
         uint32_t  id = 0;
-        glm::vec3 position{0.0f, 10.0f, 0.0f};
+        glm::vec3 position{0.0f, 40.0f, 0.0f};
         float     yaw = 0.0f;
         float     pitch = 0.0f;
         glm::vec3 moveDir{0.0f};

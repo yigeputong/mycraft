@@ -145,14 +145,34 @@ TerrainGenerator::TerrainGenerator(uint32_t seed)
     : m_noise(seed) {}
 
 int TerrainGenerator::GetHeight(int x, int z) const {
-    constexpr float FREQ    = 0.08f;   // ★ 从 0.02 → 0.08（波动更明显）
-    constexpr int   OCTAVES = 4;
-    constexpr float BASE  = 8.0f;    // 从 10 → 6（整体下沉）
-    constexpr float RANGE = 16.0f;
+    constexpr float FREQ      = 0.012f;
+    constexpr float MASK_FREQ = 0.004f;
+    constexpr int   OCTAVES   = 6;
 
+    // 平原：基准 28，起伏 ±3    →  25 ~ 31（海平面 25 边上）
+    constexpr int PLAINS_BASE = 28;
+    constexpr int PLAINS_AMP  = 3;
+
+    // 山地：基准 30，起伏 ±28   →  2 ~ 58（有山有深谷）
+    constexpr int MTN_BASE    = 30;
+    constexpr int MTN_AMP     = 28;
+
+    // ---- mask：平原(0) 还是山地(1) ----
+    float mask = m_noise.Fractal2D(x * MASK_FREQ, z * MASK_FREQ, 3);
+    mask = std::clamp(mask * 2.0f + 0.5f, 0.0f, 1.0f);
+    mask = mask * mask * mask * mask;    // 提高平原比例
+
+    // ---- 高度噪声 ----
     float n = m_noise.Fractal2D(x * FREQ, z * FREQ, OCTAVES);
-    int h = static_cast<int>(BASE + n * RANGE);
-    return std::max(1, h);
+    n = std::clamp(n * 2.5f, -1.0f, 1.0f);
+    float shaped = std::copysign(std::pow(std::abs(n), 0.6f), n);
+
+    // ---- 基准和振幅都随 mask 插值 ----
+    float base = PLAINS_BASE + mask * (MTN_BASE - PLAINS_BASE);
+    float amp  = PLAINS_AMP  + mask * (MTN_AMP  - PLAINS_AMP);
+
+    int h = static_cast<int>(base + shaped * amp);
+    return std::clamp(h, 1, CHUNK_SIZE_Y - 2);
 }
 
 Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
@@ -160,42 +180,64 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
     chunk.chunk_x = cx;
     chunk.chunk_z = cz;
 
-    int baseX = cx * CHUNK_SIZE_X;
-    int baseZ = cz * CHUNK_SIZE_Z;
+    const int baseX = cx * CHUNK_SIZE_X;
+    const int baseZ = cz * CHUNK_SIZE_Z;
 
+    constexpr int PAD = 1;
+    constexpr int W   = CHUNK_SIZE_X + PAD * 2;
+    constexpr int H   = CHUNK_SIZE_Z + PAD * 2;
+    static thread_local std::array<std::array<int, H>, W> heights;
+
+    for (int x = 0; x < W; ++x)
+        for (int z = 0; z < H; ++z)
+            heights[x][z] = GetHeight(baseX + x - PAD, baseZ + z - PAD);
+
+    // ---- 主生成循环 ----
     for (int lx = 0; lx < CHUNK_SIZE_X; ++lx) {
         for (int lz = 0; lz < CHUNK_SIZE_Z; ++lz) {
-            int height = GetHeight(baseX + lx, baseZ + lz);
+            const int height = heights[lx + PAD][lz + PAD];
 
+            // ---- 判断这一列是否是"沙滩" ----
+            bool nearWater = (height < SEA_LEVEL);
+            if (!nearWater) {
+                for (int dx = -PAD; dx <= PAD && !nearWater; ++dx) {
+                    for (int dz = -PAD; dz <= PAD && !nearWater; ++dz) {
+                        if (heights[lx + PAD + dx][lz + PAD + dz] < SEA_LEVEL)  // ★ < 
+                            nearWater = true;
+                    }
+                }
+            }
+
+            // ---- 填充整列 ----
             for (int ly = 0; ly < CHUNK_SIZE_Y; ++ly) {
                 BlockType type = BlockType::Air;
 
                 if (ly > height) {
                     type = (ly <= SEA_LEVEL) ? BlockType::Water : BlockType::Air;
                 } else if (ly == height) {
-                    type = (height <= SEA_LEVEL + 1) ? BlockType::Sand : BlockType::GrassBlock;
+                    type = nearWater ? BlockType::Sand : BlockType::GrassBlock;
                 } else if (ly >= height - 3) {
                     type = BlockType::Dirt;
                 } else {
                     type = BlockType::Stone;
                 }
 
-                // ★ 直接写数组，不用 Set
                 chunk.blocks[ChunkIndex(lx, ly, lz)] = type;
             }
         }
     }
 
+    // ---- 调试日志（在循环外）----
     int minH = 999, maxH = -999;
     for (int lx = 0; lx < CHUNK_SIZE_X; ++lx)
         for (int lz = 0; lz < CHUNK_SIZE_Z; ++lz) {
-            int h = GetHeight(baseX + lx, baseZ + lz);
+            int h = heights[lx + PAD][lz + PAD];
             minH = std::min(minH, h);
             maxH = std::max(maxH, h);
         }
-        std::println("[Terrain] chunk({},{}) h_range={}~{}", cx, cz, minH, maxH);
+    std::println("[Terrain] chunk({},{}) h_range={}~{}", cx, cz, minH, maxH);
 
-        return chunk;
-    }
+    return chunk;   // ★ 移到循环外
+}
 
 }

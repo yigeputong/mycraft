@@ -25,7 +25,6 @@ bool GameServer::Start(uint16_t port) {
         m_server.SetConnectCallback([this](int id) {
             ServerPlayer p;
             p.id = (uint32_t)id;
-            p.position = glm::vec3(0.0f, 10.0f, 0.0f);
             m_players.push_back(p);
 
             // 只发一条"你的 ID"给这个客户端
