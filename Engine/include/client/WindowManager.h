@@ -5,30 +5,11 @@
 #include <vector>
 #include <unordered_map>
 #include <memory>
+#include "core/Configs.h"
 
 namespace Eng::client {
 
 class Window;
-
-enum class RenderAPItype {
-    OPENGL,
-    VULKAN,
-    DIRECTX12,
-    METAL
-};
-
-struct WindowConfig {
-    RenderAPItype apitype = RenderAPItype::OPENGL;
-    std::string title = "Engine Window";
-    int windowWidth = 800;
-    int windowHeight = 600;
-    int windowPixelWidth = windowWidth;
-    int windowPixelHeight = windowHeight;
-    bool resizable = false;
-    bool relativeMode = false;
-    bool fullscreen = false;
-    bool borderlessFullscreen = true;
-};
 
 class WindowManager {
 public:

@@ -13,6 +13,7 @@ enum class MessageType : uint8_t {
     PlayerId        = 0x20,
     WorldState      = 0x21,
     ChunkData       = 0x22, //| 4bype cx | 4byte cy | 4096byte data |
+    BlockChange     = 0x23, //| 4bype bx | 4bype by | 4bype bz | 2bype blockId |
 
 };
 
@@ -20,6 +21,8 @@ struct PlayerInput {
     glm::vec3 moveDir{0.0f};   // 世界方向（已归一化）
     glm::vec2 look{0.0f};      // yaw/pitch（弧度，用于服务端逻辑）
     bool jump = false;
+    bool dig   = false;   // 挖
+    bool place = false;   // 放
 };
 
 struct PlayerState {

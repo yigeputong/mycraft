@@ -8,6 +8,7 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_opengl3.h"
+#include <SDL3/SDL_timer.h>
 #include <algorithm>
 
 namespace {
@@ -143,25 +144,20 @@ void MyGame::OnStart(Eng::Engine& engine) {
         }
         Eng::client::Input::Get().ProcessEvent(e);
         switch(e.type) {
-            case SDL_EVENT_QUIT:
-            case SDL_EVENT_KEY_DOWN:
-            case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-                if (e.key.key == SDLK_ESCAPE) {
-                    engine.Stop();
-                    break;
-                }
+            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                fbo = renderer->CreateFramebuffer(e.window.data1, e.window.data2);
+                break;
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+                //m_paused = true;   //这东西只有单人模式有用
+                break;
+            case SDL_EVENT_WINDOW_MINIMIZED:
+                m_minimized = true;
+                break;
+            case SDL_EVENT_WINDOW_RESTORED:
+                m_minimized = false;
+                break;
         }
     };
-
-    for (int cx = 0; cx < 4; ++cx) {
-        for (int cz = 0; cz < 4; ++cz) {
-            Eng::MessageWriter w;
-            w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkRequest));
-            w.Write(cx);
-            w.Write(cz);
-            m_client.Send(w.GetBuffer());
-        }
-    }
 
     auto pixels = GenerateAtlasPixels();
     m_atlasTexture = renderer->CreateTextureFromPixels(
@@ -202,6 +198,10 @@ void MyGame::OnStart(Eng::Engine& engine) {
 }
 
 bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
+    if (m_minimized) {
+        SDL_Delay(16);
+        return false;
+    }
 
     if (GetInput(deltaTime)) return true;
 
@@ -210,10 +210,15 @@ bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
         HandleServerMessage(data);
     }
 
+    UpdateChunkStreaming();
+
     return false;
 }
 
 void MyGame::OnRender(Eng::Engine& engine) {
+    if (m_minimized) {
+        return;
+    }
     renderer->BindFramebuffer(fbo);
 
         view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
@@ -255,14 +260,97 @@ void MyGame::OnRender(Eng::Engine& engine) {
 
         renderer->DrawFullscreenQuad(fbo.colorTexture);
         
-        // ImGui_ImplOpenGL3_NewFrame();
-        // ImGui_ImplSDL3_NewFrame();
-        // ImGui::NewFrame();
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
 
-        // // ImGui::ShowDemoWindow();
+        // 准心
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+        ImDrawList* dl = ImGui::GetForegroundDrawList();   // ★ 前景层，画在所有窗口之上
 
-        // ImGui::Render();
-        // ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        constexpr float LEN    = 8.0f;   // 每条臂的长度
+        constexpr float THICK  = 2.0f;   // 线宽
+        constexpr float GAP    = 2.0f;   // 中心留空
+        ImU32 color = IM_COL32(255, 255, 255, 200);
+
+        dl->AddLine(ImVec2(center.x - GAP - LEN, center.y),
+                    ImVec2(center.x - GAP,       center.y), color, THICK);
+        dl->AddLine(ImVec2(center.x + GAP,       center.y),
+                    ImVec2(center.x + GAP + LEN, center.y), color, THICK);
+        dl->AddLine(ImVec2(center.x, center.y - GAP - LEN),
+                    ImVec2(center.x, center.y - GAP),       color, THICK);
+        dl->AddLine(ImVec2(center.x, center.y + GAP),
+                    ImVec2(center.x, center.y + GAP + LEN), color, THICK);
+
+        // 调试面板
+        if (m_showDebug) {
+            ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowBgAlpha(0.5f);
+            if (ImGui::Begin("Debug", &m_showDebug, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav)) {
+                ImGui::SetWindowFontScale(1.5f);
+                ImGuiIO& dio = ImGui::GetIO();
+                ImGui::Text("FPS: %.1f (%.2f ms)", dio.Framerate, 1000.0f / dio.Framerate);
+                ImGui::Text("Pos: %.2f, %.2f, %.2f", cameraPos.x, cameraPos.y, cameraPos.z);
+                ImGui::Text("Yaw/Pitch: %.1f / %.1f", yaw, pitch);
+                ImGui::Separator();
+                ImGui::Text("Chunks loaded: %zu", m_chunks.size());
+                ImGui::Text("Chunks: %zu | pending: %zu", m_chunks.size(), m_pending.size());
+                ImGui::Text("Render R: %d", m_renderDistance);
+                ImGui::Text("Player ID: %d", m_myClientId);   // 如果存了
+            }
+            ImGui::End();
+        }
+
+        // ============ 主菜单 ============
+        if (m_menuOpen) {
+            ImGuiIO& io2 = ImGui::GetIO();
+            ImGui::SetNextWindowPos(
+                ImVec2(io2.DisplaySize.x * 0.5f, io2.DisplaySize.y * 0.5f),
+                ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));   // 居中，只第一次
+            ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_Always);
+
+            if (ImGui::Begin("Menu", nullptr,
+                    ImGuiWindowFlags_NoCollapse |
+                    ImGuiWindowFlags_NoResize |
+                    ImGuiWindowFlags_NoMove)) {
+                ImGui::SetWindowFontScale(1.5f);
+
+                if (ImGui::Button("Resume", ImVec2(-1, 44))) {
+                    m_menuOpen = false;
+                }
+
+                ImGui::Separator();
+
+                // ---- 窗口 ----
+                auto& wcfg = mainWin->GetConfigs();
+                if (ImGui::Checkbox("VSync", &wcfg.vsync)) {
+                    SDL_GL_SetSwapInterval(wcfg.vsync ? 1 : 0);
+                }
+
+                bool fs = wcfg.fullscreen;
+                if (ImGui::Checkbox("Fullscreen", &fs)) {
+                    wcfg.fullscreen = fs;
+                    mainWin->SetFullscreen(fs);
+                    fbo = renderer->CreateFramebuffer(
+                        mainWin->GetConfigs().windowPixelWidth,
+                        mainWin->GetConfigs().windowPixelHeight);
+                }
+
+                // ---- 相机 ----
+                ImGui::SliderFloat("FOV", &s.fov, 30.0f, 120.0f, "%.0f");
+
+                ImGui::Separator();
+
+                if (ImGui::Button("Quit", ImVec2(-1, 44))) {
+                    m_shouldQuit = true;
+                }
+            }
+            ImGui::End();
+        }
+
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     winMgr->GetMainWindow()->SwapBuffers();
 }
@@ -270,9 +358,14 @@ void MyGame::OnRender(Eng::Engine& engine) {
 bool MyGame::GetInput(float dt) {
     using namespace Eng::client;
 
-    // ==================== 按 ESC 退出 ====================
+    // ==================== ESC 开关菜单 ====================
     if (Input::IsKeyPressed(KeyCode::Escape)) {
-        return true;
+        m_menuOpen = !m_menuOpen;
+    }
+    if (m_menuOpen) { // 菜单打开时冻结游戏输入
+        // 解除相对模式，让鼠标能点 UI
+        Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), false);
+        return m_shouldQuit;
     }
 
     // ==================== F11 全屏切换 ====================
@@ -283,6 +376,11 @@ bool MyGame::GetInput(float dt) {
         fbo = renderer->CreateFramebuffer(
             mainWin->GetConfigs().windowPixelWidth,
             mainWin->GetConfigs().windowPixelHeight);
+    }
+
+    // ==================== F3 调试面板 ====================
+    if (Input::IsKeyPressed(KeyCode::F3)) {
+        m_showDebug = !m_showDebug;
     }
 
     // ==================== 鼠标视角 ====================
@@ -326,18 +424,22 @@ bool MyGame::GetInput(float dt) {
     input.moveDir = moveDir;
     input.look    = glm::vec2(glm::radians(yaw), glm::radians(pitch));
     input.jump    = Input::IsKeyDown(KeyCode::Space);
+    input.dig     = Input::IsKeyPressed(KeyCode::MouseLeft);
+    input.place   = Input::IsKeyPressed(KeyCode::MouseRight);
 
     Eng::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::PlayerInput));
     w.WriteVec3(input.moveDir);   // ★ vec3
     w.WriteVec2(input.look);
-    w.Write(static_cast<uint8_t>(input.jump ? 1 : 0));
+    w.Write(static_cast<uint8_t>(input.jump  ? 1 : 0));
+    w.Write(static_cast<uint8_t>(input.dig   ? 1 : 0));
+    w.Write(static_cast<uint8_t>(input.place ? 1 : 0));
     m_client.Send(w.GetBuffer());
     //本地预测
     float speed = 5.0f * dt;
     cameraPos += input.moveDir * speed;
 
-    return false;
+    return m_shouldQuit;
 }
 
 void MyGame::OnShutdown(Eng::Engine& engine) {
@@ -423,6 +525,43 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
                 hash = (hash ^ static_cast<uint8_t>(b)) * 16777619u;
             }
             m_chunks[ChunkKey(cx, cz)] = std::move(cc);
+
+            m_pending.erase(ChunkKey(cx, cz));
+            break;
+        }
+        case game::net::MessageType::BlockChange: {
+            int bx = r.Read<int32_t>();
+            int by = r.Read<int32_t>();
+            int bz = r.Read<int32_t>();
+            BlockType t = static_cast<BlockType>(r.Read<uint16_t>());
+
+            int cx = bx >> 4, cz = bz >> 4;
+            int lx = bx & 15, lz = bz & 15;
+
+            auto it = m_chunks.find(ChunkKey(cx, cz));
+            if (it == m_chunks.end()) break;
+
+            ChunkSet(it->second.chunk, lx, by, lz, t);
+
+            // 重建 mesh
+            if (it->second.mesh != 0) {
+                renderer->DestroyMesh(it->second.mesh);
+            }
+            it->second.mesh = BuildChunkMesh(it->second.chunk);
+
+            // 如果改的是边界方块，邻居区块的 mesh 也得重建
+            if (lx == 0 || lx == 15 || lz == 0 || lz == 15) {
+                auto rebuild = [&](int ncx, int ncz) {
+                    auto nit = m_chunks.find(ChunkKey(ncx, ncz));
+                    if (nit == m_chunks.end()) return;
+                    if (nit->second.mesh != 0) renderer->DestroyMesh(nit->second.mesh);
+                    nit->second.mesh = BuildChunkMesh(nit->second.chunk);
+                };
+                if (lx == 0)  rebuild(cx - 1, cz);
+                if (lx == 15) rebuild(cx + 1, cz);
+                if (lz == 0)  rebuild(cx, cz - 1);
+                if (lz == 15) rebuild(cx, cz + 1);
+            }
             break;
         }
     }
@@ -554,6 +693,72 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
     uint64_t key = ChunkKey(chunk.chunk_x, chunk.chunk_z);
 
     return handle;
+}
+
+void MyGame::UpdateChunkStreaming() {
+    int pcx = static_cast<int>(std::floor(cameraPos.x)) >> 4;
+    int pcz = static_cast<int>(std::floor(cameraPos.z)) >> 4;
+
+    const int R = m_renderDistance;
+
+    // 卸载超过 R+2 的区块
+    const int unloadR = m_renderDistance + 2;
+
+    for (auto it = m_chunks.begin(); it != m_chunks.end(); ) {
+        uint64_t key = it->first;
+        int cx = static_cast<int>(static_cast<int32_t>(key & 0xFFFFFFFFu));
+        int cz = static_cast<int>(static_cast<int32_t>(key >> 32));
+        int dx = cx - pcx;
+        int dz = cz - pcz;
+
+        if (std::abs(dx) > unloadR || std::abs(dz) > unloadR) {
+            if (it->second.mesh != 0) {
+                renderer->DestroyMesh(it->second.mesh);
+            }
+            m_pending.erase(key);
+            it = m_chunks.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // 收集缺失的区块，按距离排序
+    struct Need { int cx, cz, d2; };
+    std::vector<Need> need;
+    for (int dz = -R; dz <= R; ++dz) {
+        for (int dx = -R; dx <= R; ++dx) {
+            int cx = pcx + dx;
+            int cz = pcz + dz;
+            uint64_t key = ChunkKey(cx, cz);
+            if (m_chunks.count(key)) continue;
+            if (m_pending.count(key)) continue;
+            need.push_back({cx, cz, dx*dx + dz*dz});
+        }
+    }
+
+    // 近的优先
+    std::sort(need.begin(), need.end(),
+              [](const Need& a, const Need& b) { return a.d2 < b.d2; });
+
+    // 只发前 K 个
+    int sent = 0;
+    for (const auto& n : need) {
+        if (sent++ >= kRequestsPerTick) break;
+
+        Eng::MessageWriter w;
+        w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkRequest));
+        w.Write<int32_t>(n.cx);
+        w.Write<int32_t>(n.cz);
+        m_client.Send(w.GetBuffer());
+
+        m_pending.insert(ChunkKey(n.cx, n.cz));
+    }
+    if (sent > 0) {
+        logInfo(logger, "[Stream] (" << pcx << "," << pcz << ")"
+                << " loaded=" << m_chunks.size()
+                << " pending=" << m_pending.size()
+                << " sent=" << sent);
+    }
 }
 
 }

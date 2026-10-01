@@ -130,10 +130,10 @@ void Input::ProcessEvent(const SDL_Event& event) {
             break;
 
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
-            m_keyState[SDLToKeyCode(event.key.scancode)] = true;
+            m_keyState[MouseButtonToKeyCode(event.button.button)] = true;
             break;
         case SDL_EVENT_MOUSE_BUTTON_UP:
-            m_keyState[SDLToKeyCode(event.key.scancode)] = false;
+            m_keyState[MouseButtonToKeyCode(event.button.button)] = false;
             break;
 
         case SDL_EVENT_WINDOW_MOUSE_ENTER:

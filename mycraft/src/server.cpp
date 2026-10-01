@@ -5,6 +5,7 @@
 #include "game/GameServer.h"
 #include "game/Protocol.h"
 #include "game/server/WorldGenerator.h"
+#include "game/core/RayCast.h"
 #include <SDL3/SDL.h>
 #include <chrono>
 
@@ -99,15 +100,19 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
     switch (type) {
         case game::net::MessageType::PlayerInput: {
             game::net::PlayerInput in;
-            in.moveDir = r.ReadVec3();      // ★ vec3
+            in.moveDir = r.ReadVec3();
             in.look    = r.ReadVec2();
             in.jump    = r.Read<uint8_t>() != 0;
+            in.dig     = r.Read<uint8_t>() != 0;
+            in.place   = r.Read<uint8_t>() != 0;
 
             for (auto& p : m_players) {
                 if (p.id == (uint32_t)clientId) {
-                    p.moveDir = in.moveDir;     // ★ 存世界方向
+                    p.moveDir = in.moveDir;     // 存世界方向
                     p.yaw     = in.look.x;
                     p.pitch   = in.look.y;
+                    if (in.dig)   HandleDig(p);
+                    if (in.place) HandlePlace(p);
                     break;
                 }
             }
@@ -117,7 +122,7 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
             int cx = r.Read<int>();
             int cz = r.Read<int>();
 
-            Chunk& chunk = GetOrCreateChunk(cx, cz);   // ★ 拿 map 里的引用
+            Chunk& chunk = GetOrCreateChunk(cx, cz);
 
             Eng::MessageWriter w;
             w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkData));
@@ -153,19 +158,6 @@ void GameServer::TickWorld(float dt) {
     }
 }
 
-void GameServer::BroadcastWorldState() {
-    Eng::MessageWriter w;
-    w.Write(static_cast<uint8_t>(game::net::MessageType::WorldState));
-    w.WriteU32BE((uint32_t)m_players.size());
-
-    for (auto& p : m_players) {
-        w.WriteU32BE(p.id);
-        w.WriteVec3(p.position);
-        w.Write(p.yaw);
-        w.Write(p.pitch);
-    }
-    m_server.Broadcast(w.GetBuffer());
-}
 
 Chunk& GameServer::GetOrCreateChunk(int cx, int cz) {
     const uint64_t key = ChunkKey(cx, cz);
@@ -200,6 +192,110 @@ Chunk& GameServer::GetOrCreateChunk(int cx, int cz) {
                << " Sand=" << sandCount);
 
     return chunk;
+}
+
+void GameServer::HandleDig(ServerPlayer& p) {
+    glm::vec3 front;
+    front.x = cos(p.yaw) * cos(p.pitch);
+    front.y = sin(p.pitch);
+    front.z = sin(p.yaw) * cos(p.pitch);
+    front = glm::normalize(front);
+
+    auto hit = RayCast(p.position, front, REACH_DISTANCE,
+        [this](int x, int y, int z) { return GetBlockAt(x, y, z); });
+    if (!hit.hit) return;
+
+    SetBlockAt(hit.bx, hit.by, hit.bz, BlockType::Air);
+    BroadcastBlockChange(hit.bx, hit.by, hit.bz, BlockType::Air);
+}
+
+void GameServer::HandlePlace(ServerPlayer& p) {
+    glm::vec3 front;
+    front.x = cos(p.yaw) * cos(p.pitch);
+    front.y = sin(p.pitch);
+    front.z = sin(p.yaw) * cos(p.pitch);
+    front = glm::normalize(front);
+
+    auto hit = RayCast(p.position, front, REACH_DISTANCE,
+        [this](int x, int y, int z) { return GetBlockAt(x, y, z); });
+    if (!hit.hit) return;
+
+    // 放在命中面的外侧
+    int px = hit.bx + hit.nx;
+    int py = hit.by + hit.ny;
+    int pz = hit.bz + hit.nz;
+
+    // 别把方块放进自己身体里
+    if (IsInsidePlayer(p, px, py, pz)) return;
+
+    SetBlockAt(px, py, pz, BlockType::Stone);   // 先都放石头
+    BroadcastBlockChange(px, py, pz, BlockType::Stone);
+}
+
+BlockType GameServer::GetBlockAt(int wx, int wy, int wz) const {
+    if (wy < 0 || wy >= CHUNK_SIZE_Y) return BlockType::Air;
+    int cx = wx >> 4;
+    int cz = wz >> 4;
+    int lx = wx & 15;
+    int lz = wz & 15;
+    auto it = m_chunks.find(ChunkKey(cx, cz));
+    if (it == m_chunks.end()) return BlockType::Air;
+    return ChunkGet(it->second, lx, wy, lz);
+}
+
+void GameServer::SetBlockAt(int wx, int wy, int wz, BlockType bt) {
+    if (wy < 0 || wy >= CHUNK_SIZE_Y) return;
+    int cx = wx >> 4;
+    int cz = wz >> 4;
+    int lx = wx & 15;
+    int lz = wz & 15;
+    auto it = m_chunks.find(ChunkKey(cx, cz));
+    if (it == m_chunks.end()) return;
+    ChunkSet(it->second, lx, wy, lz, bt);
+}
+
+bool GameServer::IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz) {
+    // 玩家 AABB：以 position 为脚底中心
+    constexpr float HALF_W = 0.3f;   // 半宽
+    constexpr float HEIGHT = 1.8f;
+
+    glm::vec3 pmin{p.position.x - HALF_W, p.position.y,        p.position.z - HALF_W};
+    glm::vec3 pmax{p.position.x + HALF_W, p.position.y + HEIGHT, p.position.z + HALF_W};
+
+    // 方块 AABB：[bx, bx+1] × [by, by+1] × [bz, bz+1]
+    glm::vec3 bmin{(float)bx, (float)by, (float)bz};
+    glm::vec3 bmax{bmin.x + 1.0f, bmin.y + 1.0f, bmin.z + 1.0f};
+
+    // 三个轴都重叠才算相交
+    bool overlapX = pmin.x < bmax.x && pmax.x > bmin.x;
+    bool overlapY = pmin.y < bmax.y && pmax.y > bmin.y;
+    bool overlapZ = pmin.z < bmax.z && pmax.z > bmin.z;
+
+    return overlapX && overlapY && overlapZ;
+}
+
+void GameServer::BroadcastWorldState() {
+    Eng::MessageWriter w;
+    w.Write(static_cast<uint8_t>(game::net::MessageType::WorldState));
+    w.WriteU32BE((uint32_t)m_players.size());
+
+    for (auto& p : m_players) {
+        w.WriteU32BE(p.id);
+        w.WriteVec3(p.position);
+        w.Write(p.yaw);
+        w.Write(p.pitch);
+    }
+    m_server.Broadcast(w.GetBuffer());
+}
+
+void GameServer::BroadcastBlockChange(int bx, int by, int bz, BlockType type) {
+    Eng::MessageWriter w;
+    w.Write(static_cast<uint8_t>(game::net::MessageType::BlockChange));
+    w.Write<int32_t>(bx);
+    w.Write<int32_t>(by);
+    w.Write<int32_t>(bz);
+    w.Write<uint16_t>(static_cast<uint16_t>(type));
+    m_server.Broadcast(w.GetBuffer());
 }
 
 } // namespace game

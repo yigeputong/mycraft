@@ -83,14 +83,6 @@ void WindowManager::DispatchEvent(const SDL_Event& event) {
                             window2->SetRunning(false);
                         }
                         return;
-                    
-                    case SDL_EVENT_KEY_DOWN:
-                        if (event.key.key == SDLK_ESCAPE) {
-                            for (auto& [id2, window2] : m_windows) {
-                                window2->SetRunning(false);
-                            }
-                            return;
-                        }
                     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
                         if (window->onCloseRequest) {
                             window->onCloseRequest();

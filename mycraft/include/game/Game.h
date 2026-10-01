@@ -4,6 +4,8 @@
 #include "Protocol.h"
 #include "core/NetworkChannel.h"
 #include "game/GameServer.h"
+#include <unordered_map>
+#include <unordered_set>
 
 namespace game {
 
@@ -23,12 +25,6 @@ private:
     Eng::client::Window* mainWin;
     Eng::client::IRenderAPI* renderer;
 
-    struct ClientChunk {
-        Chunk chunk;                        // 原始方块数据（备用）
-        Eng::client::MeshHandle mesh = 0;   // GPU 网格
-    };
-
-    std::unordered_map<uint64_t, ClientChunk> m_chunks;
     Eng::client::ShaderHandle m_cubeShader;
     // Eng::client::TextureHandle m_cubeTexture;
     // Eng::client::Material m_cubeMaterial;
@@ -68,6 +64,14 @@ private:
         float Sensitivity = 0.01f;
         float zFar = 256.0f;
     } s;
+#ifdef NDEBUG
+    bool m_showDebug = false;   // Release
+#else
+    bool m_showDebug = true;    // Debug
+#endif
+    bool m_menuOpen = false;
+    bool m_shouldQuit = false;
+    bool m_minimized = false;
 
     struct SceneObject {
         Eng::client::Model model;
@@ -77,6 +81,17 @@ private:
         bool visible = true;
     };
 
+    struct ClientChunk {
+        Chunk chunk;                        // 原始方块数据（备用）
+        Eng::client::MeshHandle mesh = 0;   // GPU 网格
+    };
+
+    std::unordered_map<uint64_t, ClientChunk> m_chunks;
+    std::unordered_set<uint64_t> m_pending;   // 已请求未收到
+    int m_renderDistance = 8;                 // 半径（区块数），以后放设置菜单
+    int m_lastPlayerChunkX = INT_MIN;
+    int m_lastPlayerChunkZ = INT_MIN;
+    constexpr static int kRequestsPerTick = 1;   // 每 tick 最多发几个
     std::vector<SceneObject> m_objects;
 
     bool keyEvents(const SDL_Event& event);
@@ -88,6 +103,7 @@ private:
 
     bool GetInput(float dt);
     Eng::client::MeshHandle BuildChunkMesh(const Chunk& chunk);
+    void UpdateChunkStreaming();
 
 };
 
