@@ -184,7 +184,7 @@ void MyGame::OnStart(Eng::Engine& engine) {
     }
 
     fbo = renderer->CreateFramebuffer(mainWin->GetConfigs().windowWidth, mainWin->GetConfigs().windowHeight);
-    if (!fbo.isValid) {
+    if (!fbo.isValid()) {
         logError(logger, "FBO creation failed!");
     }
     std::vector<std::string> skyboxFaces = {
@@ -278,7 +278,12 @@ void MyGame::OnRender(Eng::Engine& engine) {
     if (m_minimized) {
         return;
     }
+    renderer->BeginFrame();
+
+    // ============ Pass 1: 场景 → FBO ============
     renderer->BindFramebuffer(fbo);
+    renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    renderer->Clear();
 
         glm::vec3 eye = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
         view = glm::lookAt(eye, eye + cameraFront, cameraUp);
@@ -306,9 +311,6 @@ void MyGame::OnRender(Eng::Engine& engine) {
         Eng::client::Material mat;
         mat.diffuse = m_atlasTexture;
 
-    renderer->Clear();
-        renderer->BeginFrame();
-
         renderer->SetUniform(m_cubeShader, "uAOStrength", engine.GetConfig().render.m_aoStrength);
         for (auto& [key, cc] : m_chunks) {
             if (cc.mesh == 0) continue;
@@ -321,13 +323,15 @@ void MyGame::OnRender(Eng::Engine& engine) {
 
     renderer->UnbindFramebuffer();
     
+    // ============ Pass 2: 后处理 → 屏幕 ============
+    renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     renderer->Clear();
 
-        renderer->DrawFullscreenQuad(fbo.colorTexture);
+        renderer->DrawFullscreenQuad(renderer->GetFramebufferTexture(fbo));
 
         DrawUI(engine);
 
-    winMgr->GetMainWindow()->SwapBuffers();
+    renderer->EndFrame();
 }
 
 void MyGame::DrawUI(Eng::Engine& engine) {

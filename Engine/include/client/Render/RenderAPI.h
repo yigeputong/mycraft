@@ -16,6 +16,7 @@ class Window;
 using MeshHandle = uint32_t;
 using TextureHandle = uint32_t;
 using ShaderHandle = uint32_t;
+using FramebufferHandle = uint32_t;
 
 struct Vertex {
     glm::vec3 position;
@@ -54,11 +55,11 @@ struct Model {
 };
 
 struct Framebuffer {
-    uint32_t fboID = 0;
-    uint32_t colorTexture = 0;
-    uint32_t depthBuffer = 0;
-    int width = 0, height = 0;
-    bool isValid = false;
+    FramebufferHandle handle = 0;
+    int  width  = 0;
+    int  height = 0;
+
+    bool isValid() const { return handle != 0; }
 };
 
 // ============ Global UBO (binding = 0) ============
@@ -116,9 +117,10 @@ public:
 
     // 帧缓冲创建
     virtual Framebuffer CreateFramebuffer(int width, int height) = 0;
+    virtual void DestroyFramebuffer(const Framebuffer& fb) = 0;
     virtual void BindFramebuffer(const Framebuffer& fb) = 0;
     virtual void UnbindFramebuffer() = 0;
-    virtual uint32_t GetFramebufferTexture(const Framebuffer& fb) const = 0;
+    virtual TextureHandle GetFramebufferTexture(const Framebuffer& fb) const = 0;
 
     // 资源销毁
     virtual void DestroyMesh(MeshHandle handle) = 0;
@@ -138,10 +140,12 @@ public:
                                     ShaderHandle shader,
                                     const Material& material,
                                     const std::vector<glm::mat4>& transforms) = 0;
+    virtual void EndFrame() = 0;
 
     // 特殊绘制（天空盒、UI等）
     virtual void DrawSkybox(ShaderHandle shader) = 0;
     virtual void DrawFullscreenQuad(TextureHandle textureID) = 0;
+
 };
 
 }

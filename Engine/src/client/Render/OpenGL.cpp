@@ -601,7 +601,6 @@ Model OpenGLAPI::LoadModel(const std::string& path, bool flipUV) {
     return result;
 }
 
-// ---------- 资源销毁 ----------
 void OpenGLAPI::DestroyMesh(MeshHandle handle) {
     auto it = m_meshes.find(handle);
     if (it == m_meshes.end()) return;
@@ -626,16 +625,19 @@ void OpenGLAPI::DestroyShader(ShaderHandle handle) {
 }
 
 Framebuffer OpenGLAPI::CreateFramebuffer(int width, int height) {
+    // ---------- 全屏 quad 初始化（保持不变）----------
     if (!m_fullscreenShader)
-        m_fullscreenShader = CreateShader("./assets/shaders/Engine/OpenGL/fb/fb.vert", "./assets/shaders/Engine/OpenGL/fb/fb.frag");
+        m_fullscreenShader = CreateShader(
+            "./assets/shaders/Engine/OpenGL/fb/fb.vert",
+            "./assets/shaders/Engine/OpenGL/fb/fb.frag");
 
     static float vertices[] = {
-        -1.0f,  1.0f,       0.0f, 1.0f,
-        -1.0f, -1.0f,       0.0f, 0.0f,
-         1.0f, -1.0f,       1.0f, 0.0f,
-        -1.0f,  1.0f,       0.0f, 1.0f,
-         1.0f, -1.0f,       1.0f, 0.0f,
-         1.0f,  1.0f,       1.0f, 1.0f
+        -1.0f,  1.0f,   0.0f, 1.0f,
+        -1.0f, -1.0f,   0.0f, 0.0f,
+         1.0f, -1.0f,   1.0f, 0.0f,
+        -1.0f,  1.0f,   0.0f, 1.0f,
+         1.0f, -1.0f,   1.0f, 0.0f,
+         1.0f,  1.0f,   1.0f, 1.0f
     };
 
     glGenVertexArrays(1, &m_fullscreenVAO);
@@ -649,58 +651,110 @@ Framebuffer OpenGLAPI::CreateFramebuffer(int width, int height) {
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
-    Framebuffer fb;
-    fb.width = width;
-    fb.height = height;
+    // ---------- FBO + attachments ----------
+    GLuint fbo      = 0;
+    GLuint colorTex = 0;
+    GLuint depthBuf = 0;
 
-    // 1. 生成帧缓冲对象
-    glGenFramebuffers(1, &fb.fboID);
-    glBindFramebuffer(GL_FRAMEBUFFER, fb.fboID);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
-    // 2. 创建颜色纹理（用于最终采样）
-    glGenTextures(1, &fb.colorTexture);
-    glBindTexture(GL_TEXTURE_2D, fb.colorTexture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    // Color texture
+    glGenTextures(1, &colorTex);
+    glBindTexture(GL_TEXTURE_2D, colorTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fb.colorTexture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                            GL_TEXTURE_2D, colorTex, 0);
 
-    glGenRenderbuffers(1, &fb.depthBuffer);
-    glBindRenderbuffer(GL_RENDERBUFFER, fb.depthBuffer);
+    // Depth
+    glGenRenderbuffers(1, &depthBuf);
+    glBindRenderbuffer(GL_RENDERBUFFER, depthBuf);
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, fb.depthBuffer);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                               GL_RENDERBUFFER, depthBuf);
 
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
-        fb.isValid = true;
-        logInfo(m_logger, "[OpenGLAPI] Framebuffer created successfully");
-    } else {
+    // 检查
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         logError(m_logger, "[OpenGLAPI] Framebuffer creation failed!");
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &fbo);
+        glDeleteTextures(1, &colorTex);
+        glDeleteRenderbuffers(1, &depthBuf);
+        return {};
     }
+    logInfo(m_logger, "[OpenGLAPI] Framebuffer created successfully");
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
 
+    // ---------- 存到内部表 ----------
+    FramebufferHandle h = m_nextFramebufferHandle++;
+
+    FramebufferInternal fbi;
+    fbi.fbo      = fbo;
+    fbi.colorTex = colorTex;
+    fbi.depthBuf = depthBuf;
+    fbi.width    = width;
+    fbi.height   = height;
+    m_framebuffers[h] = fbi;
+
+    // 把 colorTex 也注册到 m_textures，这样 DrawFullscreenQuad 能直接用
+    TextureHandle texHandle = m_nextTextureHandle++;
+    m_textures[texHandle] = { colorTex, width, height, GL_RGBA };
+    m_fbColorHandles[h] = texHandle;
+
+    // ---------- 返回 handle ----------
+    Framebuffer fb;
+    fb.handle = h;
+    fb.width  = width;
+    fb.height = height;
     return fb;
 }
 
 void OpenGLAPI::BindFramebuffer(const Framebuffer& fb) {
-    if (!fb.isValid) return;
-    glBindFramebuffer(GL_FRAMEBUFFER, fb.fboID);
-    glViewport(0, 0, fb.width, fb.height);
+    auto it = m_framebuffers.find(fb.handle);
+    if (it == m_framebuffers.end()) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, it->second.fbo);
+    glViewport(0, 0, it->second.width, it->second.height);
 }
 
 void OpenGLAPI::UnbindFramebuffer() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (m_window) {
-        glViewport(0, 0, m_window->GetConfigs().windowWidth, m_window->GetConfigs().windowHeight);
+        glViewport(0, 0,
+            m_window->GetConfigs().windowWidth,
+            m_window->GetConfigs().windowHeight);
     }
 }
 
-uint32_t OpenGLAPI::GetFramebufferTexture(const Framebuffer& fb) const {
-    return fb.colorTexture;
+TextureHandle OpenGLAPI::GetFramebufferTexture(const Framebuffer& fb) const {
+    auto it = m_fbColorHandles.find(fb.handle);
+    return it != m_fbColorHandles.end() ? it->second : 0;
+}
+
+void OpenGLAPI::DestroyFramebuffer(const Framebuffer& fb) {
+    auto it = m_framebuffers.find(fb.handle);
+    if (it == m_framebuffers.end()) return;
+
+    glDeleteFramebuffers(1, &it->second.fbo);
+    glDeleteTextures(1, &it->second.colorTex);
+    if (it->second.depthBuf)
+        glDeleteRenderbuffers(1, &it->second.depthBuf);
+
+    // 从 m_textures 删掉注册的 colorTex
+    auto thIt = m_fbColorHandles.find(fb.handle);
+    if (thIt != m_fbColorHandles.end()) {
+        m_textures.erase(thIt->second);
+        m_fbColorHandles.erase(thIt);
+    }
+
+    m_framebuffers.erase(it);
 }
 
 // ---------- Uniform 设置 ----------
@@ -907,6 +961,10 @@ void OpenGLAPI::DrawFullscreenQuad(TextureHandle textureID) {
     glBindVertexArray(m_fullscreenVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
+}
+
+void OpenGLAPI::EndFrame() {
+    SDL_GL_SwapWindow(m_window->GetSDLWindow());
 }
 
 // ---------- 辅助函数 ----------

@@ -48,9 +48,10 @@ public:
     void DestroyShader(ShaderHandle handle) override;
 
     Framebuffer CreateFramebuffer(int width, int height) override;
+    void DestroyFramebuffer(const Framebuffer& fb) override;
     void BindFramebuffer(const Framebuffer& fb) override;
     void UnbindFramebuffer() override;
-    uint32_t GetFramebufferTexture(const Framebuffer& fb) const override;
+    TextureHandle GetFramebufferTexture(const Framebuffer& fb) const override;
 
     // Uniform 设置
     void SetUniform(ShaderHandle shader, const std::string& name, const glm::mat4& value) override;
@@ -68,6 +69,8 @@ public:
 
     void DrawSkybox(ShaderHandle shader) override;
     void DrawFullscreenQuad(TextureHandle textureID) override;
+    void EndFrame() override;
+
 
     static constexpr int api_major = 4;
     static constexpr int api_minor = 6;
@@ -79,6 +82,7 @@ private:
     MeshHandle m_nextMeshHandle = 1;
     TextureHandle m_nextTextureHandle = 1;
     ShaderHandle m_nextShaderHandle = 1;
+    FramebufferHandle m_nextFramebufferHandle = 1;
 
     // 内部数据结构
     struct MeshDataInternal {
@@ -102,11 +106,21 @@ private:
         // std::unordered_map<std::string, GLint> uniformCache;
     };
 
+    struct FramebufferInternal {
+        GLuint fbo      = 0;
+        GLuint colorTex = 0;
+        GLuint depthBuf = 0;
+        int    width    = 0;
+        int    height   = 0;
+    };
+
     // 资源表
-    std::unordered_map<MeshHandle,      MeshDataInternal>       m_meshes;
-    std::unordered_map<TextureHandle,   TextureDataInternal>    m_textures;
-    std::unordered_map<ShaderHandle,    ShaderDataInternal>     m_shaders;
-    std::unordered_map<std::string,     TextureHandle>          m_textureCache;
+    std::unordered_map<MeshHandle,        MeshDataInternal>    m_meshes;
+    std::unordered_map<TextureHandle,     TextureDataInternal> m_textures;
+    std::unordered_map<std::string,       TextureHandle>       m_textureCache;
+    std::unordered_map<ShaderHandle,      ShaderDataInternal>  m_shaders;
+    std::unordered_map<FramebufferHandle, FramebufferInternal> m_framebuffers;
+    std::unordered_map<FramebufferHandle, TextureHandle>       m_fbColorHandles;
 
     // 默认纹理
     TextureHandle m_defaultTexture = 0;
