@@ -205,20 +205,6 @@ Chunk& GameServer::GetOrCreateChunk(int cx, int cz) {
     it = m_chunks.emplace(key, m_terrain.GenerateChunk(cx, cz)).first;
     Chunk& chunk = it->second;
 
-    int stoneCount = 0, grassCount = 0, dirtCount = 0,
-        sandCount = 0, airCount = 0, waterCount = 0;
-    for (BlockType b : chunk.blocks) {
-        switch (b) {
-            case BlockType::Stone:      stoneCount++; break;
-            case BlockType::GrassBlock: grassCount++; break;
-            case BlockType::Dirt:       dirtCount++;  break;
-            case BlockType::Sand:       sandCount++;  break;
-            case BlockType::Air:        airCount++;   break;
-            case BlockType::Water:      waterCount++; break;
-            default: break;
-        }
-    }
-
     return chunk;
 }
 

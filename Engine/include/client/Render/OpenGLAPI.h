@@ -139,7 +139,6 @@ private:
     glm::mat4 m_modelMatrix      = glm::mat4(1.0f);
 
     // 相机/光源参数
-    glm::vec3 m_lightPos       = glm::vec3(1.0f, 2.0f, 3.0f);
     glm::vec3 m_viewPos        = glm::vec3(0.0f);
     glm::vec3 m_lightDir       = glm::vec3(0.5f, -1.0f, 0.3f);  // 斜向下照
     glm::vec3 m_lightColor     = glm::vec3(1.0f, 0.98f, 0.9f);    // 略暖的白

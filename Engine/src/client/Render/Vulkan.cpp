@@ -1411,7 +1411,7 @@ TextureHandle VulkanAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int
         ici.extent = { static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1 };
         ici.mipLevels = 1;
         ici.arrayLayers = 1;
-        ici.format = VK_FORMAT_R8G8B8A8_SRGB;   // ★ sRGB
+        ici.format = VK_FORMAT_R8G8B8A8_UNORM;
         ici.tiling = VK_IMAGE_TILING_OPTIMAL;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -1462,7 +1462,7 @@ TextureHandle VulkanAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int
 
     // ---------- 4. View ----------
     vk::raii::ImageView view = createImageView(
-        rawImage, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor);
+        rawImage, vk::Format::eR8G8B8A8Unorm, vk::ImageAspectFlagBits::eColor);
 
     // ---------- 5. Sampler ----------
     vk::SamplerCreateInfo sci{

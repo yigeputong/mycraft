@@ -137,7 +137,7 @@ void OpenGLAPI::SetModelMatrix(const glm::mat4& model) {
 }
 
 void OpenGLAPI::SetLightPosition(const glm::vec3& pos) {
-    m_lightPos = pos;
+    m_lightDir = pos;
 }
 
 void OpenGLAPI::SetLightColor(const glm::vec3& color, const float intensity) {
@@ -969,7 +969,6 @@ void OpenGLAPI::DrawFullscreenQuad(TextureHandle textureID) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, textureID);
     glUniform1i(glGetUniformLocation(shader, "screenTexture"), 0);
-    SetUniform(m_fullscreenShader, "uGamma", 2.2f);
 
     glBindVertexArray(m_fullscreenVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);

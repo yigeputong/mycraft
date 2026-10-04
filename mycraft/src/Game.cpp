@@ -8,7 +8,6 @@
 #include "game/core/Physics.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
-#include "imgui_impl_opengl3.h"
 #include <SDL3/SDL_timer.h>
 #include <algorithm>
 
@@ -254,9 +253,9 @@ bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
                                 glm::vec3(1.0f, 0.5f, 0.2f), warm);
 
     // ---- 环境光：夜暗蓝，昼亮白 ----
-    glm::vec3 ambient = glm::mix(glm::vec3(0.05f, 0.06f, 0.12f),
-                                glm::vec3(0.35f, 0.4f, 0.5f),
-                                glm::clamp(sunH * 2.0f, 0.0f, 1.0f));
+    glm::vec3 ambient = glm::mix(glm::vec3(0.10f, 0.12f, 0.20f),     // 夜
+                            glm::vec3(0.55f, 0.60f, 0.70f),      // 昼
+                            glm::clamp(sunH * 2.0f, 0.0f, 1.0f));
 
     // ---- 传给渲染器 ----
     renderer->SetLightPosition(sunDir);
