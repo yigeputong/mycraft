@@ -88,6 +88,7 @@ public:
     void ImGuiRenderDrawData() override;
 
     DeviceInfo GetDeviceInfo() const override;
+    void logValidation(VkDebugUtilsMessageSeverityFlagBitsEXT severity, const char* message);
 
 private:
     // ==================== 常量 ====================

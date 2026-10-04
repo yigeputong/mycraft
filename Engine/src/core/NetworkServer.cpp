@@ -67,7 +67,7 @@ bool NetworkServer::SendTo(int clientId, std::span<const uint8_t> data) {
         [clientId](const Client& c) { return c.id == clientId; });
 
     if (it == m_clients.end()) {
-        logWarning(m_logger, "[NetworkServer] Client " << clientId << " not found");
+        logDebug(m_logger, "[NetworkServer] SendTo: client " << clientId << " not found");
         return false;
     }
     return it->channel.Send(data);

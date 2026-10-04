@@ -121,15 +121,33 @@ void VulkanAPI::createInstance() {
     volkLoadInstance(*m_instance);
 }
 
-static VKAPI_ATTR vk::Bool32 VKAPI_CALL vkDebugCb(
-    vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
-    vk::DebugUtilsMessageTypeFlagsEXT type,
-    const vk::DebugUtilsMessengerCallbackDataEXT* data, void*) {
-    if (severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning ||
-        severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) {
-        std::cerr << "[Vulkan] " << data->pMessage << std::endl;
+VKAPI_ATTR vk::Bool32 VKAPI_CALL vkDebugCb(
+    vk::DebugUtilsMessageSeverityFlagBitsEXT      severity,
+    vk::DebugUtilsMessageTypeFlagsEXT             /*type*/,
+    const vk::DebugUtilsMessengerCallbackDataEXT* data,
+    void*                                          userData)
+{
+    auto* api = static_cast<VulkanAPI*>(userData);
+    if (api) {
+        api->logValidation(
+            static_cast<VkDebugUtilsMessageSeverityFlagBitsEXT>(severity),
+            data->pMessage);
     }
     return vk::False;
+}
+
+void VulkanAPI::logValidation(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+                               const char* message) {
+    std::istringstream iss(message);
+    std::string line;
+    while (std::getline(iss, line)) {
+        if (line.empty()) continue;
+        if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+            logError(m_logger, "[VulkanValidation] " << line);
+        } else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+            logWarning(m_logger, "[VulkanValidation] " << line);
+        }
+    }
 }
 
 void VulkanAPI::setupDebugMessenger() {
@@ -140,7 +158,8 @@ void VulkanAPI::setupDebugMessenger() {
         .messageType     = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
                            vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
                            vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation,
-        .pfnUserCallback = &vkDebugCb
+        .pfnUserCallback = &vkDebugCb,
+        .pUserData       = this
     };
     m_debugMessenger = m_instance.createDebugUtilsMessengerEXT(ci);
 }
@@ -1060,7 +1079,11 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath,
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi.vertexBindingDescriptionCount   = 1;
     vi.pVertexBindingDescriptions      = &binding;
-    vi.vertexAttributeDescriptionCount = 4;
+    if (isSky) {
+        vi.vertexAttributeDescriptionCount = 1;
+    } else {
+        vi.vertexAttributeDescriptionCount = 4;
+    }
     vi.pVertexAttributeDescriptions    = attrs;
 
     // ==================== Input assembly ====================
@@ -1202,7 +1225,11 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath,
     return h;
 }
 
-void VulkanAPI::DestroyShader(ShaderHandle h) { m_shaders.erase(h); }
+void VulkanAPI::DestroyShader(ShaderHandle h) {
+    if (!*m_device) return;
+    vkDeviceWaitIdle(*m_device);   // ★ 加这行
+    m_shaders.erase(h);
+}
 
 // ============================================================
 // DrawMesh
@@ -1905,7 +1932,7 @@ bool VulkanAPI::InitImGuiBackend()
     initInfo.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &colorFmt;
 
     if (!ImGui_ImplVulkan_Init(&initInfo)) {
-        logError(m_logger, "ImGui_ImplVulkan_Init failed");
+        logError(m_logger, "[ImGui] ImGui_ImplVulkan_Init failed");
         vkDestroyDescriptorPool(vkDevice, m_imguiDescriptorPool, nullptr);
         m_imguiDescriptorPool = VK_NULL_HANDLE;
         ImGui_ImplSDL3_Shutdown();
@@ -1914,7 +1941,7 @@ bool VulkanAPI::InitImGuiBackend()
     }
 
     m_imguiInitialized = true;
-    logInfo(m_logger, "ImGui Vulkan backend initialized (dynamic rendering)");
+    logInfo(m_logger, "[ImGui] Vulkan backend initialized (dynamic rendering)");
     return true;
 }
 
@@ -1936,7 +1963,7 @@ void VulkanAPI::ShutdownImGuiBackend()
 
     ImGui::DestroyContext();
     m_imguiInitialized = false;
-    logInfo(m_logger, "ImGui Vulkan backend shutdown");
+    logInfo(m_logger, "[ImGui] Vulkan backend shutdown");
 }
 
 void VulkanAPI::ImGuiNewFrame()
