@@ -289,8 +289,10 @@ private:
     static std::vector<char> readFile(const std::string& filename);
     [[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char>& code) const;
     ShaderHandle createShaderInternal(const std::string& vertPath,
-                                      const std::string& fragPath,
-                                      bool isSky);
+                                    const std::string& fragPath,
+                                    bool isSky,
+                                    const char* vertEntry = "main",
+                                    const char* fragEntry = "main");
 };
 
 } // namespace Eng::client

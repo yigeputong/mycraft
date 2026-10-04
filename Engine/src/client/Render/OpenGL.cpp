@@ -439,44 +439,99 @@ TextureHandle OpenGLAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int
     return handle;
 }
 
-ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath, const std::string& fragPath) {
+// 读二进制文件
+static std::vector<char> ReadBinaryFile(const std::string& path) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) return {};
+    auto size = f.tellg();
+    f.seekg(0);
+    std::vector<char> buf(static_cast<size_t>(size));
+    f.read(buf.data(), size);
+    return buf;
+}
+
+// 从 SPIR-V 编译 shader
+static GLuint CompileShaderSPIRV(GLenum stage, const std::vector<char>& spv) {
+    GLuint shader = glCreateShader(stage);
+    glShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V,
+                   spv.data(), static_cast<GLsizei>(spv.size()));
+    glSpecializeShader(shader, "main", 0, nullptr, nullptr);
+
+    GLint ok = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char logBuf[2048];
+        glGetShaderInfoLog(shader, sizeof(logBuf), nullptr, logBuf);
+        // 通过参数把 log 传出去不太好，直接吞掉，外面只看 0
+        glDeleteShader(shader);
+        return 0;
+    }
+    return shader;
+}
+
+ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath,
+                                      const std::string& fragPath) {
     if (!m_initialized) return 0;
 
-    // 读取源码
-    std::string vertSource = ReadFile(vertPath);
-    std::string fragSource = ReadFile(fragPath);
-    if (vertSource.empty() || fragSource.empty()) {
-        logError(m_logger, "[OpenGLAPI] Failed to read shader files.");
+    auto isSPV = [](const std::string& p) {
+        return p.size() > 4 && p.compare(p.size() - 4, 4, ".spv") == 0;
+    };
+
+    GLuint vertex = 0, fragment = 0;
+
+    // ---- 顶点着色器 ----
+    if (isSPV(vertPath)) {
+        auto spv = ReadBinaryFile(vertPath);
+        if (spv.empty()) {
+            logError(m_logger, "[OpenGLAPI] Failed to read SPIR-V: " << vertPath);
+            return 0;
+        }
+        vertex = CompileShaderSPIRV(GL_VERTEX_SHADER, spv);
+    } else {
+        std::string src = ReadFile(vertPath);
+        if (src.empty()) {
+            logError(m_logger, "[OpenGLAPI] Failed to read: " << vertPath);
+            return 0;
+        }
+        vertex = CompileShader(GL_VERTEX_SHADER, src);
+    }
+    if (!vertex) return 0;
+
+    // ---- 片元着色器 ----
+    if (isSPV(fragPath)) {
+        auto spv = ReadBinaryFile(fragPath);
+        if (spv.empty()) {
+            logError(m_logger, "[OpenGLAPI] Failed to read SPIR-V: " << fragPath);
+            glDeleteShader(vertex);
+            return 0;
+        }
+        fragment = CompileShaderSPIRV(GL_FRAGMENT_SHADER, spv);
+    } else {
+        std::string src = ReadFile(fragPath);
+        if (src.empty()) {
+            logError(m_logger, "[OpenGLAPI] Failed to read: " << fragPath);
+            glDeleteShader(vertex);
+            return 0;
+        }
+        fragment = CompileShader(GL_FRAGMENT_SHADER, src);
+    }
+    if (!fragment) {
+        glDeleteShader(vertex);
         return 0;
     }
 
-    // 编译
-    GLuint vertex = CompileShader(GL_VERTEX_SHADER, vertSource);
-    GLuint fragment = CompileShader(GL_FRAGMENT_SHADER, fragSource);
-    if (!vertex || !fragment) {
-        if (vertex) glDeleteShader(vertex);
-        if (fragment) glDeleteShader(fragment);
-        return 0;
-    }
-
-    // 链接
+    // ---- 链接（下面保持你原有代码）----
     GLuint program = LinkProgram(vertex, fragment);
     glDeleteShader(vertex);
     glDeleteShader(fragment);
-
     if (!program) return 0;
 
-    GLuint blockIdx = glGetUniformBlockIndex(program, "GlobalData");
-    GLint blockSize = 0;
-    glGetActiveUniformBlockiv(program, blockIdx, GL_UNIFORM_BLOCK_DATA_SIZE, &blockSize);
     logInfo(m_logger, "[OpenGLAPI] Shader created: " << vertPath);
 
-    // 存储
     ShaderHandle handle = m_nextShaderHandle++;
     ShaderDataInternal internal;
     internal.program = program;
     m_shaders[handle] = internal;
-
     return handle;
 }
 
@@ -634,9 +689,9 @@ void OpenGLAPI::DestroyShader(ShaderHandle handle) {
 Framebuffer OpenGLAPI::CreateFramebuffer(int width, int height) {
     // ---------- 全屏 quad 初始化（保持不变）----------
     if (!m_fullscreenShader)
-        m_fullscreenShader = CreateShader(
-            "./assets/shaders/Engine/OpenGL/fb/fb.vert",
-            "./assets/shaders/Engine/OpenGL/fb/fb.frag");
+    m_fullscreenShader = CreateShader(
+        "./assets/shaders/build/post/vert.gl.spv",
+        "./assets/shaders/build/post/frag.gl.spv");
 
     static float vertices[] = {
         -1.0f,  1.0f,   0.0f, 1.0f,

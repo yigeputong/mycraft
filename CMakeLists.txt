@@ -38,69 +38,52 @@ add_compile_definitions(
     VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 )
 
-if(DEFINED ENV{VULKAN_SDK})
-    set(_slangc_hints "$ENV{VULKAN_SDK}/Bin")
-else()
-    set(_slangc_hints "")
+# 找 glslc
+find_program(GLSLC_EXECUTABLE glslc HINTS "$ENV{VULKAN_SDK}/Bin")
+if(NOT GLSLC_EXECUTABLE)
+    message(FATAL_ERROR "glslc not found")
 endif()
+message(STATUS "glslc: ${GLSLC_EXECUTABLE}")
 
-find_program(SLANGC_EXECUTABLE
-    NAMES slangc slangc.exe
-    HINTS ${_slangc_hints}
-    REQUIRED
-)
-message(STATUS "slangc: ${SLANGC_EXECUTABLE}")
-
-function(add_slang_shader_target TARGET)
-    cmake_parse_arguments("SHADER" "" "NAME" "SOURCES" ${ARGN})
-    set(OUT_DIR ${CMAKE_BINARY_DIR}/Debug/assets/shaders/build/${SHADER_NAME})
+# 通用函数：编译 GLSL → 双 SPIR-V
+function(add_glsl_shader TARGET NAME)
+    set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/src)
+    set(OUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/build/${NAME})
     file(MAKE_DIRECTORY ${OUT_DIR})
 
-    set(VERT_SPV  ${OUT_DIR}/vert.spv)
-    set(FRAG_SPV  ${OUT_DIR}/frag.spv)
-    set(VERT_GLSL ${OUT_DIR}/vert.glsl)
-    set(FRAG_GLSL ${OUT_DIR}/frag.glsl)
+    set(VERT_GLSL ${SRC_DIR}/${NAME}.vert)
+    set(FRAG_GLSL ${SRC_DIR}/${NAME}.frag)
+    set(VERT_VK   ${OUT_DIR}/vert.vk.spv)
+    set(FRAG_VK   ${OUT_DIR}/frag.vk.spv)
+    set(VERT_GL   ${OUT_DIR}/vert.gl.spv)
+    set(FRAG_GL   ${OUT_DIR}/frag.gl.spv)
 
-    set(SLANG_SPV
-        -target spirv -profile spirv_1_4
-        -emit-spirv-directly -fvk-use-entrypoint-name
-        -matrix-layout-column-major)
+    # Vulkan 版
+    add_custom_command(OUTPUT ${VERT_VK}
+        COMMAND ${GLSLC_EXECUTABLE} --target-env=vulkan1.2
+                ${VERT_GLSL} -o ${VERT_VK}
+        DEPENDS ${VERT_GLSL} VERBATIM
+        COMMENT "VK vert: ${NAME}")
+    add_custom_command(OUTPUT ${FRAG_VK}
+        COMMAND ${GLSLC_EXECUTABLE} --target-env=vulkan1.2
+                ${FRAG_GLSL} -o ${FRAG_VK}
+        DEPENDS ${FRAG_GLSL} VERBATIM
+        COMMENT "VK frag: ${NAME}")
 
-    set(SLANG_GLSL
-        -target glsl -profile glsl_460
-        -matrix-layout-column-major)
-
-    foreach(PAIR "VERT;vertMain;${VERT_SPV};${VERT_GLSL}"
-                  "FRAG;fragMain;${FRAG_SPV};${FRAG_GLSL}")
-        # 简化写法，展开两条命令
-    endforeach()
-
-    # Vulkan 产物
-    add_custom_command(OUTPUT ${VERT_SPV}
-        COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES}
-            ${SLANG_SPV} -entry vertMain -o ${VERT_SPV}
-        DEPENDS ${SHADER_SOURCES} VERBATIM
-        COMMENT "SPIR-V vert: ${SHADER_NAME}")
-    add_custom_command(OUTPUT ${FRAG_SPV}
-        COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES}
-            ${SLANG_SPV} -entry fragMain -o ${FRAG_SPV}
-        DEPENDS ${SHADER_SOURCES} VERBATIM
-        COMMENT "SPIR-V frag: ${SHADER_NAME}")
-
-    # OpenGL 产物
-    add_custom_command(OUTPUT ${VERT_GLSL}
-        COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES}
-            ${SLANG_GLSL} -DGL_TARGET -entry vertMain -o ${VERT_GLSL}
-        DEPENDS ${SHADER_SOURCES} VERBATIM
-        COMMENT "GLSL vert: ${SHADER_NAME}")
-    add_custom_command(OUTPUT ${FRAG_GLSL}
-        COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES}
-            ${SLANG_GLSL} -DGL_TARGET -entry fragMain -o ${FRAG_GLSL}
-        DEPENDS ${SHADER_SOURCES} VERBATIM
-        COMMENT "GLSL frag: ${SHADER_NAME}")
+    # OpenGL 版
+    add_custom_command(OUTPUT ${VERT_GL}
+        COMMAND ${GLSLC_EXECUTABLE} -DUSE_OPENGL --target-env=opengl4.5
+                ${VERT_GLSL} -o ${VERT_GL}
+        DEPENDS ${VERT_GLSL} VERBATIM
+        COMMENT "GL vert: ${NAME}")
+    add_custom_command(OUTPUT ${FRAG_GL}
+        COMMAND ${GLSLC_EXECUTABLE} -DUSE_OPENGL --target-env=opengl4.5
+                ${FRAG_GLSL} -o ${FRAG_GL}
+        DEPENDS ${FRAG_GLSL} VERBATIM
+        COMMENT "GL frag: ${NAME}")
 
     add_custom_target(${TARGET} DEPENDS
-        ${VERT_SPV} ${FRAG_SPV} ${VERT_GLSL} ${FRAG_GLSL})
+        ${VERT_VK} ${FRAG_VK} ${VERT_GL} ${FRAG_GL})
 endfunction()
 
 add_subdirectory(Engine)

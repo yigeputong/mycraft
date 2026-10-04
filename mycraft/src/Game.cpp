@@ -95,10 +95,7 @@ namespace game {
 void MyGame::OnStart(Eng::Engine& engine) {
     if (!logger) {
         logger = std::make_unique<Eng::Log>();
-        // 或者从 engine 取
-        // logger = engine.GetLogger();  // 看 Engine 的 API
     }
-    logDebug(logger, "[DBG] OnStart entered, m_server.get()=" << m_server.get());
     m_server = std::make_unique<game::server::GameServer>();
     if (!m_server->Start(25565)) {              // ← 这里
         logError(logger, "[Game] Failed to start server");
@@ -174,15 +171,13 @@ void MyGame::OnStart(Eng::Engine& engine) {
 
     if (useVulkan) {
         m_cubeShader = renderer->CreateShader(
-            "./assets/shaders/build/mesh/vert.spv",
-            "./assets/shaders/build/mesh/frag.spv");
+            "./assets/shaders/build/mesh/vert.vk.spv",
+            "./assets/shaders/build/mesh/frag.vk.spv");
     } else {
         m_cubeShader = renderer->CreateShader(
-            "./assets/shaders/OpenGL/model/model.vert",   // ← 手写
-            "./assets/shaders/OpenGL/model/model.frag");
+            "./assets/shaders/build/mesh/vert.gl.spv",
+            "./assets/shaders/build/mesh/frag.gl.spv");
     }
-    // m_cubeTexture = renderer->CreateTexture("./assets/textures/stone.png");
-    // m_cubeMaterial.diffuse = m_cubeTexture;
 
     fbo = renderer->CreateFramebuffer(mainWin->GetConfigs().windowWidth, mainWin->GetConfigs().windowHeight);
     if (!fbo.isValid()) {
@@ -199,12 +194,12 @@ void MyGame::OnStart(Eng::Engine& engine) {
     // m_skyShader 段替换（改成 CreateSkybox）
     if (useVulkan) {
         m_skyShader = renderer->CreateSkybox(
-            "./assets/shaders/build/sky/vert.spv",
-            "./assets/shaders/build/sky/frag.spv");
+            "./assets/shaders/build/sky/vert.vk.spv",
+            "./assets/shaders/build/sky/frag.vk.spv");
     } else {
         m_skyShader = renderer->CreateSkybox(
-            "./assets/shaders/OpenGL/sky/sky.vert",       // ← 手写
-            "./assets/shaders/OpenGL/sky/sky.frag");
+            "./assets/shaders/build/sky/vert.gl.spv",
+            "./assets/shaders/build/sky/frag.gl.spv");
     }
 }
 

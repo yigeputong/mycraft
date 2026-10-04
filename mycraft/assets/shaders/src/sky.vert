@@ -2,17 +2,17 @@
 
 layout(location = 0) in vec3 aPos;
 
-out vec3 vDir;
+layout(location = 0) out vec3 vDir;
 
 layout (std140, binding = 0) uniform GlobalData {
     mat4 uView;
     mat4 uProjection;
     vec3 uViewPos;
-    float aoStrength;      // 原 _pad0
+    float aoStrength;
     vec3 uLightDir;
     float uLightIntensity;
     vec3 uLightColor;
-    float timeOfDay;       // 原 _pad1
+    float timeOfDay;
     vec3 uLightAmbient;
     float _pad2;
 };

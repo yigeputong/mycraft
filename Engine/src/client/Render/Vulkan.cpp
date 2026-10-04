@@ -310,12 +310,12 @@ void VulkanAPI::createVmaAllocator() {
 }
 
 void VulkanAPI::createFullscreenPipeline() {
-    m_fullscreenVert = createShaderModule(readFile("assets/shaders/build/post/vert.spv"));
-    m_fullscreenFrag = createShaderModule(readFile("assets/shaders/build/post/frag.spv"));
+    m_fullscreenVert = createShaderModule(readFile("assets/shaders/build/post/vert.vk.spv"));
+    m_fullscreenFrag = createShaderModule(readFile("assets/shaders/build/post/frag.vk.spv"));
 
     vk::PipelineShaderStageCreateInfo stages[] = {
-        {.stage = vk::ShaderStageFlagBits::eVertex,   .module = *m_fullscreenVert, .pName = "vertMain"},
-        {.stage = vk::ShaderStageFlagBits::eFragment, .module = *m_fullscreenFrag, .pName = "fragMain"}
+        {.stage = vk::ShaderStageFlagBits::eVertex,   .module = *m_fullscreenVert, .pName = "main"},
+        {.stage = vk::ShaderStageFlagBits::eFragment, .module = *m_fullscreenFrag, .pName = "main"}
     };
 
     vk::PipelineVertexInputStateCreateInfo vi{};   // 空 —— 顶点从 SV_VertexID 来
@@ -1019,12 +1019,15 @@ ShaderHandle VulkanAPI::CreateShader(const std::string& vertPath,
 
 ShaderHandle VulkanAPI::CreateSkybox(const std::string& vertPath,
                                       const std::string& fragPath) {
-    return createShaderInternal(vertPath, fragPath, /*isSky=*/true);
+    return createShaderInternal(vertPath, fragPath, /*isSky=*/true,
+                                "main", "main");
 }
 
 ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath,
-                                              const std::string& fragPath,
-                                              bool isSky) {
+                                   const std::string& fragPath,
+                                   bool isSky,
+                                   const char* vertEntry,
+                                   const char* fragEntry) {
     ShaderInternal si;
     si.vertModule = createShaderModule(readFile(vertPath));
     si.fragModule = createShaderModule(readFile(fragPath));
@@ -1034,12 +1037,12 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath,
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
     stages[0].module = *si.vertModule;
-    stages[0].pName  = "vertMain";
+    stages[0].pName  = vertEntry;
 
     stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = *si.fragModule;
-    stages[1].pName  = "fragMain";
+    stages[1].pName  = fragEntry;
 
     // ==================== Vertex input ====================
     VkVertexInputBindingDescription binding{};

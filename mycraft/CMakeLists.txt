@@ -11,22 +11,12 @@ target_include_directories(mycraft PRIVATE
 
 target_link_libraries(mycraft PRIVATE engine)
 
-add_slang_shader_target(slang_mesh
-    NAME mesh
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/src/mesh.slang)
-add_slang_shader_target(slang_sky
-    NAME sky
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/src/sky.slang)
-add_slang_shader_target(slang_post
-    NAME post
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/src/post.slang)
-
 # shader 编译产物的同步 target —— 每次 build 都跑
 add_custom_target(copy_shaders ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/build
         $<TARGET_FILE_DIR:mycraft>/assets/shaders/build
-    DEPENDS slang_mesh slang_sky slang_post
+    DEPENDS shader_mesh shader_sky shader_post
     COMMENT "Copying shaders to output directory"
 )
 
@@ -37,6 +27,9 @@ add_custom_command(TARGET mycraft POST_BUILD
         $<TARGET_FILE_DIR:mycraft>/assets
     COMMENT "Copying assets to output directory"
 )
+add_glsl_shader(shader_mesh mesh)
+add_glsl_shader(shader_sky sky)
+add_glsl_shader(shader_post post)
 
 # 保证 mycraft 链接在 shader 编完之后（保持现状也行）
-add_dependencies(mycraft slang_mesh slang_sky slang_post)
+add_dependencies(mycraft shader_mesh shader_sky shader_post)
