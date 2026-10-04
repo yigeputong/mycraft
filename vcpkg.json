@@ -4,17 +4,20 @@
     "glad",
     "glm",
     "nlohmann-json",
-    "sdl3",
+
+    {
+      "name": "sdl3",
+      "features": ["vulkan"]
+    },
     {
       "name": "sdl3-image",
-      "features": [
-        "jpeg",
-        "png"
-      ]
+      "features": ["jpeg", "png"]
     },
+    "sdl3-net",
+
     "volk",
     "vulkan-headers",
     "vulkan-loader",
-    "sdl3-net"
+    "vulkan-memory-allocator"
   ]
 }

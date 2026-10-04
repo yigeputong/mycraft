@@ -31,19 +31,12 @@ private:
     Eng::client::ShaderHandle   m_fbShader;
     Eng::client::Framebuffer    fbo;
     Eng::client::ShaderHandle   m_skyShader;
-    Eng::client::Model          m_model;        // 遗留测试模型
-    struct SceneObject {
-        Eng::client::Model model;
-        glm::vec3 position{0.0f};
-        glm::vec3 rotation{0.0f};   // 欧拉角，度
-        glm::vec3 scale{1.0f};
-        bool visible = true;
-    };
-    std::vector<SceneObject>    m_objects;      // 场景对象（遗留）
+
+    Eng::client::DeviceInfo     m_deviceInfo;
 
     // ==================== 网络 ====================
     Eng::NetworkChannel  m_client;
-    std::unique_ptr<game::server::GameServer> m_server;
+    std::unique_ptr<game::server::GameServer> m_server = nullptr;
     uint32_t m_myClientId = 0;
     std::vector<net::PlayerState> m_otherPlayers;
 

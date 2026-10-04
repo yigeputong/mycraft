@@ -11,11 +11,11 @@ layout (std140, binding = 0) uniform GlobalData {
     mat4 uView;
     mat4 uProjection;
     vec3 uViewPos;
-    float _pad0;
+    float aoStrength;      // 原 _pad0
     vec3 uLightDir;
     float uLightIntensity;
     vec3 uLightColor;
-    float _pad1;
+    float timeOfDay;       // 原 _pad1
     vec3 uLightAmbient;
     float _pad2;
 };

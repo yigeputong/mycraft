@@ -94,8 +94,14 @@ int TileForBlock(game::BlockType b, int face) {
 namespace game {
 
 void MyGame::OnStart(Eng::Engine& engine) {
+    if (!logger) {
+        logger = std::make_unique<Eng::Log>();
+        // 或者从 engine 取
+        // logger = engine.GetLogger();  // 看 Engine 的 API
+    }
+    logDebug(logger, "[DBG] OnStart entered, m_server.get()=" << m_server.get());
     m_server = std::make_unique<game::server::GameServer>();
-    if (!m_server->Start(25565)) {
+    if (!m_server->Start(25565)) {              // ← 这里
         logError(logger, "[Game] Failed to start server");
         return;
     }
@@ -108,8 +114,11 @@ void MyGame::OnStart(Eng::Engine& engine) {
     logInfo(logger, "[Game] Connected to server");
 
 
+    const Eng::client::RenderAPItype apiType = Eng::client::RenderAPItype::VULKAN;
+    const bool useVulkan = (apiType == Eng::client::RenderAPItype::VULKAN);
+
     Eng::client::WindowConfig windowConfig = {
-        .apitype = Eng::client::RenderAPItype::OPENGL,
+        .apitype = apiType,
         .title = "Mycraft v0.0.0",
         .windowWidth = 1280,
         .windowHeight = 720
@@ -121,20 +130,19 @@ void MyGame::OnStart(Eng::Engine& engine) {
 
     renderer = mainWin->GetAPI();
     renderer->Initialize(mainWin->GetConfigs().windowWidth, mainWin->GetConfigs().windowHeight, mainWin);
+    m_deviceInfo = renderer->GetDeviceInfo();
+    logInfo(logger, "[RenderAPI] Backend:     " << m_deviceInfo.backend);
+    logInfo(logger, "[RenderAPI] Device:      " << m_deviceInfo.deviceName);
+    logInfo(logger, "[RenderAPI] Vendor:      " << m_deviceInfo.vendor);
+    logInfo(logger, "[RenderAPI] API version: " << m_deviceInfo.apiVersion);
+    logInfo(logger, "[RenderAPI] Driver:      " << m_deviceInfo.driverVersion);
+    logInfo(logger, "[RenderAPI] Shader lang: " << m_deviceInfo.shadingLanguage);
     renderer->SetClearColor(0.125f,0.125f,0.125f,0.0f);
 
     Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), true);
 
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    if (!ImGui_ImplSDL3_InitForOpenGL(mainWin->GetSDLWindow(), mainWin->GetGLContext())) {
-        logError(logger, "ImGui_ImplSDL3_InitForOpenGL failed!");
-        return;
-    }
-    if (!ImGui_ImplOpenGL3_Init("#version 460 core")) {
-        logError(logger, "ImGui_ImplOpenGL3_Init failed!");
+    if (!renderer->InitImGuiBackend()) {
+        logError(logger, "ImGui backend init failed");
         return;
     }
 
@@ -165,23 +173,17 @@ void MyGame::OnStart(Eng::Engine& engine) {
         pixels.data(), ATLAS_W, ATLAS_H);
     logInfo(logger, "[MyGame] atlas texture handle=" << m_atlasTexture);
 
-    m_cubeShader = renderer->CreateShader("./assets/shaders/OpenGL/model/model.vert", "./assets/shaders/OpenGL/model/model.frag");
+    if (useVulkan) {
+        m_cubeShader = renderer->CreateShader(
+            "./assets/shaders/build/mesh/vert.spv",
+            "./assets/shaders/build/mesh/frag.spv");
+    } else {
+        m_cubeShader = renderer->CreateShader(
+            "./assets/shaders/OpenGL/model/model.vert",   // ← 手写
+            "./assets/shaders/OpenGL/model/model.frag");
+    }
     // m_cubeTexture = renderer->CreateTexture("./assets/textures/stone.png");
     // m_cubeMaterial.diffuse = m_cubeTexture;
-
-    m_model = renderer->LoadModel("./assets/objects/testBlock0.obj");
-    m_model.subMeshes[0].diffuseTexture = m_atlasTexture;
-
-    constexpr int SIZE = 16;
-    for (int x = 0; x < SIZE; ++x) {
-        for (int z = 0; z < SIZE; ++z) {
-            SceneObject obj;
-            obj.model = m_model;
-            obj.position = glm::vec3(x, 0.0f, z);
-            obj.scale = glm::vec3(1.0f);
-            m_objects.push_back(obj);
-        }
-    }
 
     fbo = renderer->CreateFramebuffer(mainWin->GetConfigs().windowWidth, mainWin->GetConfigs().windowHeight);
     if (!fbo.isValid()) {
@@ -195,7 +197,16 @@ void MyGame::OnStart(Eng::Engine& engine) {
         "./assets/textures/skybox/front.jpg",
         "./assets/textures/skybox/back.jpg"
     };
-    m_skyShader = renderer->CreateShader("./assets/shaders/OpenGL/sky/sky.vert", "./assets/shaders/OpenGL/sky/sky.frag");
+    // m_skyShader 段替换（改成 CreateSkybox）
+    if (useVulkan) {
+        m_skyShader = renderer->CreateSkybox(
+            "./assets/shaders/build/sky/vert.spv",
+            "./assets/shaders/build/sky/frag.spv");
+    } else {
+        m_skyShader = renderer->CreateSkybox(
+            "./assets/shaders/OpenGL/sky/sky.vert",       // ← 手写
+            "./assets/shaders/OpenGL/sky/sky.frag");
+    }
 }
 
 bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
@@ -294,19 +305,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
 
         renderer->SetViewMatrix(view);
         renderer->SetProjectionMatrix(projection);
-        renderer->SetLightPosition({1.0f, 2.0f, 3.0f});
         renderer->SetViewPosition(cameraPos);
-
-        std::vector<glm::mat4> transforms;
-        transforms.reserve(m_objects.size());
-
-        for (const auto& obj : m_objects) {
-            glm::mat4 model = glm::mat4(1.0f);
-            model = glm::translate(model, obj.position);
-            model = glm::rotate(model, glm::radians(obj.rotation.y), glm::vec3(0, 1, 0));
-            model = glm::scale(model, obj.scale);
-            transforms.push_back(model);
-        }
 
         Eng::client::Material mat;
         mat.diffuse = m_atlasTexture;
@@ -335,8 +334,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
 }
 
 void MyGame::DrawUI(Eng::Engine& engine) {
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplSDL3_NewFrame();
+    renderer->ImGuiNewFrame();
     ImGui::NewFrame();
 
     // 准心
@@ -407,6 +405,13 @@ void MyGame::DrawUI(Eng::Engine& engine) {
             int hh = (int)m_timeOfDay;
             int mm = (int)((m_timeOfDay - hh) * 60);
             ImGui::Text("Time: %02d:%02d", hh, mm);
+            ImGui::Separator();
+            ImGui::Text("Backend: %s", m_deviceInfo.backend.c_str());
+            ImGui::Text("GPU: %s", m_deviceInfo.deviceName.c_str());
+            ImGui::Text("Vendor: %s", m_deviceInfo.vendor.c_str());
+            ImGui::Text("API: %s", m_deviceInfo.apiVersion.c_str());
+            ImGui::Text("Driver: %s", m_deviceInfo.driverVersion.c_str());
+            ImGui::Text("Shader lang: %s", m_deviceInfo.shadingLanguage.c_str());
         }
         ImGui::End();
     }
@@ -462,9 +467,6 @@ void MyGame::DrawUI(Eng::Engine& engine) {
         }
         ImGui::End();
     }
-
-    ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
 bool MyGame::GetInput(float dt) {
@@ -587,9 +589,10 @@ void MyGame::OnShutdown(Eng::Engine& engine) {
     // renderer->DestroyTexture(m_cubeTexture);
     renderer->DestroyShader(m_fbShader);
     renderer->DestroyShader(m_skyShader);
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplSDL3_Shutdown();
-    ImGui::DestroyContext();
+
+    // ★ 统一走后端接口
+    renderer->ShutdownImGuiBackend();
+
     winMgr->DestroyWindow(m_win);
 }
 

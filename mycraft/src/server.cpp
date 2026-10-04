@@ -6,6 +6,7 @@
 #include "game/Protocol.h"
 #include "game/server/WorldGenerator.h"
 #include "game/core/RayCast.h"
+#include "game/core/Physics.h"
 #include <SDL3/SDL.h>
 #include <chrono>
 

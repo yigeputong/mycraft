@@ -1,16 +1,20 @@
 #include "client/Render/OpenGLAPI.h"
+#include "client/Window.h"
+#include "core/Log.h"
+
 #include <iostream>
 #include <filesystem>
 #include <vector>
 #include <fstream>
 #include <sstream>
+
 #include <SDL3/SDL_video.h>
 #include <SDL3_image/SDL_image.h>
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
-#include "client/Window.h"
-#include "core/Log.h"
+#include <imgui_impl_sdl3.h>
+#include <imgui_impl_opengl3.h>
 
 #define CHECK_GL(tag) do { \
     GLenum e; \
@@ -46,8 +50,7 @@ bool OpenGLAPI::Initialize(int width, int height, Window* window) {
     m_viewportHeight = height;
     m_initialized = true;
 
-    std::string version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
-    m_logger->log(LogLevel::INFO, "[OpenGLAPI] Initialized (OpenGL " + version + ")");
+    m_logger->log(LogLevel::INFO, "[OpenGLAPI] Initialized");
 
     // 默认纹理
     m_defaultTexture = CreateTexture("./assets/textures/missing_texture.png");
@@ -477,6 +480,10 @@ ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath, const std::str
     return handle;
 }
 
+ShaderHandle OpenGLAPI::CreateSkybox(const std::string& vertPath, const std::string& fragPath) {
+    return CreateShader(vertPath, fragPath);
+}
+
 Model OpenGLAPI::LoadModel(const std::string& path, bool flipUV) {
     Model result;
     Assimp::Importer importer;
@@ -779,13 +786,19 @@ void OpenGLAPI::SetUniform(ShaderHandle shader, const std::string& name, const g
 }
 
 void OpenGLAPI::SetUniform(ShaderHandle shader, const std::string& name, float value) {
-    auto it = m_shaders.find(shader);
-    if (it == m_shaders.end() || !it->second.program) return;
-    glUseProgram(it->second.program);
-    GLint loc = glGetUniformLocation(it->second.program, name.c_str());
-    if (loc == -1) return;
-    glUniform1f(loc, value);
-    CHECK_GL("SetUniform(float)");
+    if (name == "uAOStrength") {
+        m_aoStrength = value;
+    } else if (name == "uTimeOfDay") {
+        m_timeOfDay  = value;
+    } else {
+        auto it = m_shaders.find(shader);
+        if (it == m_shaders.end() || !it->second.program) return;
+        glUseProgram(it->second.program);
+        GLint loc = glGetUniformLocation(it->second.program, name.c_str());
+        if (loc == -1) return;
+        glUniform1f(loc, value);
+        CHECK_GL("SetUniform(float)");
+    }
 }
 
 void OpenGLAPI::SetUniform(ShaderHandle shader, const std::string& name, int value) {
@@ -964,6 +977,8 @@ void OpenGLAPI::DrawFullscreenQuad(TextureHandle textureID) {
 }
 
 void OpenGLAPI::EndFrame() {
+    ImGui::Render();
+    ImGuiRenderDrawData();
     SDL_GL_SwapWindow(m_window->GetSDLWindow());
 }
 
@@ -1022,15 +1037,18 @@ void OpenGLAPI::UpdateGlobalUBO() {
         logError(m_logger, "[OpenGLAPI] m_globalUBO == 0!");
         return;
     }
+
     Eng::client::GlobalUBOData data;
     data.view           = m_viewMatrix;
     data.projection     = m_projectionMatrix;
     data.viewPos        = m_viewPos;
-    data._pad0          = 0.0f;
+    data.aoStrength     = m_aoStrength;       // 原 _pad0
     data.lightDir       = glm::normalize(m_lightDir);
     data.lightIntensity = m_lightIntensity;
     data.lightColor     = m_lightColor;
+    data.timeOfDay      = m_timeOfDay;        // 原 _pad1
     data.lightAmbient   = m_lightAmbient;
+    data._pad2          = 0.0f;
 
     glBindBuffer(GL_UNIFORM_BUFFER, m_globalUBO);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(data), &data);
@@ -1085,6 +1103,60 @@ MeshHandle OpenGLAPI::GetSkyCubeMesh() {
     // indices 留空 → glDrawArrays
     m_skyCubeMesh = CreateMesh(md);
     return m_skyCubeMesh;
+}
+
+// ---------- ImGui ----------
+bool OpenGLAPI::InitImGuiBackend() {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    if (!ImGui_ImplSDL3_InitForOpenGL(m_window->GetSDLWindow(), m_window->GetGLContext()))
+        return false;
+    if (!ImGui_ImplOpenGL3_Init("#version 460 core"))
+        return false;
+    return true;
+}
+
+void OpenGLAPI::ShutdownImGuiBackend() {
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+}
+
+void OpenGLAPI::ImGuiNewFrame() {
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
+}
+
+void OpenGLAPI::ImGuiRenderDrawData() {
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+
+DeviceInfo OpenGLAPI::GetDeviceInfo() const {
+    DeviceInfo info;
+    info.backend = "OpenGL";
+
+    auto getStr = [](GLenum e) -> std::string {
+        auto p = glGetString(e);
+        return p ? reinterpret_cast<const char*>(p) : "(null)";
+    };
+
+    info.deviceName = getStr(GL_RENDERER);
+    info.vendor     = getStr(GL_VENDOR);
+
+    GLint major = 0, minor = 0;
+    glGetIntegerv(GL_MAJOR_VERSION, &major);
+    glGetIntegerv(GL_MINOR_VERSION, &minor);
+    info.apiVersion = std::to_string(major) + "." + std::to_string(minor);
+
+    std::string glVersion = getStr(GL_VERSION);
+    info.extra        = glVersion;
+    info.driverVersion = glVersion;                   // 不做厂商特化解析
+
+    std::string glsl = getStr(GL_SHADING_LANGUAGE_VERSION);
+    info.shadingLanguage = "GLSL " + glsl;
+
+    return info;
 }
     
 } // namespace Eng

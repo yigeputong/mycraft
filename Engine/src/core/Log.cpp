@@ -14,8 +14,9 @@ std::string GetTime() {
     auto secs = floor<seconds>(now);
     auto ms = duration_cast<milliseconds>(now - secs);
 
-    // 转本地时区
-    auto local = zoned_time{current_zone(), secs};
+    // 转本地时区(static避免竞态)
+    static const auto tz = current_zone();
+    auto local = zoned_time{tz, secs};
 
     return std::format("{:%m-%d %H:%M:%S}.{:03d}",
                        local.get_local_time(), ms.count());

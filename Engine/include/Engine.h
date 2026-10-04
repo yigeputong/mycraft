@@ -59,7 +59,7 @@ private:
     Engine() = default;
     std::unique_ptr<IGame> m_game;
     std::unique_ptr<client::WindowManager> m_windowManager;
-    std::unique_ptr<Log> m_logger = std::make_unique<Log>("Engine.log");
+    std::unique_ptr<Log> m_logger = std::make_unique<Log>();
 
     bool m_running = false;
     float m_deltaTime = 0.0f;

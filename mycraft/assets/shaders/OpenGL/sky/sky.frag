@@ -1,9 +1,20 @@
 #version 460 core
 
+layout (std140, binding = 0) uniform GlobalData {
+    mat4 uView;
+    mat4 uProjection;
+    vec3 uViewPos;
+    float aoStrength;      // 原 _pad0
+    vec3 uLightDir;
+    float uLightIntensity;
+    vec3 uLightColor;
+    float timeOfDay;       // 原 _pad1
+    vec3 uLightAmbient;
+    float _pad2;
+};
+
 in vec3 vDir;
 out vec4 FragColor;
-
-uniform float uTimeOfDay;   // 0~24
 
 // 太阳方向：6 点从东边升起，18 点从西边落下
 vec3 ComputeSunDir(float t) {
@@ -20,7 +31,7 @@ float hash13(vec3 p) {
 
 void main() {
     vec3 dir = normalize(vDir);
-    vec3 sunDir = ComputeSunDir(uTimeOfDay);
+    vec3 sunDir = ComputeSunDir(timeOfDay);
 
     float sunH = sunDir.y;                          // -1 ~ 1
     float dayFactor = clamp(sunH * 2.0, 0.0, 1.0);  // 0 夜，1 昼

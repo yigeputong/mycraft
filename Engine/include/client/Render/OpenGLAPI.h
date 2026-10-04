@@ -40,6 +40,7 @@ public:
     TextureHandle CreateTextureFromMemory(const aiTexture* embedded) override;
     TextureHandle CreateTextureFromPixels(const uint8_t* rgba, int w, int h) override;
     ShaderHandle CreateShader(const std::string& vertPath, const std::string& fragPath) override;
+    ShaderHandle CreateSkybox(const std::string& vertPath, const std::string& fragPath) override;
     Model LoadModel(const std::string& path, bool flipUV = false) override;
 
     // 资源销毁
@@ -71,6 +72,12 @@ public:
     void DrawFullscreenQuad(TextureHandle textureID) override;
     void EndFrame() override;
 
+    bool InitImGuiBackend() override;
+    void ShutdownImGuiBackend() override;
+    void ImGuiNewFrame() override;
+    void ImGuiRenderDrawData() override;
+
+    DeviceInfo GetDeviceInfo() const override;
 
     static constexpr int api_major = 4;
     static constexpr int api_minor = 6;
@@ -138,6 +145,8 @@ private:
     glm::vec3 m_lightColor     = glm::vec3(1.0f, 0.98f, 0.9f);    // 略暖的白
     glm::vec3 m_lightAmbient   = glm::vec3(0.3f);
     float     m_lightIntensity = 1.0f;
+    float     m_aoStrength = 1.0f;
+    float     m_timeOfDay  = 0.25f;
 
     // UBO
     GLuint m_globalUBO   = 0;   // binding = 0，存相机 + 光源
@@ -152,7 +161,8 @@ private:
     ShaderHandle m_fullscreenShader = 0;
 
     // 记录日志
-    std::unique_ptr<Log> m_logger = std::make_unique<Log>("OpenGL.log");
+    std::unique_ptr<Log> m_logger = std::make_unique<Log>();
+    DeviceInfo m_deviceInfo;
 
     // 视口和清屏
     Window* m_window;

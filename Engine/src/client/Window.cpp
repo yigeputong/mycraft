@@ -1,5 +1,6 @@
 #include "client/Window.h"
 #include "client/Render/OpenGLAPI.h"
+#include "client/Render/VulkanAPI.h"
 #include <SDL3/SDL_video.h>
 #include <glad/glad.h>
 #include <fstream>
@@ -73,6 +74,8 @@ bool Window::CreateWindow() {
     switch(m_config.apitype) {
     case RenderAPItype::OPENGL:
         return CreateOpenGLWindow();
+    case RenderAPItype::VULKAN:
+        return CreateVulkanWindow();
     default:
         return CreateOpenGLWindow();
     }
@@ -114,21 +117,21 @@ bool Window::CreateOpenGLWindow() {
     return true;
 }
 
-// bool Window::CreateVulkanWindow() {
-//     m_window = SDL_CreateWindow(
-//         m_config.title.c_str(),
-//         m_config.windowWidth,
-//         m_config.windowHeight,
-//         SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
-//     );
+bool Window::CreateVulkanWindow() {
+    m_window = SDL_CreateWindow(
+        m_config.title.c_str(),
+        m_config.windowWidth,
+        m_config.windowHeight,
+        SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
+    );
 
-//     if (!m_window) {
-//         SDL_Log("SDL_CreateWindow Error: %s", SDL_GetError());
-//         return false;
-//     }
+    if (!m_window) {
+        SDL_Log("SDL_CreateWindow Error: %s", SDL_GetError());
+        return false;
+    }
 
-//     m_renderapi = std::make_unique<VulkanAPI>();
-//     return true;
-// }
+    m_renderapi = std::make_unique<VulkanAPI>();
+    return true;
+}
 
 }

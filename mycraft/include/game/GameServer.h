@@ -4,7 +4,6 @@
 #include "core/World.h"
 #include "game/server/WorldGenerator.h"
 #include "game/Protocol.h"
-#include "game/core/Physics.h"
 #include <memory>
 #include <thread>
 #include <atomic>

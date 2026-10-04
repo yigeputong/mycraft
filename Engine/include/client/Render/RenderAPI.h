@@ -5,7 +5,6 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <string>
-#include "core/Configs.h"
 
 struct aiTexture;
 
@@ -62,16 +61,26 @@ struct Framebuffer {
     bool isValid() const { return handle != 0; }
 };
 
+struct DeviceInfo {
+    std::string backend = "Unknown";          // "OpenGL" / "Vulkan"
+    std::string deviceName = "Unknown";       // "NVIDIA GeForce RTX 5060 Laptop GPU"
+    std::string vendor = "Unknown";           // "NVIDIA" / "NVIDIA Corporation"
+    std::string apiVersion = "Unknown";       // "4.6" / "1.4.351"
+    std::string driverVersion = "Unknown";    // "617.14" / "4.6.0 NVIDIA 617.14"
+    std::string shadingLanguage = "Unknown";  // "GLSL 4.60" / "SPIR-V 1.4"
+    std::string extra = "Unknown";            // 后备：原始 version 串，供人肉对比
+};
+
 // ============ Global UBO (binding = 0) ============
 struct GlobalUBOData {
     glm::mat4 view;
     glm::mat4 projection;
     glm::vec3 viewPos;
-    float     _pad0;
+    float     aoStrength;      // 原 _pad0
     glm::vec3 lightDir;
     float     lightIntensity;
     glm::vec3 lightColor;
-    float     _pad1;
+    float     timeOfDay;       // 原 _pad1
     glm::vec3 lightAmbient;
     float     _pad2;
 };
@@ -113,6 +122,7 @@ public:
     virtual TextureHandle CreateTextureFromMemory(const aiTexture* embedded) = 0;
     virtual TextureHandle CreateTextureFromPixels(const uint8_t* rgba, int w, int h) = 0;
     virtual ShaderHandle CreateShader(const std::string& vertPath, const std::string& fragPath) = 0;
+    virtual ShaderHandle CreateSkybox(const std::string& vertPath, const std::string& fragPath) = 0;
     virtual Model LoadModel(const std::string& path, bool flipUV = false) = 0;
 
     // 帧缓冲创建
@@ -146,6 +156,16 @@ public:
     virtual void DrawSkybox(ShaderHandle shader) = 0;
     virtual void DrawFullscreenQuad(TextureHandle textureID) = 0;
 
+    // ==================== ImGui 后端 ====================
+    // 调用方负责 ImGui::CreateContext() 和 ImGui_ImplSDL3_InitXXX
+    // 后端负责渲染器相关的初始化和每帧绘制
+    virtual bool InitImGuiBackend()   = 0;
+    virtual void ShutdownImGuiBackend() = 0;
+    virtual void ImGuiNewFrame()      = 0;   // 内部调 ImGui_ImplXxx_NewFrame
+    virtual void ImGuiRenderDrawData() = 0;  // 内部调 ImGui_ImplXxx_RenderDrawData
+
+    //其他
+    virtual DeviceInfo GetDeviceInfo() const = 0;
 };
 
 }

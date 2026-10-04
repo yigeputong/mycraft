@@ -70,7 +70,7 @@ private:
 
     bool CreateWindow();
     bool CreateOpenGLWindow();
-    // bool CreateVulkanWindow();
+    bool CreateVulkanWindow();
 };
 
 }

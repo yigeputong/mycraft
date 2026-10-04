@@ -9,6 +9,8 @@ add_library(engine STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Window.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/WindowManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/OpenGL.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/Vulkan.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/VmaImpl.cpp
 
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui_demo.cpp
@@ -17,6 +19,7 @@ add_library(engine STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui_widgets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/backends/imgui_impl_sdl3.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/backends/imgui_impl_opengl3.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/backends/imgui_impl_vulkan.cpp
 )
 
 target_include_directories(engine PUBLIC
@@ -27,15 +30,16 @@ target_include_directories(engine PUBLIC
 
 target_link_libraries(engine PUBLIC
     SDL3::SDL3
-    SDL3_image::SDL3_image
+    $<IF:$<TARGET_EXISTS:SDL3_image::SDL3_image-shared>,SDL3_image::SDL3_image-shared,SDL3_image::SDL3_image-static>
     SDL3_net::SDL3_net
     glad::glad
     glm::glm
+    volk::volk
+    Vulkan::Vulkan
+    GPUOpen::VulkanMemoryAllocator
 )
 
 target_link_libraries(engine PRIVATE
     assimp::assimp
-    volk::volk
-    Vulkan::Vulkan
     nlohmann_json::nlohmann_json
 )
