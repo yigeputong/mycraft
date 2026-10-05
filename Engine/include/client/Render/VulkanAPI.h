@@ -179,6 +179,7 @@ private:
     vk::SurfaceFormatKHR             m_swapChainSurfaceFormat;
     vk::Extent2D                     m_swapChainExtent;
     std::vector<vk::raii::ImageView> m_swapChainImageViews;
+    std::vector<bool>                m_swapChainFirstUse;
 
     // ==================== 深度 ====================
     vk::raii::Image        m_depthImage       = nullptr;

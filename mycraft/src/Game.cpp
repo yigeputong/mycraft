@@ -132,7 +132,7 @@ void MyGame::OnStart(Eng::Engine& engine) {
     logInfo(logger, "[Game] Connected to server");
 
 
-    const Eng::client::RenderAPItype apiType = Eng::client::RenderAPItype::OPENGL;
+    const Eng::client::RenderAPItype apiType = Eng::client::RenderAPItype::VULKAN;
     const bool useVulkan = (apiType == Eng::client::RenderAPItype::VULKAN);
     Eng::client::WindowConfig windowConfig = {
         .apitype = apiType,

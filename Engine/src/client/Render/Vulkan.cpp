@@ -1,6 +1,7 @@
 #include "client/Render/VulkanAPI.h"
 
 #include "client/Window.h"
+#include "core/Log.h"
 
 #include <SDL3/SDL_vulkan.h>
 #include <SDL3_image/SDL_image.h>
@@ -65,6 +66,7 @@ bool VulkanAPI::Initialize(int width, int height, Window* window) {
         logDeviceInfo();
         createLogicalDevice();
         createVmaAllocator();
+        createCommandPool();
         createSwapChain();
         createImageViews();
         createDepthResources();
@@ -72,11 +74,10 @@ bool VulkanAPI::Initialize(int width, int height, Window* window) {
         createGlobalDescriptors();
         createFullscreenPipeline();
         createSkyboxMesh();
-        createCommandPool();
         createCommandBuffers();
         createSyncObjects();
     } catch (const std::exception& e) {
-        std::cerr << "[Vulkan] Initialize failed: " << e.what() << "\n";
+        logFatal(m_logger, "[Vulkan] Initialize failed: " << e.what());
         return false;
     }
     return true;
@@ -190,6 +191,28 @@ bool VulkanAPI::isDeviceSuitable(const vk::raii::PhysicalDevice& pd) {
         vk::PhysicalDeviceVulkan13Features,
         vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
 
+    auto f11  = feats.get<vk::PhysicalDeviceVulkan11Features>();
+    auto f13  = feats.get<vk::PhysicalDeviceVulkan13Features>();
+    auto fEDS = feats.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+
+    if (!f11.shaderDrawParameters) {
+        logDebug(m_logger, "[Vulkan] GPU missing shaderDrawParameters");
+        return false;
+    }
+    if (!f13.dynamicRendering) {
+        logDebug(m_logger, "[Vulkan] GPU missing dynamicRendering");
+        return false;
+    }
+    if (!f13.synchronization2) {
+        logDebug(m_logger, "[Vulkan] GPU missing synchronization2");
+        return false;
+    }
+    if (!fEDS.extendedDynamicState) {
+        logDebug(m_logger, "[Vulkan] GPU missing extendedDynamicState");
+        return false;
+    }
+    return true;
+
     return feats.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
            feats.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
            feats.get<vk::PhysicalDeviceVulkan13Features>().synchronization2 &&
@@ -293,22 +316,8 @@ void VulkanAPI::createLogicalDevice() {
 
     // raii 接管 raw handle
     m_device = vk::raii::Device(m_physicalDevice, rawDevice);
+    volkLoadDevice(*m_device);
     m_queue  = vk::raii::Queue(m_device, m_queueIndex, 0);
-
-    // ==================== 验证特性是否真的启用了 ====================
-    VkPhysicalDeviceVulkan13Features checkF13{};
-    checkF13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-    checkF13.pNext = nullptr;
-
-    VkPhysicalDeviceVulkan11Features checkF11{};
-    checkF11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-    checkF11.pNext = &checkF13;
-
-    VkPhysicalDeviceFeatures2 checkF2{};
-    checkF2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    checkF2.pNext = &checkF11;
-
-    vkGetPhysicalDeviceFeatures2(*m_physicalDevice, &checkF2);
 }
 
 void VulkanAPI::createVmaAllocator() {
@@ -383,38 +392,45 @@ void VulkanAPI::createFullscreenPipeline() {
     };
     m_fullscreenLayout = vk::raii::PipelineLayout(m_device, plci);
 
-    vk::Format colorFmt = m_swapChainSurfaceFormat.format;
-    vk::Format depthFmt = findDepthFormat();
+        // ==================== 手动 C 结构体（同 createShaderInternal）====================
+    VkFormat colorFmt = static_cast<VkFormat>(m_swapChainSurfaceFormat.format);
+    VkFormat depthFmt = static_cast<VkFormat>(findDepthFormat());
 
-    vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> chain = {
-        {
-            .sType               = vk::StructureType::eGraphicsPipelineCreateInfo,   // ★
-            .stageCount          = 2,
-            .pStages             = stages,
-            .pVertexInputState   = &vi,
-            .pInputAssemblyState = &ia,
-            .pViewportState      = &vps,
-            .pRasterizationState = &rast,
-            .pMultisampleState   = &ms,
-            .pDepthStencilState  = &ds,
-            .pColorBlendState    = &blend,
-            .pDynamicState       = &dyn,
-            .layout              = *m_fullscreenLayout,
-            .renderPass          = nullptr
-        },
-        {
-            .sType                   = vk::StructureType::ePipelineRenderingCreateInfo,  // ★
-            .colorAttachmentCount    = 1,
-            .pColorAttachmentFormats = &colorFmt,
-            .depthAttachmentFormat   = depthFmt
-        }
-    };
-    auto& gpciRef = chain.get<vk::GraphicsPipelineCreateInfo>();
+    VkPipelineRenderingCreateInfo priC{};
+    priC.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    priC.pNext                   = nullptr;
+    priC.viewMask                = 0;
+    priC.colorAttachmentCount    = 1;
+    priC.pColorAttachmentFormats = &colorFmt;
+    priC.depthAttachmentFormat   = depthFmt;
+    priC.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
+
+    VkGraphicsPipelineCreateInfo gpciC{};
+    gpciC.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    gpciC.pNext               = &priC;
+    gpciC.flags               = 0;
+    gpciC.stageCount          = 2;
+    gpciC.pStages             = reinterpret_cast<VkPipelineShaderStageCreateInfo const*>(stages);
+    gpciC.pVertexInputState   = reinterpret_cast<VkPipelineVertexInputStateCreateInfo const*>(&vi);
+    gpciC.pInputAssemblyState = reinterpret_cast<VkPipelineInputAssemblyStateCreateInfo const*>(&ia);
+    gpciC.pTessellationState  = nullptr;
+    gpciC.pViewportState      = reinterpret_cast<VkPipelineViewportStateCreateInfo const*>(&vps);
+    gpciC.pRasterizationState = reinterpret_cast<VkPipelineRasterizationStateCreateInfo const*>(&rast);
+    gpciC.pMultisampleState   = reinterpret_cast<VkPipelineMultisampleStateCreateInfo const*>(&ms);
+    gpciC.pDepthStencilState  = reinterpret_cast<VkPipelineDepthStencilStateCreateInfo const*>(&ds);
+    gpciC.pColorBlendState    = reinterpret_cast<VkPipelineColorBlendStateCreateInfo const*>(&blend);
+    gpciC.pDynamicState       = reinterpret_cast<VkPipelineDynamicStateCreateInfo const*>(&dyn);
+    gpciC.layout              = *m_fullscreenLayout;
+    gpciC.renderPass          = VK_NULL_HANDLE;
+    gpciC.subpass             = 0;
+    gpciC.basePipelineHandle  = VK_NULL_HANDLE;
+    gpciC.basePipelineIndex   = -1;
 
     VkPipeline rawPipeline = VK_NULL_HANDLE;
-    if (vkCreateGraphicsPipelines(*m_device, VK_NULL_HANDLE, 1,
-            reinterpret_cast<VkGraphicsPipelineCreateInfo const*>(&gpciRef),
-            nullptr, &rawPipeline) != VK_SUCCESS) {
+    VkResult res = vkCreateGraphicsPipelines(*m_device, VK_NULL_HANDLE, 1,
+                                              &gpciC, nullptr, &rawPipeline);
+    if (res != VK_SUCCESS) {
+        logError(m_logger, "[Vulkan] vkCreateGraphicsPipelines(fullscreen) failed: " << (int)res);
         throw std::runtime_error("vkCreateGraphicsPipelines(fullscreen) failed");
     }
     m_fullscreenPipeline = vk::raii::Pipeline(m_device, rawPipeline);
@@ -503,6 +519,8 @@ void VulkanAPI::createImageViews() {
             createImageView(img, m_swapChainSurfaceFormat.format,
                             vk::ImageAspectFlagBits::eColor));
     }
+    // 每个 swapchain image 首次使用前是 Undefined
+    m_swapChainFirstUse.assign(m_swapChainImages.size(), true);
 }
 
 // ============================================================
@@ -570,6 +588,18 @@ void VulkanAPI::createDepthResources() {
         vk::ImageUsageFlagBits::eDepthStencilAttachment,
         vk::MemoryPropertyFlagBits::eDeviceLocal);
     m_depthImageView = createImageView(*m_depthImage, fmt, vk::ImageAspectFlagBits::eDepth);
+
+    // 一次性转到 DepthAttachmentOptimal —— 之后永远保持
+    {
+        auto cmd = beginSingleTimeCommands();
+        transition_image_layout(cmd, *m_depthImage,
+            vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthAttachmentOptimal,
+            {}, vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+            vk::PipelineStageFlagBits2::eTopOfPipe,
+            vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+            vk::ImageAspectFlagBits::eDepth);
+        endSingleTimeCommands(std::move(cmd));
+    }
 }
 
 // ============================================================
@@ -607,7 +637,7 @@ void VulkanAPI::createDescriptorPool() {
     }};
     vk::DescriptorPoolCreateInfo ci{
         .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-        .maxSets       = 128,
+        .maxSets       = 1024,
         .poolSizeCount = static_cast<uint32_t>(sizes.size()),
         .pPoolSizes    = sizes.data()
     };
@@ -615,25 +645,17 @@ void VulkanAPI::createDescriptorPool() {
 }
 
 void VulkanAPI::createGlobalDescriptors() {
-    // ============ set 0: UBO ============
-    std::array<vk::DescriptorSetLayoutBinding, 2> bindings{{
-        {
-            .binding         = 0,
-            .descriptorType  = vk::DescriptorType::eUniformBuffer,
-            .descriptorCount = 1,
-            .stageFlags      = vk::ShaderStageFlagBits::eVertex |
-                               vk::ShaderStageFlagBits::eFragment
-        },
-        {
-            .binding         = 1,
-            .descriptorType  = vk::DescriptorType::eCombinedImageSampler,
-            .descriptorCount = 1,
-            .stageFlags      = vk::ShaderStageFlagBits::eFragment
-        }
-    }};
+    // ============ set 0: 只含 UBO ============
+    vk::DescriptorSetLayoutBinding uboBinding{
+        .binding         = 0,
+        .descriptorType  = vk::DescriptorType::eUniformBuffer,
+        .descriptorCount = 1,
+        .stageFlags      = vk::ShaderStageFlagBits::eVertex |
+                           vk::ShaderStageFlagBits::eFragment
+    };
     vk::DescriptorSetLayoutCreateInfo slci{
-        .bindingCount = static_cast<uint32_t>(bindings.size()),
-        .pBindings    = bindings.data()
+        .bindingCount = 1,
+        .pBindings    = &uboBinding
     };
     m_globalSetLayout = vk::raii::DescriptorSetLayout(m_device, slci);
 
@@ -649,7 +671,7 @@ void VulkanAPI::createGlobalDescriptors() {
     };
     m_textureSetLayout = vk::raii::DescriptorSetLayout(m_device, texSlci);
 
-    // ---- 每帧一份 UBO + 一个 set ----
+    // ---- 后面每帧一份 UBO + set 的逻辑完全不变 ----
     m_globalUBOs.clear();
     m_globalUBOAllocs.clear();
     m_globalUBOMapped.clear();
@@ -782,24 +804,24 @@ void VulkanAPI::BeginFrame() {
     auto fenceRes = m_device.waitForFences(*m_inFlightFences[m_frameIndex], vk::True, UINT64_MAX);
     if (fenceRes != vk::Result::eSuccess) throw std::runtime_error("waitForFences failed");
 
-    uint32_t imageIndex = 0;
-    bool needRecreate = false;
-    try {
-        auto [res, idx] = m_swapChain.acquireNextImage(
-            UINT64_MAX, *m_presentCompleteSemaphores[m_frameIndex], nullptr);
-        imageIndex = idx;
-        if (res == vk::Result::eSuboptimalKHR) needRecreate = true;
-    } catch (const vk::OutOfDateKHRError&) {
-        needRecreate = true;
+    // ★ 循环代替递归 —— 处理连续 out-of-date
+    bool acquired = false;
+    while (!acquired) {
+        try {
+            auto [res, idx] = m_swapChain.acquireNextImage(
+                UINT64_MAX, *m_presentCompleteSemaphores[m_frameIndex], nullptr);
+            m_imageIndex = idx;
+
+            if (res == vk::Result::eSuboptimalKHR) {
+                recreateSwapChain();
+                continue;
+            }
+            acquired = true;
+        } catch (const vk::OutOfDateKHRError&) {
+            recreateSwapChain();
+        }
     }
 
-    if (needRecreate) {
-        recreateSwapChain();
-        BeginFrame();
-        return;
-    }
-
-    m_imageIndex = imageIndex;
     m_device.resetFences(*m_inFlightFences[m_frameIndex]);
     m_commandBuffers[m_frameIndex].reset();
     m_commandBuffers[m_frameIndex].begin({});
@@ -821,7 +843,7 @@ void VulkanAPI::ensureRenderPassActive() {
 
     if (toFBO) {
         auto fit = m_framebuffers.find(m_pendingFramebuffer.handle);
-        if (fit == m_framebuffers.end()) return;;
+        if (fit == m_framebuffers.end()) return;
 
         colorView = *fit->second.colorView;
         depthView = *fit->second.depthView;
@@ -835,27 +857,26 @@ void VulkanAPI::ensureRenderPassActive() {
             vk::PipelineStageFlagBits2::eFragmentShader,
             vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             vk::ImageAspectFlagBits::eColor);
-
-        // FBO depth: 已经在 DepthAttachmentOptimal
     } else {
         // 渲染到 swapchain
         colorView = m_swapChainImageViews[m_imageIndex];
         depthView = *m_depthImageView;
         extent    = m_swapChainExtent;
 
+        // ★ swapchain image：首次 Undefined，之后 PresentSrcKHR
+        vk::ImageLayout oldLayout = m_swapChainFirstUse[m_imageIndex]
+            ? vk::ImageLayout::eUndefined
+            : vk::ImageLayout::ePresentSrcKHR;
+        m_swapChainFirstUse[m_imageIndex] = false;
+
         transition_image_layout(cmd, m_swapChainImages[m_imageIndex],
-            vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal,
+            oldLayout, vk::ImageLayout::eColorAttachmentOptimal,
             {}, vk::AccessFlagBits2::eColorAttachmentWrite,
             vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             vk::ImageAspectFlagBits::eColor);
 
-        transition_image_layout(cmd, *m_depthImage,
-            vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthAttachmentOptimal,
-            {}, vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-            vk::PipelineStageFlagBits2::eTopOfPipe,
-            vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-            vk::ImageAspectFlagBits::eDepth);
+        // ★ depth 已经在 DepthAttachmentOptimal —— 无需 barrier
     }
 
     vk::ClearValue clearColor{};
@@ -991,6 +1012,7 @@ MeshHandle VulkanAPI::CreateMesh(const MeshData& data) {
                             &mi.vertexBuffer, &mi.vertexAlloc, &info) != VK_SUCCESS)
             throw std::runtime_error("vmaCreateBuffer (vertex) failed");
         std::memcpy(info.pMappedData, data.vertices.data(), size);
+        vmaFlushAllocation(m_allocator, mi.vertexAlloc, 0, VK_WHOLE_SIZE);
     }
 
     if (!data.indices.empty()) {
@@ -1011,6 +1033,7 @@ MeshHandle VulkanAPI::CreateMesh(const MeshData& data) {
                             &mi.indexBuffer, &mi.indexAlloc, &info) != VK_SUCCESS)
             throw std::runtime_error("vmaCreateBuffer (index) failed");
         std::memcpy(info.pMappedData, data.indices.data(), size);
+        vmaFlushAllocation(m_allocator, mi.indexAlloc, 0, VK_WHOLE_SIZE);
         mi.indexCount = static_cast<uint32_t>(data.indices.size());
     }
 
@@ -1343,12 +1366,6 @@ void VulkanAPI::Shutdown() {
     m_textures.clear();
     m_textureCache.clear();
 
-    for (auto& [h, fb] : m_framebuffers) {
-        fb.colorView = nullptr;
-        if (fb.colorAlloc) vmaDestroyImage(m_allocator, fb.colorImage, fb.colorAlloc);
-    }
-    m_framebuffers.clear();
-
     m_shaders.clear();   // vk::raii 自己管 pipeline / layout / module
 
     // ★ 释放 UBO
@@ -1396,6 +1413,7 @@ TextureHandle VulkanAPI::CreateTexture(const std::string& path) {
 void VulkanAPI::DestroyTexture(TextureHandle h) {
     auto it = m_textures.find(h);
     if (it == m_textures.end()) return;
+
     it->second.view = nullptr;
     it->second.sampler = nullptr;
     it->second.set = nullptr;
@@ -1403,6 +1421,9 @@ void VulkanAPI::DestroyTexture(TextureHandle h) {
         vmaDestroyImage(m_allocator, it->second.image, it->second.alloc);
     }
     m_textures.erase(it);
+
+    // ★ 清缓存里的悬空映射
+    std::erase_if(m_textureCache, [h](auto& kv) { return kv.second == h; });
 }
 
 TextureHandle VulkanAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int h) {
@@ -1428,6 +1449,7 @@ TextureHandle VulkanAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int
                              &stagingBuf, &stagingAlloc, &info) != VK_SUCCESS)
             throw std::runtime_error("staging buffer failed");
         std::memcpy(info.pMappedData, rgba, imageSize);
+        vmaFlushAllocation(m_allocator, stagingAlloc, 0, VK_WHOLE_SIZE);
     }
 
     // ---------- 2. Image ----------
@@ -1544,6 +1566,8 @@ TextureHandle VulkanAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int
     m_textures.emplace(handle, std::move(ti));
     return handle;
 }
+
+// 2/3
 
 Framebuffer VulkanAPI::CreateFramebuffer(int width, int height) {
     FramebufferInternal fbi;
@@ -1685,8 +1709,8 @@ Framebuffer VulkanAPI::CreateFramebuffer(int width, int height) {
 }
 
 void VulkanAPI::BindFramebuffer(const Framebuffer& fb) {
+    if (!m_frameStarted) return;   // ★
     m_pendingFramebuffer = fb;
-    // 如果当前有 render pass 开着，先关掉
     if (m_renderPassActive) {
         m_commandBuffers[m_frameIndex].endRendering();
         m_renderPassActive = false;
@@ -1724,10 +1748,13 @@ TextureHandle VulkanAPI::GetFramebufferTexture(const Framebuffer& fb) const {
 }
 
 void VulkanAPI::DestroyFramebuffer(const Framebuffer& fb) {
+    if (m_pendingFramebuffer.handle == fb.handle) {
+        m_pendingFramebuffer = {};
+    }
+
     auto it = m_framebuffers.find(fb.handle);
     if (it == m_framebuffers.end()) return;
 
-    // 先删纹理 entry（ownsImage=false，只清 set）
     if (it->second.colorHandle) {
         m_textures.erase(it->second.colorHandle);
     }
@@ -1748,6 +1775,8 @@ TextureHandle VulkanAPI::CreateTextureFromMemory(const aiTexture* embedded) {
 }
 
 void VulkanAPI::DrawFullscreenQuad(TextureHandle texHandle) {
+    if (!*m_fullscreenPipeline) return;   // ★
+
     auto texIt = m_textures.find(texHandle);
     if (texIt == m_textures.end()) return;
 
@@ -1757,7 +1786,7 @@ void VulkanAPI::DrawFullscreenQuad(TextureHandle texHandle) {
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *m_fullscreenPipeline);
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
         *m_fullscreenLayout, 0, *texIt->second.set, {});
-    cmd.draw(3, 1, 0, 0);   // 全屏三角形
+    cmd.draw(3, 1, 0, 0);
 }
 
 void VulkanAPI::createSkyboxMesh() {
@@ -1813,6 +1842,7 @@ void VulkanAPI::createSkyboxMesh() {
         throw std::runtime_error("sky cube buffer creation failed");
     }
     std::memcpy(info.pMappedData, verts.data(), size);
+    vmaFlushAllocation(m_allocator, m_skyCubeAlloc, 0, VK_WHOLE_SIZE);   // ★
 }
 void VulkanAPI::DrawSkybox(ShaderHandle shader) {
     auto sit = m_shaders.find(shader);
@@ -2070,23 +2100,12 @@ DeviceInfo VulkanAPI::GetDeviceInfo() const {
 }
 
 void VulkanAPI::ApplySettings(const WindowConfig& win, const RenderConfig& render) {
-    bool needRecreate = false;
-
-    // VSync → present mode → 要重建 swapchain
+    // 只有 VSync 走这里 —— 全屏由 MyGame 直接调 SetFullscreen
     if (m_windowConfig.vsync != win.vsync) {
         m_windowConfig.vsync = win.vsync;
-        needRecreate = true;
+        recreateSwapChain();
     }
 
-    // 全屏 → surface 变了 → 也要重建
-    if (m_window->GetConfigs().fullscreen != win.fullscreen) {
-        m_window->SetFullscreen(win.fullscreen);
-        needRecreate = true;
-    }
-
-    if (needRecreate) recreateSwapChain();
-
-    // 渲染层面（不需要重建的）
     m_globalUBOData.aoStrength = render.m_aoStrength;
 }
 
