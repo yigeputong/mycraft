@@ -55,7 +55,7 @@ vk::raii::ShaderModule VulkanAPI::createShaderModule(const std::vector<char>& co
 // Initialize
 // ============================================================
 bool VulkanAPI::Initialize(int width, int height, Window* window) {
-    m_window = window->GetSDLWindow();
+    m_window = window;
 
     try {
         createInstance();
@@ -166,7 +166,7 @@ void VulkanAPI::setupDebugMessenger() {
 
 void VulkanAPI::createSurface() {
     VkSurfaceKHR raw;
-    if (!SDL_Vulkan_CreateSurface(m_window, *m_instance, nullptr, &raw)) {
+    if (!SDL_Vulkan_CreateSurface(m_window->GetSDLWindow(), *m_instance, nullptr, &raw)) {
         throw std::runtime_error("SDL_Vulkan_CreateSurface failed");
     }
     m_surface = vk::raii::SurfaceKHR(m_instance, raw);
@@ -433,11 +433,10 @@ vk::SurfaceFormatKHR VulkanAPI::chooseSwapSurfaceFormat(
 }
 
 vk::PresentModeKHR VulkanAPI::chooseSwapPresentMode(
-    const std::vector<vk::PresentModeKHR>& modes) {
-    bool hasMailbox = std::ranges::any_of(modes, [](auto m) {
-        return m == vk::PresentModeKHR::eMailbox;
-    });
-    return hasMailbox ? vk::PresentModeKHR::eMailbox : vk::PresentModeKHR::eFifo;
+        const std::vector<vk::PresentModeKHR>& modes) {
+    if (m_windowConfig.vsync) return vk::PresentModeKHR::eFifo;   // 必支持
+    for (auto m : modes) if (m == vk::PresentModeKHR::eMailbox) return m;
+    return vk::PresentModeKHR::eImmediate;
 }
 
 vk::Extent2D VulkanAPI::chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& caps) {
@@ -445,7 +444,7 @@ vk::Extent2D VulkanAPI::chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& caps)
         return caps.currentExtent;
     }
     int w = 0, h = 0;
-    SDL_GetWindowSizeInPixels(m_window, &w, &h);
+    SDL_GetWindowSizeInPixels(m_window->GetSDLWindow(), &w, &h);
     return {
         std::clamp<uint32_t>(w, caps.minImageExtent.width,  caps.maxImageExtent.width),
         std::clamp<uint32_t>(h, caps.minImageExtent.height, caps.maxImageExtent.height)
@@ -1281,12 +1280,12 @@ void VulkanAPI::cleanupSwapChain() {
 
 void VulkanAPI::recreateSwapChain() {
     int w = 0, h = 0;
-    SDL_GetWindowSizeInPixels(m_window, &w, &h);
+    SDL_GetWindowSizeInPixels(m_window->GetSDLWindow(), &w, &h);
     while (w == 0 || h == 0) {
         SDL_Event e;
         if (!SDL_WaitEvent(&e)) return;
         if (e.type == SDL_EVENT_QUIT) return;
-        SDL_GetWindowSizeInPixels(m_window, &w, &h);
+        SDL_GetWindowSizeInPixels(m_window->GetSDLWindow(), &w, &h);
     }
 
     m_device.waitIdle();
@@ -1878,7 +1877,7 @@ bool VulkanAPI::InitImGuiBackend()
     ImGui::StyleColorsDark();
 
     // --- SDL3 平台后端 ---
-    if (!ImGui_ImplSDL3_InitForVulkan(m_window)) {
+    if (!ImGui_ImplSDL3_InitForVulkan(m_window->GetSDLWindow())) {
         logError(m_logger, "ImGui_ImplSDL3_InitForVulkan failed");
         ImGui::DestroyContext();
         return false;
@@ -2068,6 +2067,27 @@ DeviceInfo VulkanAPI::GetDeviceInfo() const {
     info.extra = std::string(drv.driverName) + " / " + drv.driverInfo;
 
     return info;
+}
+
+void VulkanAPI::ApplySettings(const WindowConfig& win, const RenderConfig& render) {
+    bool needRecreate = false;
+
+    // VSync → present mode → 要重建 swapchain
+    if (m_windowConfig.vsync != win.vsync) {
+        m_windowConfig.vsync = win.vsync;
+        needRecreate = true;
+    }
+
+    // 全屏 → surface 变了 → 也要重建
+    if (m_window->GetConfigs().fullscreen != win.fullscreen) {
+        m_window->SetFullscreen(win.fullscreen);
+        needRecreate = true;
+    }
+
+    if (needRecreate) recreateSwapChain();
+
+    // 渲染层面（不需要重建的）
+    m_globalUBOData.aoStrength = render.m_aoStrength;
 }
 
 }

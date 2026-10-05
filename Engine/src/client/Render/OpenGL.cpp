@@ -1212,5 +1212,19 @@ DeviceInfo OpenGLAPI::GetDeviceInfo() const {
 
     return info;
 }
+
+void OpenGLAPI::ApplySettings(const WindowConfig& win, const RenderConfig& render) {
+    // 窗口层面
+    if (m_window->GetConfigs().fullscreen != win.fullscreen) {
+        m_window->SetFullscreen(win.fullscreen);
+    }
+
+    // VSync → SDL_GL
+    SDL_GL_SetSwapInterval(win.vsync ? 1 : 0);
+
+    // 渲染层面
+    m_aoStrength = render.m_aoStrength;
+    // gamma / wireframe ... 都能从这里接
+}
     
 } // namespace Eng

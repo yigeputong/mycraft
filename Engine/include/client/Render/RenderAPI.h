@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/Configs.h"
+
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -166,6 +168,7 @@ public:
 
     //其他
     virtual DeviceInfo GetDeviceInfo() const = 0;
+    virtual void ApplySettings(const WindowConfig& win, const RenderConfig& render) = 0;
 };
 
 }

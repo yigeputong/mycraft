@@ -94,11 +94,7 @@ private:
 
     // ==================== 设置 ====================
     struct Settings {
-        float fov         = 75.0f;
         float speed       = 3.0f;
-        float sensitivity = 0.01f;
-        float zNear       = 0.5f;
-        float zFar        = 1000.0f;
     } s;
 
     // ==================== 状态标志 ====================
@@ -110,11 +106,22 @@ private:
 #else
     bool m_showDebug = true;
 #endif
+    bool m_applyPending = false;
 
     // ==================== 指标 ====================
-    float m_lastFrameMs  = 0.0f;
-    float m_frameMsAvg   = 0.0f;
-    float m_frameMsMax   = 0.0f;
+    float m_lastFrameMs = 0.0f;
+    // FPS 统计（每秒刷新）
+    float m_fpsTimer      = 0.0f;
+    int   m_fpsFrameCount = 0;
+    float m_fpsAccumMs    = 0.0f;
+    float m_fpsPeakMs     = 0.0f;
+
+    // 显示值（上一秒结算结果，用于 UI）
+    float m_fpsDisplay       = 0.0f;
+    float m_frameMsDisplay   = 0.0f;
+    float m_frameMsAvgDisp   = 0.0f;
+    float m_frameMsPeakDisp  = 0.0f;
+
     float m_serverTickMs  = 0.0f;
     float m_serverTickAvg = 0.0f;
     float m_serverTickMax = 0.0f;

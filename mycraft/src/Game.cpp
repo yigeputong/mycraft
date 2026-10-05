@@ -218,8 +218,23 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     }
     float frameMs = deltaTime * 1000.0f;
     m_lastFrameMs = frameMs;
-    m_frameMsAvg  = m_frameMsAvg * 0.95f + frameMs * 0.05f;
-    m_frameMsMax  = std::max(m_frameMsMax * 0.99f, frameMs); 
+    // 累加本秒的统计
+    m_fpsTimer      += deltaTime;
+    m_fpsFrameCount += 1;
+    m_fpsAccumMs    += frameMs;
+    m_fpsPeakMs      = std::max(m_fpsPeakMs, frameMs);
+    // 每秒结算一次
+    if (m_fpsTimer >= 1.0f) {
+        m_fpsDisplay      = m_fpsFrameCount / m_fpsTimer;
+        m_frameMsDisplay  = frameMs;
+        m_frameMsAvgDisp  = m_fpsAccumMs / m_fpsFrameCount;
+        m_frameMsPeakDisp = m_fpsPeakMs;
+
+        m_fpsTimer      = 0.0f;
+        m_fpsFrameCount = 0;
+        m_fpsAccumMs    = 0.0f;
+        m_fpsPeakMs     = 0.0f;
+    }
 
     m_animTime += deltaTime;
 
@@ -292,6 +307,10 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
 void MyGame::OnRender(Eng::Engine& engine) {
     if (m_minimized) {
         return;
+    }
+    if (m_applyPending) {
+        renderer->ApplySettings(mainWin->GetConfigs(), engine.GetConfig().render);
+        m_applyPending = false;
     }
     renderer->BeginFrame();
 
@@ -417,11 +436,15 @@ void MyGame::DrawUI(Eng::Engine& engine) {
     if (m_showDebug) {
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowBgAlpha(0.5f);
-        if (ImGui::Begin("Debug", &m_showDebug, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav)) {
+        if (ImGui::Begin("Debug",  nullptr, 
+                        ImGuiWindowFlags_AlwaysAutoResize |
+                        ImGuiWindowFlags_NoNav |
+                        ImGuiWindowFlags_NoInputs |
+                        ImGuiWindowFlags_NoMove)) {
             ImGui::SetWindowFontScale(1.5f);
             ImGui::Text("%.0f FPS  |  Frame: %.2f ms (avg %.2f, peak %.2f)",
-                        1000.0f / std::max(m_lastFrameMs, 0.001f),
-                        m_lastFrameMs, m_frameMsAvg, m_frameMsMax);
+                        m_fpsDisplay,
+                        m_frameMsDisplay, m_frameMsAvgDisp, m_frameMsPeakDisp);
             ImGui::Text("Server tick: %.2f ms (avg %.2f, peak %.2f)",
                         m_serverTickMs, m_serverTickAvg, m_serverTickMax);
             ImGui::Text("Pos: %.2f, %.2f, %.2f", cameraPos.x, cameraPos.y, cameraPos.z);
@@ -490,6 +513,9 @@ void MyGame::DrawUI(Eng::Engine& engine) {
 
             ImGui::Separator();
 
+            if (ImGui::Button("Apply", ImVec2(-1, 36))) {
+                m_applyPending = true;
+            }
             if (ImGui::Button("Quit", ImVec2(-1, 44))) {
                 m_shouldQuit = true;
             }

@@ -78,6 +78,7 @@ public:
     void ImGuiRenderDrawData() override;
 
     DeviceInfo GetDeviceInfo() const override;
+    void ApplySettings(const WindowConfig& win, const RenderConfig& render) override;
 
     static constexpr int api_major = 4;
     static constexpr int api_minor = 6;

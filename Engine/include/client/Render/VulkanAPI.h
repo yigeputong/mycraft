@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "client/Render/RenderAPI.h"
+#include "core/Configs.h"
 #include "core/Log.h"
 
 namespace Eng::client {
@@ -88,6 +89,7 @@ public:
     void ImGuiRenderDrawData() override;
 
     DeviceInfo GetDeviceInfo() const override;
+    void ApplySettings(const WindowConfig& win, const RenderConfig& render) override;
     void logValidation(VkDebugUtilsMessageSeverityFlagBitsEXT severity, const char* message);
 
 private:
@@ -157,7 +159,7 @@ private:
     uint32_t m_nextFramebuffer = 1;
 
     // ==================== Vulkan 核心 ====================
-    SDL_Window*                      m_window         = nullptr;
+    Window*                          m_window         = nullptr;
     vk::raii::Instance               m_instance       = nullptr;
     vk::raii::DebugUtilsMessengerEXT m_debugMessenger = nullptr;
     vk::raii::PhysicalDevice         m_physicalDevice = nullptr;
@@ -225,6 +227,10 @@ private:
 
     Framebuffer m_pendingFramebuffer{};
 
+    // ==================== Config ====================
+    RenderConfig m_renderConfig;
+    WindowConfig m_windowConfig;
+    
     // ==================== 内部方法 ====================
     // --- 初始化 ---
     bool isDeviceSuitable(const vk::raii::PhysicalDevice& pd);
