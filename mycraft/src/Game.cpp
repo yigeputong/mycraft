@@ -211,7 +211,7 @@ void MyGame::OnStart(Eng::Engine& engine) {
     }
 }
 
-bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
+bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     if (m_minimized) {
         SDL_Delay(16);
         return false;
@@ -220,6 +220,8 @@ bool MyGame::OnUpdate(Eng::Engine& engine, float deltaTime) {
     m_lastFrameMs = frameMs;
     m_frameMsAvg  = m_frameMsAvg * 0.95f + frameMs * 0.05f;
     m_frameMsMax  = std::max(m_frameMsMax * 0.99f, frameMs); 
+
+    m_animTime += deltaTime;
 
     PlayerMotion me;
     me.position = cameraPos;
@@ -317,6 +319,20 @@ void MyGame::OnRender(Eng::Engine& engine) {
             if (cc.mesh == 0) continue;
             renderer->SetModelMatrix(glm::mat4(1.0f));
             renderer->DrawMesh(cc.mesh, m_cubeShader, mat);
+        }
+
+        Eng::client::Material itemMat;
+        itemMat.diffuse = m_atlasTexture;
+
+        for (auto& [id, e] : m_itemEntities) {
+            glm::mat4 model = glm::mat4(1.0f);
+            model = glm::translate(model, e.pos);
+            model = glm::rotate(model, m_animTime * 2.0f, glm::vec3(0, 1, 0));
+            model = glm::scale(model, glm::vec3(0.3f));
+
+            renderer->SetModelMatrix(model);
+            auto mesh = GetOrCreateItemMesh(e.type);
+            renderer->DrawMesh(mesh, m_cubeShader, itemMat);
         }
 
         renderer->SetUniform(m_skyShader, "uTimeOfDay", m_timeOfDay);
@@ -577,7 +593,16 @@ bool MyGame::GetInput(float dt) {
         m_hotbarIndex = 0;
     }
 
-    input.placeBlock = static_cast<uint16_t>(m_hotbar[m_hotbarIndex].type);
+    auto& curSlot = m_hotbar[m_hotbarIndex];
+    if (curSlot.isEmpty()) {
+        input.placeBlock = 0;
+    } else {
+        input.placeBlock = static_cast<uint16_t>(curSlot.type);
+        if (input.place) {
+            curSlot.count--;
+            if (curSlot.count <= 0) curSlot = game::ItemStack{};
+        }
+    }
 
     Eng::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::PlayerInput));
@@ -595,7 +620,7 @@ bool MyGame::GetInput(float dt) {
     return m_shouldQuit;
 }
 
-void MyGame::OnShutdown(Eng::Engine& engine) {
+void MyGame::OnShutdown(Eng::Engine&) {
     m_client.Disconnect();
     if (m_server) {
         m_server->Stop();
@@ -696,24 +721,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             auto it = m_chunks.find(ChunkKey(cx, cz));
             if (it == m_chunks.end()) break;
 
-            BlockType oldType = ChunkGet(it->second.chunk, lx, by, lz);
-
             ChunkSet(it->second.chunk, lx, by, lz, t);
-
-            if (oldType != BlockType::Air && t == BlockType::Air) {
-                AddToInventory(oldType, 1);
-            }
-
-            // 放置成功（Air → 非空）→ 扣库存
-            if (oldType == BlockType::Air && t != BlockType::Air) {
-                for (auto& slot : m_hotbar) {
-                    if (slot.type == t && !slot.isEmpty()) {
-                        slot.count--;
-                        if (slot.count <= 0) slot = game::ItemStack{};
-                        break;
-                    }
-                }
-            }
 
             // 重建 mesh
             if (it->second.mesh != 0) {
@@ -736,7 +744,109 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             }
             break;
         }
+        case game::net::MessageType::EntitySpawn: {
+            uint32_t id = r.Read<uint32_t>();
+            glm::vec3 pos = r.ReadVec3();
+            BlockType bt = static_cast<BlockType>(r.Read<uint16_t>());
+
+            ClientItemEntity e;
+            e.id   = id;
+            e.pos  = pos;
+            e.type = bt;
+            m_itemEntities[id] = e;
+            break;
+        }
+
+        case game::net::MessageType::EntityDestroy: {
+            uint32_t id = r.Read<uint32_t>();
+            uint8_t reason = r.Read<uint8_t>();
+
+            auto it = m_itemEntities.find(id);
+            if (it != m_itemEntities.end()) {
+                if (reason == 1) {
+                    // 被捡走 → 进背包
+                    AddToInventory(it->second.type, 1);
+                }
+                m_itemEntities.erase(it);
+            }
+            break;
+        }
     }
+}
+
+Eng::client::MeshHandle MyGame::GetOrCreateItemMesh(BlockType type) {
+    auto it = m_itemMeshCache.find(type);
+    if (it != m_itemMeshCache.end()) return it->second;
+
+    auto mesh = BuildItemCubeMesh(type);
+    m_itemMeshCache[type] = mesh;
+    return mesh;
+}
+
+Eng::client::MeshHandle MyGame::BuildItemCubeMesh(BlockType type) {
+    std::vector<Eng::client::Vertex> vertices;
+    std::vector<uint32_t> indices;
+
+    static constexpr float faceOffsets[6][4][3] = {
+        // +X
+        {{ 0.5f,-0.5f,-0.5f},{ 0.5f, 0.5f,-0.5f},{ 0.5f, 0.5f, 0.5f},{ 0.5f,-0.5f, 0.5f}},
+        // -X
+        {{-0.5f,-0.5f, 0.5f},{-0.5f, 0.5f, 0.5f},{-0.5f, 0.5f,-0.5f},{-0.5f,-0.5f,-0.5f}},
+        // +Y
+        {{-0.5f, 0.5f, 0.5f},{ 0.5f, 0.5f, 0.5f},{ 0.5f, 0.5f,-0.5f},{-0.5f, 0.5f,-0.5f}},
+        // -Y
+        {{-0.5f,-0.5f,-0.5f},{ 0.5f,-0.5f,-0.5f},{ 0.5f,-0.5f, 0.5f},{-0.5f,-0.5f, 0.5f}},
+        // +Z
+        {{ 0.5f,-0.5f, 0.5f},{ 0.5f, 0.5f, 0.5f},{-0.5f, 0.5f, 0.5f},{-0.5f,-0.5f, 0.5f}},
+        // -Z
+        {{-0.5f,-0.5f,-0.5f},{-0.5f, 0.5f,-0.5f},{ 0.5f, 0.5f,-0.5f},{ 0.5f,-0.5f,-0.5f}},
+    };
+    static constexpr int faceNormals[6][3] = {
+        { 1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}
+    };
+    static constexpr float faceUVs[4][2] = {
+        {0,0},{0,1},{1,1},{1,0}
+    };
+
+    for (int f = 0; f < 6; ++f) {
+        int tile = TileForBlock(type, f);
+        int tileRow = tile / ATLAS_COLS;
+        int tileCol = tile % ATLAS_COLS;
+        float u0 = tileCol * TILE_UV;
+        float v0 = tileRow * TILE_UV;
+
+        uint32_t baseIndex = (uint32_t)vertices.size();
+        for (int v = 0; v < 4; ++v) {
+            Eng::client::Vertex vert;
+            vert.position = {
+                (float)faceOffsets[f][v][0],
+                (float)faceOffsets[f][v][1],
+                (float)faceOffsets[f][v][2]
+            };
+            vert.normal = {
+                (float)faceNormals[f][0],
+                (float)faceNormals[f][1],
+                (float)faceNormals[f][2]
+            };
+            vert.uv = {
+                u0 + faceUVs[v][0] * TILE_UV,
+                v0 + (1.0f - faceUVs[v][1]) * TILE_UV
+            };
+            vert.ao = 1.0f;
+            vertices.push_back(vert);
+        }
+        indices.push_back(baseIndex + 0);
+        indices.push_back(baseIndex + 1);
+        indices.push_back(baseIndex + 2);
+        indices.push_back(baseIndex + 2);
+        indices.push_back(baseIndex + 3);
+        indices.push_back(baseIndex + 0);
+    }
+
+    Eng::client::MeshData data;
+    data.vertices = vertices;
+    data.indices  = indices;
+    return renderer->CreateMesh(data);
 }
 
 Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
@@ -887,8 +997,6 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
     data.indices = indices;
 
     auto handle = renderer->CreateMesh(data);
-
-    uint64_t key = ChunkKey(chunk.chunk_x, chunk.chunk_z);
 
     return handle;
 }

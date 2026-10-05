@@ -14,6 +14,9 @@ enum class MessageType : uint8_t {
     WorldState      = 0x21,
     ChunkData       = 0x22, //| 4bype cx | 4byte cy | 4096byte data |
     BlockChange     = 0x23, //| 4bype bx | 4bype by | 4bype bz | 2bype blockId |
+    EntitySpawn	    = 0x24, //[u32 id][vec3 pos][u16 blockType]
+    EntityDestroy	= 0x25, //[u32 id][u8 reason] reason: 0=超时消失 1=被捡走
+    EntityUpdate    = 0x16
 
 };
 

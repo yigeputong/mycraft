@@ -101,6 +101,7 @@ void GameServer::Run() {
             }
 
             TickWorld(TICK_INTERVAL);
+            TickEntities(TICK_INTERVAL);
             BroadcastWorldState();
 
             auto tickEnd = std::chrono::steady_clock::now();
@@ -193,6 +194,88 @@ void GameServer::TickWorld(float dt) {
     }
 }
 
+void GameServer::SpawnItemDrop(const glm::vec3& pos, BlockType type) {
+    ItemEntity e;
+    e.id          = m_nextEntityId++;
+    e.pos         = pos;
+    e.vel         = glm::vec3(
+        ((rand() % 100) / 100.0f - 0.5f) * 2.0f,
+        2.5f,
+        ((rand() % 100) / 100.0f - 0.5f) * 2.0f);
+    e.pickupDelay = 0.5f;
+    e.itemType    = type;
+
+    m_entities[e.id] = e;
+
+    // 广播给所有客户端
+    Eng::MessageWriter w;
+    w.Write(static_cast<uint8_t>(game::net::MessageType::EntitySpawn));
+    w.Write<uint32_t>(e.id);
+    w.WriteVec3(e.pos);
+    w.Write<uint16_t>(static_cast<uint16_t>(type));
+    m_server.Broadcast(w.GetBuffer());
+
+    logDebug(m_logger, "[Server] Spawn item drop id=" << e.id
+        << " type=" << (int)type);
+}
+
+void GameServer::TickEntities(float dt) {
+    std::vector<uint32_t> toRemove;
+
+    for (auto& [id, e] : m_entities) {
+        // 重力
+        e.vel.y -= 20.0f * dt;
+
+        // 简单移动 + 地面碰撞
+        glm::vec3 next = e.pos + e.vel * dt;
+
+        if (IsSolidAt(static_cast<int>(std::floor(next.x)),
+                      static_cast<int>(std::floor(next.y - 0.15f)),
+                      static_cast<int>(std::floor(next.z)))) {
+            next.y = std::floor(next.y) + 1.0f + 0.15f;
+            e.vel.y = 0.0f;
+            e.vel.x *= 0.8f;   // 地面摩擦
+            e.vel.z *= 0.8f;
+        }
+        e.pos = next;
+
+        if (e.pickupDelay > 0) e.pickupDelay -= dt;
+        e.age += dt;
+
+        // 超时（5 分钟）→ 消失
+        if (e.age > 300.0f) {
+            Eng::MessageWriter w;
+            w.Write(static_cast<uint8_t>(game::net::MessageType::EntityDestroy));
+            w.Write<uint32_t>(id);
+            w.Write<uint8_t>(0);   // reason=0 超时
+            m_server.Broadcast(w.GetBuffer());
+            toRemove.push_back(id);
+            continue;
+        }
+
+        // 拾取检测
+        if (e.pickupDelay <= 0.0f) {
+            for (auto& p : m_players) {
+                glm::vec3 center = p.position + glm::vec3(0.0f, 0.9f, 0.0f);
+                float d2 = glm::distance(e.pos, center);
+                if (d2 < 1.5f * 1.5f) {
+                    Eng::MessageWriter w;
+                    w.Write(static_cast<uint8_t>(game::net::MessageType::EntityDestroy));
+                    w.Write<uint32_t>(id);
+                    w.Write<uint8_t>(1);   // reason=1 被捡走
+                    m_server.SendTo(p.id, w.GetBuffer());
+                    toRemove.push_back(id);
+                    logDebug(m_logger, "[Server] Player " << p.id
+                        << " picked up id=" << id);
+                    break;
+                }
+            }
+        }
+    }
+
+    for (uint32_t id : toRemove) m_entities.erase(id);
+}
+
 Chunk& GameServer::GetOrCreateChunk(int cx, int cz) {
     const uint64_t key = ChunkKey(cx, cz);
 
@@ -221,8 +304,17 @@ void GameServer::HandleDig(ServerPlayer& p) {
         [this](int x, int y, int z) { return GetBlockAt(x, y, z); });
     if (!hit.hit) return;
 
+    BlockType oldBlock = GetBlockAt(hit.bx, hit.by, hit.bz);
+
     SetBlockAt(hit.bx, hit.by, hit.bz, BlockType::Air);
     BroadcastBlockChange(hit.bx, hit.by, hit.bz, BlockType::Air);
+
+    // 挖掉非空气方块 → 生成掉落物
+    if (oldBlock != BlockType::Air && oldBlock != BlockType::Void) {
+        SpawnItemDrop(
+            glm::vec3(hit.bx + 0.5f, hit.by + 0.5f, hit.bz + 0.5f),
+            oldBlock);
+    }
 }
 
 void GameServer::HandlePlace(ServerPlayer& p, BlockType type) {

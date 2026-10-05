@@ -4,6 +4,7 @@
 #include "core/World.h"
 #include "game/server/WorldGenerator.h"
 #include "game/Protocol.h"
+#include "game/core/Entity.h"
 #include <memory>
 #include <thread>
 #include <atomic>
@@ -49,6 +50,22 @@ private:
 
     struct PendingChunkRequest { int clientId; int cx, cz; };
     std::queue<PendingChunkRequest> m_chunkQueue;
+
+    // ==================== 实体 ====================
+
+    struct ItemEntity {
+        uint32_t  id;
+        glm::vec3 pos;
+        glm::vec3 vel;
+        float     pickupDelay = 0.5f;   // 秒，落地后 0.5s 才能捡
+        float     age         = 0.0f;   // 秒
+        BlockType itemType;
+    };
+    std::unordered_map<uint32_t, ItemEntity> m_entities;
+    uint32_t m_nextEntityId = 1;
+
+    void SpawnItemDrop(const glm::vec3& pos, BlockType type);
+    void TickEntities(float dt);
 
     // ==================== 指标 ====================
     float m_lastTickMs = 0.0f;

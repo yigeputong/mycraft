@@ -59,6 +59,7 @@ private:
 
     float m_timeOfDay = 8.0f;                          // 0~24 小时
     static constexpr float kDayLengthSec = 300.0f;     // 一整天 = 5 分钟
+    float m_animTime = 0.0f;
 
     // ==================== 相机 ====================
     glm::vec3 cameraPos{0.0f, 40.0f, 0.0f};
@@ -78,6 +79,18 @@ private:
         game::MakeItemStack(BlockType::GrassBlock, 64),
         game::MakeItemStack(BlockType::Sand,       64),
     }};
+
+    // ==================== 实体 ====================
+    struct ClientItemEntity {
+        uint32_t  id;
+        glm::vec3 pos;
+        BlockType type;
+    };
+    std::unordered_map<uint32_t, ClientItemEntity> m_itemEntities;
+    std::unordered_map<BlockType, Eng::client::MeshHandle> m_itemMeshCache;
+    Eng::client::MeshHandle GetOrCreateItemMesh(BlockType type);
+
+    Eng::client::MeshHandle BuildItemCubeMesh(BlockType type);
 
     // ==================== 设置 ====================
     struct Settings {
