@@ -185,7 +185,7 @@ void MyGame::OnStart(Eng::Engine& engine) {
     auto pixels = GenerateAtlasPixels();
     m_atlasTexture = renderer->CreateTextureFromPixels(
         pixels.data(), ATLAS_W, ATLAS_H);
-    logInfo(logger, "[MyGame] atlas texture handle=" << m_atlasTexture);
+    logInfo(logger, "[MyGame] atlas texture created");
 
     if (useVulkan) {
         m_cubeShader = renderer->CreateShader(

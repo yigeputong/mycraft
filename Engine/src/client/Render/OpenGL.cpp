@@ -51,8 +51,6 @@ bool OpenGLAPI::Initialize(int width, int height, Window* window) {
     m_viewportHeight = height;
     m_initialized = true;
 
-    m_logger->log(LogLevel::INFO, "[OpenGLAPI] Initialized");
-
     // 默认纹理
     m_defaultTexture = CreateTexture("./assets/textures/missing_texture.png");
     m_defaultTexID = ResolveTexture(m_defaultTexture);
@@ -103,7 +101,7 @@ void OpenGLAPI::Shutdown() {
     m_shaders.clear();
 
     m_initialized = false;
-    m_logger->log(LogLevel::INFO, "[OpenGLAPI] Shutdown");
+    logInfo(m_logger, "[RenderAPI] Shutdown");
 }
 
 // ---------- 视口与清屏 ----------
@@ -250,9 +248,6 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
         return 0;
     }
 
-    logInfo(m_logger, "[Texture] Loaded: " << path << ", w=" << std::to_string(surf->w) 
-        << ", h=" << std::to_string(surf->h) << ", format=" << std::to_string(surf->format));
-
     // 2. 检查尺寸是否有效
     if (surf->w <= 0 || surf->h <= 0) {
         logError(m_logger, "[Texture] Invalid surface size: " << surf->w << "x" << surf->h);
@@ -279,7 +274,6 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
     }
 
     int bpp = details->bytes_per_pixel;
-    logDebug(m_logger, "[Texture] Bytes per pixel: " << bpp);
 
     // 5. 确定 OpenGL 格式（统一 UNORM，和 atlas / 管线一致）
     GLenum internalFormat = GL_RGBA8;
@@ -324,7 +318,7 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
     m_textures[handle] = data;
 
     m_textureCache[path] = handle;
-    logInfo(m_logger, "[Texture] Loaded and cached: " << path);
+    logInfo(m_logger, "[Texture] Loaded: " << path << " (" << w << "x" << h << ")");
     return handle;
 }
 
@@ -440,7 +434,7 @@ TextureHandle OpenGLAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int
     entry.format = GL_RGBA;
     m_textures[handle] = entry;
 
-    logInfo(m_logger, "[Texture] from pixels: " << w << "x" << h << " handle=" << handle << " glID=" << tex);
+    logInfo(m_logger, "[Texture] from pixels: " << w << "x" << h);
     return handle;
 }
 
@@ -530,7 +524,7 @@ ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath, const std::str
     glDeleteShader(fragment);
     if (!program) return 0;
 
-    logInfo(m_logger, "[OpenGLAPI] Shader created: " << vertPath);
+    logInfo(m_logger, "[RenderAPI] Shader created: " << vertPath);
 
     ShaderHandle handle = m_nextShaderHandle++;
     ShaderDataInternal internal;
@@ -755,7 +749,7 @@ Framebuffer OpenGLAPI::CreateFramebuffer(int width, int height) {
         glDeleteRenderbuffers(1, &depthBuf);
         return {};
     }
-    logInfo(m_logger, "[OpenGLAPI] Framebuffer created successfully");
+    logDebug(m_logger, "[RenderAPI] Framebuffer created: " << width << "x" << height);
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -1179,12 +1173,14 @@ bool OpenGLAPI::InitImGuiBackend() {
         return false;
     if (!ImGui_ImplOpenGL3_Init("#version 460 core"))
         return false;
+    logInfo(m_logger, "[RenderAPI] ImGui backend initialized");
     return true;
 }
 
 void OpenGLAPI::ShutdownImGuiBackend() {
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
+    logInfo(m_logger, "[RenderAPI] ImGui backend shutdown");
 }
 
 void OpenGLAPI::ImGuiNewFrame() {

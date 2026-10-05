@@ -63,7 +63,6 @@ bool VulkanAPI::Initialize(int width, int height, Window* window) {
         setupDebugMessenger();
         createSurface();
         pickPhysicalDevice();
-        logDeviceInfo();
         createLogicalDevice();
         createVmaAllocator();
         createCommandPool();
@@ -212,11 +211,6 @@ bool VulkanAPI::isDeviceSuitable(const vk::raii::PhysicalDevice& pd) {
         return false;
     }
     return true;
-
-    return feats.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
-           feats.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
-           feats.get<vk::PhysicalDeviceVulkan13Features>().synchronization2 &&
-           feats.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
 }
 
 void VulkanAPI::pickPhysicalDevice() {
@@ -224,34 +218,6 @@ void VulkanAPI::pickPhysicalDevice() {
     auto it = std::ranges::find_if(devices, [&](auto& pd) { return isDeviceSuitable(pd); });
     if (it == devices.end()) throw std::runtime_error("no suitable GPU");
     m_physicalDevice = *it;
-}
-
-void VulkanAPI::logDeviceInfo() {
-    // --- 基础属性 ---
-    VkPhysicalDeviceProperties props{};
-    vkGetPhysicalDeviceProperties(*m_physicalDevice, &props);
-
-    // --- 驱动信息（Vulkan 1.2+） ---
-    VkPhysicalDeviceDriverProperties driverProps{};
-    driverProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
-    driverProps.pNext = nullptr;
-
-    VkPhysicalDeviceProperties2 props2{};
-    props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-    props2.pNext = &driverProps;
-    vkGetPhysicalDeviceProperties2(*m_physicalDevice, &props2);
-
-    // --- apiVersion 是 32 位打包：major<<22 | minor<<12 | patch ---
-    uint32_t api = props.apiVersion;
-    uint32_t major = VK_API_VERSION_MAJOR(api);
-    uint32_t minor = VK_API_VERSION_MINOR(api);
-    uint32_t patch = VK_API_VERSION_PATCH(api);
-
-    logInfo(m_logger, "[Vulkan] Device: " << props.deviceName);
-    logInfo(m_logger, "[Vulkan] Vulkan API: "
-        << major << "." << minor << "." << patch);
-    logInfo(m_logger, "[Vulkan] Driver: " << driverProps.driverName
-        << " " << driverProps.driverInfo);
 }
 
 void VulkanAPI::createLogicalDevice() {
@@ -1244,6 +1210,13 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath,
 
     ShaderHandle h = m_nextShader++;
     m_shaders.emplace(h, std::move(si));
+
+    logInfo(m_logger, "[RenderAPI] Shader created: " << vertPath);
+
+    logDebug(m_logger, "[Vulkan] shader handle=" << m_nextShader
+        << " pipeline=0x" << std::hex << (uint64_t)rawPipeline << std::dec
+        << " isSky=" << isSky);
+
     return h;
 }
 
@@ -1384,6 +1357,7 @@ void VulkanAPI::Shutdown() {
         vmaDestroyAllocator(m_allocator);   // ★ 现在安全了
         m_allocator = VK_NULL_HANDLE;
     }
+    logInfo(m_logger, "[RenderAPI] Shutdown");
 }
 TextureHandle VulkanAPI::CreateTexture(const std::string& path) {
     // 缓存
@@ -1564,10 +1538,9 @@ TextureHandle VulkanAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int
 
     TextureHandle handle = m_nextTexture++;
     m_textures.emplace(handle, std::move(ti));
+    logInfo(m_logger, "[Texture] from pixels: " << w << "x" << h);
     return handle;
 }
-
-// 2/3
 
 Framebuffer VulkanAPI::CreateFramebuffer(int width, int height) {
     FramebufferInternal fbi;
@@ -1705,6 +1678,9 @@ Framebuffer VulkanAPI::CreateFramebuffer(int width, int height) {
     fb.handle = fh;
     fb.width  = width;
     fb.height = height;
+
+    logDebug(m_logger, "[RenderAPI] Framebuffer created: " << width << "x" << height);
+
     return fb;
 }
 
@@ -1970,7 +1946,7 @@ bool VulkanAPI::InitImGuiBackend()
     }
 
     m_imguiInitialized = true;
-    logInfo(m_logger, "[ImGui] Vulkan backend initialized (dynamic rendering)");
+    logInfo(m_logger, "[RenderAPI] ImGui backend initialized");
     return true;
 }
 
@@ -1992,7 +1968,7 @@ void VulkanAPI::ShutdownImGuiBackend()
 
     ImGui::DestroyContext();
     m_imguiInitialized = false;
-    logInfo(m_logger, "[ImGui] Vulkan backend shutdown");
+    logInfo(m_logger, "[RenderAPI] ImGui backend shutdown");
 }
 
 void VulkanAPI::ImGuiNewFrame()

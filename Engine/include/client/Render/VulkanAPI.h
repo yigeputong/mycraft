@@ -239,7 +239,6 @@ private:
     void setupDebugMessenger();
     void createSurface();
     void pickPhysicalDevice();
-    void logDeviceInfo();
     void createLogicalDevice();
     void createVmaAllocator();
     void createFullscreenPipeline();
