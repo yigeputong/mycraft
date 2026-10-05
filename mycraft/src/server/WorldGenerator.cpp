@@ -144,34 +144,79 @@ float PerlinNoise::Fractal2D(float x, float y, int octaves,
 TerrainGenerator::TerrainGenerator(uint32_t seed)
     : m_noise(seed) {}
 
-int TerrainGenerator::GetHeight(int x, int z) const {
+Biome TerrainGenerator::GetBiome(int x, int z) const {
+    constexpr float WARP_FREQ = 0.010f;
+    constexpr float WARP_AMP  = 120.0f;
+
+    float warpX = m_noise.Fractal2D(x * WARP_FREQ,            z * WARP_FREQ,            2) * WARP_AMP;
+    float warpZ = m_noise.Fractal2D(x * WARP_FREQ + 5000.0f,   z * WARP_FREQ + 5000.0f,  2) * WARP_AMP;
+
+    constexpr float TEMP_FREQ = 0.0015f;
+    float temp = m_noise.Fractal2D((x + warpX) * TEMP_FREQ + 1000.0f,
+                                    (z + warpZ) * TEMP_FREQ + 1000.0f, 3);
+
+    // ★ dither 降频：0.8 → 0.15（每 6-7 格变一次，不是每格）
+    // ★ 幅度也从 0.08 降到 0.05
+    float dither = m_noise.Fractal2D(x * 0.15f + 7000.0f,
+                                      z * 0.15f + 7000.0f, 1);
+    temp += dither * 0.05f;
+
+    // 把 temp 从 [-1, 1] 映射到 [0, 1]，再按三等分
+    float t01 = (temp + 1.0f) * 0.5f;   // [0, 1]
+    if (t01 > 0.66f) return Biome::Desert;
+    if (t01 < 0.33f) return Biome::Snow;
+    return Biome::Forest;
+}
+
+int TerrainGenerator::GetHeight(int x, int z, Biome biome) const {
     constexpr float FREQ      = 0.012f;
     constexpr float MASK_FREQ = 0.004f;
     constexpr int   OCTAVES   = 6;
 
-    // 平原：基准 28，起伏 ±3    →  25 ~ 31（海平面 25 边上）
     constexpr int PLAINS_BASE = 28;
     constexpr int PLAINS_AMP  = 3;
-
-    // 山地：基准 30，起伏 ±28   →  2 ~ 58（有山有深谷）
     constexpr int MTN_BASE    = 30;
     constexpr int MTN_AMP     = 28;
 
-    // ---- mask：平原(0) 还是山地(1) ----
+    // ---- mask：平原(0) / 山地(1) ----
     float mask = m_noise.Fractal2D(x * MASK_FREQ, z * MASK_FREQ, 3);
     mask = std::clamp(mask * 2.0f + 0.5f, 0.0f, 1.0f);
-    mask = mask * mask * mask * mask;    // 提高平原比例
+    mask = mask * mask * mask * mask;
 
     // ---- 高度噪声 ----
     float n = m_noise.Fractal2D(x * FREQ, z * FREQ, OCTAVES);
     n = std::clamp(n * 2.5f, -1.0f, 1.0f);
     float shaped = std::copysign(std::pow(std::abs(n), 0.6f), n);
 
-    // ---- 基准和振幅都随 mask 插值 ----
     float base = PLAINS_BASE + mask * (MTN_BASE - PLAINS_BASE);
-    float amp  = PLAINS_AMP  + mask * (MTN_AMP  - PLAINS_AMP);
 
-    int h = static_cast<int>(base + shaped * amp);
+    // ★ 沙漠更平坦
+    float ampMul = (biome == Biome::Desert) ? 0.35f : 1.0f;
+    float amp  = (PLAINS_AMP + mask * (MTN_AMP - PLAINS_AMP)) * ampMul;
+
+    float hf = base + shaped * amp;
+
+    constexpr float CLIFF_FREQ = 0.010f;
+    float cliff = m_noise.Fractal2D(x * CLIFF_FREQ + 700.0f,
+                                     z * CLIFF_FREQ + 700.0f, 2);
+
+    float biomeCliffMul = (biome == Biome::Desert) ? 0.35f : 1.0f;
+
+    if (cliff > 0.55f && biomeCliffMul > 0.0f) {
+        constexpr float STEP = 3.0f;
+        float stepped = std::round(hf / STEP) * STEP;
+
+        constexpr float WARP_FREQ = 0.008f;
+        float warp = m_noise.Fractal2D(x * WARP_FREQ + 2000.0f,
+                                        z * WARP_FREQ + 2000.0f, 2) * 1.8f;
+
+        float steppedFinal = stepped + warp;
+
+        // ★ 按 biome 强度混合
+        hf = hf * (1.0f - biomeCliffMul) + steppedFinal * biomeCliffMul;
+    }
+
+    int h = static_cast<int>(hf);
     return std::clamp(h, 1, CHUNK_SIZE_Y - 2);
 }
 
@@ -187,10 +232,17 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
     constexpr int W   = CHUNK_SIZE_X + PAD * 2;
     constexpr int H   = CHUNK_SIZE_Z + PAD * 2;
     static thread_local std::array<std::array<int, H>, W> heights;
+    static thread_local std::array<std::array<uint8_t, H>, W> biomes;
 
-    for (int x = 0; x < W; ++x)
-        for (int z = 0; z < H; ++z)
-            heights[x][z] = GetHeight(baseX + x - PAD, baseZ + z - PAD);
+    for (int x = 0; x < W; ++x) {
+        for (int z = 0; z < H; ++z) {
+            int wx = baseX + x - PAD;
+            int wz = baseZ + z - PAD;
+            Biome b = GetBiome(wx, wz);
+            biomes[x][z] = static_cast<uint8_t>(b);
+            heights[x][z] = GetHeight(wx, wz, b);
+        }
+    }
 
     // ---- 主生成循环 ----
     for (int lx = 0; lx < CHUNK_SIZE_X; ++lx) {
@@ -212,12 +264,21 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
             for (int ly = 0; ly < CHUNK_SIZE_Y; ++ly) {
                 BlockType type = BlockType::Air;
 
+                Biome biome = static_cast<Biome>(biomes[lx + PAD][lz + PAD]);
+
                 if (ly > height) {
                     type = (ly <= SEA_LEVEL) ? BlockType::Water : BlockType::Air;
                 } else if (ly == height) {
-                    type = nearWater ? BlockType::Sand : BlockType::GrassBlock;
+                    switch (biome) {
+                        case Biome::Desert: type = BlockType::Sand; break;
+                        case Biome::Snow:   type = BlockType::Snow; break;
+                        default:            type = nearWater ? BlockType::Sand : BlockType::GrassBlock; break;
+                    }
                 } else if (ly >= height - 3) {
-                    type = BlockType::Dirt;
+                    switch (biome) {
+                        case Biome::Desert: type = BlockType::Sandstone; break;
+                        default:            type = BlockType::Dirt; break;
+                    }
                 } else {
                     type = BlockType::Stone;
                 }

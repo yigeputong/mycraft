@@ -52,7 +52,7 @@ private:
     std::unordered_map<uint64_t, ClientChunk> m_chunks;
     std::unordered_set<uint64_t>              m_pending;
     std::queue<PendingMesh>                   m_meshQueue;
-    int m_renderDistance    = 8;
+    int m_renderDistance    = 16;
     int m_lastPlayerChunkX  = INT_MIN;
     int m_lastPlayerChunkZ  = INT_MIN;
     static constexpr int kRequestsPerTick = 1;
@@ -69,6 +69,7 @@ private:
     float pitch =  0.0f;
     glm::mat4 view       = glm::mat4(1.0f);
     glm::mat4 projection = glm::mat4(1.0f);
+    bool m_flyMode = false;
 
     // ==================== Hotbar ====================
     static constexpr int kHotbarSize = 4;

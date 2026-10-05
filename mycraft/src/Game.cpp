@@ -31,20 +31,23 @@ uint8_t HashNoise(int x, int y, uint32_t seed) {
 }
 
 struct TileSpec { uint8_t r, g, b; int noise; };
-const TileSpec kTiles[6] = {
+const TileSpec kTiles[9] = {   // ← 从 6 改成 9
     {128, 128, 128, 30},   // 0 stone
     { 88, 160,  70, 20},   // 1 grass_top
-    { 88, 160,  70, 20},   // 2 grass_side（下面单独画土色下半部分）
+    { 88, 160,  70, 20},   // 2 grass_side
     {110,  75,  50, 25},   // 3 dirt
     {220, 210, 160, 20},   // 4 sand
     { 40,  90, 180, 15},   // 5 water
+    {210, 218, 228, 20},   // 6 snow_top（微蓝白，加大 noise）
+    {210, 218, 228, 20},   // 7 snow_side
+    {200, 180, 130, 25},   // 8 sandstone（浅黄）
 };
 
 // 生成 RGBA 像素数组，64x64
 std::vector<uint8_t> GenerateAtlasPixels() {
     std::vector<uint8_t> px(ATLAS_W * ATLAS_H * 4, 0);
 
-    for (int t = 0; t < 6; ++t) {
+    for (int t = 0; t < sizeof(kTiles) / sizeof(TileSpec); ++t) {
         int col = t % ATLAS_COLS;
         int row = t / ATLAS_COLS;
         int ox = col * ATLAS_TILE;
@@ -58,11 +61,9 @@ std::vector<uint8_t> GenerateAtlasPixels() {
                 int g = kTiles[t].g + n;
                 int b = kTiles[t].b + n;
 
-                // grass_side：上半部分绿、下半部分土，交界处锯齿
-                if (t == 2) {
-                    bool grass = (y < 4)
-                              || (y == 4 && ((x + HashNoise(x, 0, 99)) % 3 != 0));
-                    if (!grass) { r = 110 + n; g = 75 + n; b = 50 + n; }
+                if (t == 2 || t == 7) {   // ★ 草侧面 / 雪侧面
+                    bool top = (y < 4) || (y == 4 && ((x + HashNoise(x, 0, 99)) % 3 != 0));
+                    if (!top) { r = 110 + n; g = 75 + n; b = 50 + n; }   // 下半土色
                 }
 
                 int i = ((oy + y) * ATLAS_W + (ox + x)) * 4;
@@ -81,10 +82,21 @@ std::vector<uint8_t> GenerateAtlasPixels() {
 int TileForBlock(game::BlockType b, int face) {
     switch (b) {
         case game::BlockType::Stone:      return 0;
-        case game::BlockType::GrassBlock: return (face == 2) ? 1 : 2;   // 顶面草、其余侧面
+        case game::BlockType::GrassBlock:
+            if (face == 2) return 1;
+            if (face == 3) return 3;
+            return 2;
         case game::BlockType::Dirt:       return 3;
         case game::BlockType::Sand:       return 4;
         case game::BlockType::Water:      return 5;
+        case game::BlockType::Snow:
+            // 顶=6（纯白）、底=3（土）、侧面=7
+            if (face == 2) return 6;
+            if (face == 3) return 3;
+            return 7;
+
+        case game::BlockType::Sandstone:
+            return 8;
         default:                    return 0;
     }
 }
@@ -120,7 +132,7 @@ void MyGame::OnStart(Eng::Engine& engine) {
     logInfo(logger, "[Game] Connected to server");
 
 
-    const Eng::client::RenderAPItype apiType = Eng::client::RenderAPItype::VULKAN;
+    const Eng::client::RenderAPItype apiType = Eng::client::RenderAPItype::OPENGL;
     const bool useVulkan = (apiType == Eng::client::RenderAPItype::VULKAN);
     Eng::client::WindowConfig windowConfig = {
         .apitype = apiType,
@@ -132,7 +144,7 @@ void MyGame::OnStart(Eng::Engine& engine) {
     m_win = winMgr->CreateWindow(windowConfig);
     mainWin = winMgr->GetWindow(m_win);
     if (!mainWin) return;
-    mainWin->onEvent = [&](const SDL_Event& e) {
+    mainWin->onEvent = [this](const SDL_Event& e) {
         ImGui_ImplSDL3_ProcessEvent(&e);
         ImGuiIO& io = ImGui::GetIO();
         if (io.WantCaptureKeyboard || io.WantCaptureMouse) {
@@ -140,10 +152,8 @@ void MyGame::OnStart(Eng::Engine& engine) {
         Eng::client::Input::Get().ProcessEvent(e);
         switch(e.type) {
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                renderer->DestroyFramebuffer(fbo);
                 fbo = renderer->CreateFramebuffer(e.window.data1, e.window.data2);
-                break;
-            case SDL_EVENT_WINDOW_FOCUS_LOST:
-                //m_paused = true;   //这东西只有单人模式有用
                 break;
             case SDL_EVENT_WINDOW_MINIMIZED:
                 m_minimized = true;
@@ -191,15 +201,6 @@ void MyGame::OnStart(Eng::Engine& engine) {
     if (!fbo.isValid()) {
         logError(logger, "FBO creation failed!");
     }
-    std::vector<std::string> skyboxFaces = {
-        "./assets/textures/skybox/right.jpg",
-        "./assets/textures/skybox/left.jpg",
-        "./assets/textures/skybox/top.jpg",
-        "./assets/textures/skybox/bottom.jpg",
-        "./assets/textures/skybox/front.jpg",
-        "./assets/textures/skybox/back.jpg"
-    };
-    // m_skyShader 段替换（改成 CreateSkybox）
     if (useVulkan) {
         m_skyShader = renderer->CreateSkybox(
             "./assets/shaders/build/sky/vert.vk.spv",
@@ -238,17 +239,23 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
 
     m_animTime += deltaTime;
 
-    PlayerMotion me;
-    me.position = cameraPos;
-    me.velocity = m_playerVelocity;
-    me.onGround = m_playerOnGround;
+    if (m_flyMode) {
+        cameraPos += m_lastMoveDir * 15.0f * deltaTime;
+        m_playerVelocity = glm::vec3(0.0f);
+        m_playerOnGround = false;
+    } else {
+        PlayerMotion me;
+        me.position = cameraPos;
+        me.velocity = m_playerVelocity;
+        me.onGround = m_playerOnGround;
 
-    game::StepPlayer(me, m_lastMoveDir, m_jumpHoldTimer > 0.0f, deltaTime,
-        [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
+        game::StepPlayer(me, m_lastMoveDir, m_jumpHoldTimer > 0.0f, deltaTime,
+            [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
 
-    cameraPos        = me.position;
-    m_playerVelocity = me.velocity;
-    m_playerOnGround = me.onGround;
+        cameraPos        = me.position;
+        m_playerVelocity = me.velocity;
+        m_playerOnGround = me.onGround;
+    }
 
     constexpr float CORRECTION_RATE = 8.0f;
     float t = 1.0f - std::exp(-CORRECTION_RATE * deltaTime);
@@ -491,7 +498,7 @@ void MyGame::DrawUI(Eng::Engine& engine) {
             // ---- 窗口 ----
             auto& wcfg = mainWin->GetConfigs();
             if (ImGui::Checkbox("VSync", &wcfg.vsync)) {
-                SDL_GL_SetSwapInterval(wcfg.vsync ? 1 : 0);
+                m_applyPending = true;
             }
 
             bool fs = wcfg.fullscreen;
@@ -524,6 +531,23 @@ void MyGame::DrawUI(Eng::Engine& engine) {
     }
 }
 
+void MyGame::OnShutdown(Eng::Engine&) {
+    m_client.Disconnect();
+    if (m_server) {
+        m_server->Stop();
+        m_server.reset();
+    }
+
+    renderer->DestroyShader(m_cubeShader);
+    // renderer->DestroyTexture(m_cubeTexture);
+    renderer->DestroyShader(m_skyShader);
+
+    // ★ 统一走后端接口
+    renderer->ShutdownImGuiBackend();
+
+    winMgr->DestroyWindow(m_win);
+}
+
 bool MyGame::GetInput(float dt) {
     using namespace Eng::client;
 
@@ -532,9 +556,16 @@ bool MyGame::GetInput(float dt) {
         m_menuOpen = !m_menuOpen;
     }
     if (m_menuOpen) { // 菜单打开时冻结游戏输入
-        // 解除相对模式，让鼠标能点 UI
         Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), false);
         return m_shouldQuit;
+    }
+
+    // ==================== F 切换飞行（调试） ====================
+    if (Input::IsKeyPressed(KeyCode::F)) {
+        m_flyMode = !m_flyMode;
+        m_positionError = glm::vec3(0.0f);
+        m_playerVelocity = glm::vec3(0.0f);
+        logDebug(logger, "[Client] Fly mode " << (m_flyMode ? "ON" : "OFF"));
     }
 
     // ==================== F11 全屏切换 ====================
@@ -542,6 +573,7 @@ bool MyGame::GetInput(float dt) {
         auto& configs = mainWin->GetConfigs();
         configs.fullscreen = !configs.fullscreen;
         mainWin->SetFullscreen(configs.fullscreen);
+        renderer->DestroyFramebuffer(fbo);
         fbo = renderer->CreateFramebuffer(
             mainWin->GetConfigs().windowPixelWidth,
             mainWin->GetConfigs().windowPixelHeight);
@@ -576,8 +608,10 @@ bool MyGame::GetInput(float dt) {
     if (Input::IsKeyDown(KeyCode::S)) moveDir -= forward;
     if (Input::IsKeyDown(KeyCode::D)) moveDir += right;
     if (Input::IsKeyDown(KeyCode::A)) moveDir -= right;
-    // if (Input::IsKeyDown(KeyCode::Space))  moveDir.y += 1.0f;    // 不飞了
-    // if (Input::IsKeyDown(KeyCode::LShift)) moveDir.y -= 1.0f;
+    if (m_flyMode) {
+        if (Input::IsKeyDown(KeyCode::Space))  moveDir.y += 1.0f;
+        if (Input::IsKeyDown(KeyCode::LShift)) moveDir.y -= 1.0f;
+    }
     if (glm::length(moveDir) > 0.001f) {
         moveDir = glm::normalize(moveDir);
     }
@@ -618,7 +652,6 @@ bool MyGame::GetInput(float dt) {
         logError(logger, "[BUG] m_hotbarIndex out of range: " << m_hotbarIndex);
         m_hotbarIndex = 0;
     }
-
     auto& curSlot = m_hotbar[m_hotbarIndex];
     if (curSlot.isEmpty()) {
         input.placeBlock = 0;
@@ -629,6 +662,7 @@ bool MyGame::GetInput(float dt) {
             if (curSlot.count <= 0) curSlot = game::ItemStack{};
         }
     }
+    input.fly = m_flyMode;
 
     Eng::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::PlayerInput));
@@ -638,30 +672,13 @@ bool MyGame::GetInput(float dt) {
     w.Write(static_cast<uint8_t>(input.dig   ? 1 : 0));
     w.Write(static_cast<uint8_t>(input.place ? 1 : 0));
     w.Write<uint16_t>(input.placeBlock);
+    w.Write(static_cast<uint8_t>(input.fly ? 1 : 0));
     m_client.Send(w.GetBuffer());
     // 本地预测
     // float speed = 5.0f * dt;
     // cameraPos += input.moveDir * speed;
 
     return m_shouldQuit;
-}
-
-void MyGame::OnShutdown(Eng::Engine&) {
-    m_client.Disconnect();
-    if (m_server) {
-        m_server->Stop();
-        m_server.reset();
-    }
-
-    renderer->DestroyShader(m_cubeShader);
-    // renderer->DestroyTexture(m_cubeTexture);
-    renderer->DestroyShader(m_fbShader);
-    renderer->DestroyShader(m_skyShader);
-
-    // ★ 统一走后端接口
-    renderer->ShutdownImGuiBackend();
-
-    winMgr->DestroyWindow(m_win);
 }
 
 void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {

@@ -44,27 +44,17 @@ void Window::SetFullscreen(bool enabled) {
     if (enabled) {
         // 保存当前窗口尺寸（用于退出全屏时恢复）
         SDL_GetWindowSize(sdlWin, &m_windowedWidth, &m_windowedHeight);
-
-        // ★ 方案一：全屏（真实分辨率）★
-        // SDL_SetWindowFullscreen(sdlWin, true);
-
-        // ★ 方案二：窗口化全屏（无边框）推荐 ★
-        SDL_SetWindowFullscreen(sdlWin, true);
-        SDL_SetWindowSize(sdlWin, 0, 0);  // 0, 0 表示填满显示器
-        SDL_SetWindowPosition(sdlWin, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-        SDL_SetWindowBordered(sdlWin, false);
-        SDL_RaiseWindow(sdlWin);
+        SDL_SetWindowFullscreen(sdlWin, true);   // 就这一行
     } else {
-        // 退出全屏：恢复窗口模式
         SDL_SetWindowFullscreen(sdlWin, false);
         SDL_SetWindowBordered(sdlWin, true);
         SDL_SetWindowSize(sdlWin, m_windowedWidth, m_windowedHeight);
         SDL_SetWindowPosition(sdlWin, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-        std::cout << SDL_GetError() << std::endl;
     }
 
     SDL_GetWindowSize(sdlWin, &m_config.windowWidth, &m_config.windowHeight);
     SDL_GetWindowSizeInPixels(sdlWin, &m_config.windowPixelWidth, &m_config.windowPixelHeight);
+
     if (m_renderapi) {
         m_renderapi->SetViewport(0, 0, m_config.windowPixelWidth, m_config.windowPixelHeight);
     }

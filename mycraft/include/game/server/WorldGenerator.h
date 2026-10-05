@@ -3,7 +3,15 @@
 #include "game/core/Blocks.h"
 #include "game/core/World.h"
 
-namespace game::server {
+namespace game {
+
+enum class Biome : uint8_t {
+    Forest,
+    Desert,
+    Snow,
+};
+
+namespace server {
 
 class PerlinNoise {
 public:
@@ -37,14 +45,17 @@ class TerrainGenerator {
 public:
     explicit TerrainGenerator(uint32_t seed = 0);
     Chunk GenerateChunk(int cx, int cz) const;
+    Biome GetBiome(int x, int z) const;
 
     static constexpr int SEA_LEVEL = 25;
 
 private:
     PerlinNoise m_noise;
 
-    int GetHeight(int x, int z) const;
+    int GetHeight(int x, int z, Biome biome) const;
 };
 
+
+}
 
 }

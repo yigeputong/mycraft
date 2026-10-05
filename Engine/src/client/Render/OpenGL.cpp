@@ -2,6 +2,7 @@
 #include "client/Window.h"
 #include "core/Log.h"
 
+#include <SDL3/SDL_pixels.h>
 #include <iostream>
 #include <filesystem>
 #include <vector>
@@ -80,6 +81,9 @@ void OpenGLAPI::Shutdown() {
 
     if (m_globalUBO)   { glDeleteBuffers(1, &m_globalUBO);   m_globalUBO = 0; }
     if (m_materialUBO) { glDeleteBuffers(1, &m_materialUBO); m_materialUBO = 0; }
+    if (m_fullscreenVAO) { glDeleteVertexArrays(1, &m_fullscreenVAO); m_fullscreenVAO = 0; }
+    if (m_fullscreenVBO) { glDeleteBuffers(1, &m_fullscreenVBO);      m_fullscreenVBO = 0; }
+    if (m_skyCubeMesh)   { DestroyMesh(m_skyCubeMesh);                m_skyCubeMesh = 0; }
 
     for (auto& [handle, mesh] : m_meshes) {
         if (mesh.vao) glDeleteVertexArrays(1, &mesh.vao);
@@ -257,7 +261,7 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
     }
 
     // 3. 强制转换为 RGBA8888（保证兼容性）
-    SDL_Surface* converted = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_ABGR8888);
+    SDL_Surface* converted = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_RGBA32);
     if (!converted) {
         logError(m_logger, "[Texture] SDL_ConvertSurface failed: " << SDL_GetError());
         SDL_DestroySurface(surf);
@@ -277,14 +281,14 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
     int bpp = details->bytes_per_pixel;
     logDebug(m_logger, "[Texture] Bytes per pixel: " << bpp);
 
-    // 5. 确定 OpenGL 格式
-    GLenum internalFormat = GL_RGBA;
+    // 5. 确定 OpenGL 格式（统一 UNORM，和 atlas / 管线一致）
+    GLenum internalFormat = GL_RGBA8;
     GLenum format = GL_RGBA;
     if (bpp == 4) {
-        internalFormat = GL_SRGB8_ALPHA8;
+        internalFormat = GL_RGBA8;
         format = GL_RGBA;
     } else if (bpp == 3) {
-        internalFormat = GL_SRGB8;
+        internalFormat = GL_RGB8;
         format = GL_RGB;
     } else {
         logError(m_logger, "[Texture] Unsupported BPP: " << bpp);
@@ -307,14 +311,15 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
 
     glGenerateMipmap(GL_TEXTURE_2D);
 
+    int w = surf->w, h = surf->h;
     SDL_DestroySurface(surf);
 
     // 7. 保存并返回句柄
     TextureHandle handle = m_nextTextureHandle++;
     TextureDataInternal data;
     data.textureID = textureID;
-    data.width = surf->w;
-    data.height = surf->h;
+    data.width = w;
+    data.height = h;
     data.format = format;
     m_textures[handle] = data;
 
@@ -363,7 +368,7 @@ TextureHandle OpenGLAPI::CreateTextureFromMemory(const aiTexture* embedded) {
     }
 
     // ===== 转成 ABGR8888（匹配 OpenGL 的 GL_RGBA） =====
-    SDL_Surface* converted = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_ABGR8888);
+    SDL_Surface* converted = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
     SDL_DestroySurface(surface);
     if (!converted) {
         logError(m_logger, "[Texture] Conversion failed: " << SDL_GetError());
@@ -380,9 +385,9 @@ TextureHandle OpenGLAPI::CreateTextureFromMemory(const aiTexture* embedded) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8,
-                 converted->w, converted->h, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, converted->pixels);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
+             converted->w, converted->h, 0,
+             GL_RGBA, GL_UNSIGNED_BYTE, converted->pixels);
 
     glGenerateMipmap(GL_TEXTURE_2D);
 
@@ -469,8 +474,7 @@ static GLuint CompileShaderSPIRV(GLenum stage, const std::vector<char>& spv) {
     return shader;
 }
 
-ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath,
-                                      const std::string& fragPath) {
+ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath, const std::string& fragPath) {
     if (!m_initialized) return 0;
 
     auto isSPV = [](const std::string& p) {
@@ -693,25 +697,27 @@ Framebuffer OpenGLAPI::CreateFramebuffer(int width, int height) {
         "./assets/shaders/build/post/vert.gl.spv",
         "./assets/shaders/build/post/frag.gl.spv");
 
-    static float vertices[] = {
-        -1.0f,  1.0f,   0.0f, 1.0f,
-        -1.0f, -1.0f,   0.0f, 0.0f,
-         1.0f, -1.0f,   1.0f, 0.0f,
-        -1.0f,  1.0f,   0.0f, 1.0f,
-         1.0f, -1.0f,   1.0f, 0.0f,
-         1.0f,  1.0f,   1.0f, 1.0f
-    };
+    if (m_fullscreenVAO == 0) {
+        static constexpr float vertices[] = {
+            -1.0f,  1.0f,   0.0f, 1.0f,
+            -1.0f, -1.0f,   0.0f, 0.0f,
+            1.0f, -1.0f,   1.0f, 0.0f,
+            -1.0f,  1.0f,   0.0f, 1.0f,
+            1.0f, -1.0f,   1.0f, 0.0f,
+            1.0f,  1.0f,   1.0f, 1.0f
+        };
 
-    glGenVertexArrays(1, &m_fullscreenVAO);
-    glGenBuffers(1, &m_fullscreenVBO);
-    glBindVertexArray(m_fullscreenVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, m_fullscreenVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-    glBindVertexArray(0);
+        glGenVertexArrays(1, &m_fullscreenVAO);
+        glGenBuffers(1, &m_fullscreenVBO);
+        glBindVertexArray(m_fullscreenVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, m_fullscreenVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glBindVertexArray(0);
+    }
 
     // ---------- FBO + attachments ----------
     GLuint fbo      = 0;
@@ -789,9 +795,9 @@ void OpenGLAPI::BindFramebuffer(const Framebuffer& fb) {
 void OpenGLAPI::UnbindFramebuffer() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (m_window) {
-        glViewport(0, 0,
-            m_window->GetConfigs().windowWidth,
-            m_window->GetConfigs().windowHeight);
+        int w = 0, h = 0;
+        SDL_GetWindowSizeInPixels(m_window->GetSDLWindow(), &w, &h);
+        glViewport(0, 0, w, h);
     }
 }
 
@@ -910,9 +916,9 @@ void OpenGLAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
     glBindVertexArray(0);
 
     // ============ 5. 解绑纹理 ============
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, 0);
     glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
@@ -998,19 +1004,23 @@ void OpenGLAPI::DrawSkybox(ShaderHandle shader) {
     // 天空盒状态：不写深度、不剔面
     glDepthMask(GL_FALSE);
     glDisable(GL_CULL_FACE);
+    GLint oldDepthFunc;
+    glGetIntegerv(GL_DEPTH_FUNC, &oldDepthFunc);
     glDepthFunc(GL_LEQUAL);   // shader 里 gl_Position.xyww 会得到 z=1，LEQUAL 才能通过
 
     glUseProgram(program);
 
     // 天空盒不需要 model / material / 纹理
-    glBindVertexArray(m_meshes[GetSkyCubeMesh()].vao);
+    auto meshit = m_meshes.find(GetSkyCubeMesh());
+    if (meshit == m_meshes.end()) return;
+    glBindVertexArray(meshit->second.vao);
     glDrawArrays(GL_TRIANGLES, 0, 36);
     glBindVertexArray(0);
 
     // 恢复状态
     glDepthMask(GL_TRUE);
     glEnable(GL_CULL_FACE);
-    glDepthFunc(GL_LESS);
+    glDepthFunc(oldDepthFunc);
     glUseProgram(0);
 }
 
@@ -1022,7 +1032,7 @@ void OpenGLAPI::DrawFullscreenQuad(TextureHandle textureID) {
 
     glUseProgram(shader);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, textureID);
+    glBindTexture(GL_TEXTURE_2D, ResolveTexture(textureID));
     glUniform1i(glGetUniformLocation(shader, "screenTexture"), 0);
 
     glBindVertexArray(m_fullscreenVAO);

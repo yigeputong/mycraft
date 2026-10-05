@@ -129,18 +129,9 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
             in.dig     = r.Read<uint8_t>() != 0;
             in.place   = r.Read<uint8_t>() != 0;
             in.placeBlock = r.Read<uint16_t>();
+            in.fly = r.Read<uint8_t>() != 0;
 
-            for (auto& p : m_players) {
-                if (p.id == (uint32_t)clientId) {
-                    p.moveDir = in.moveDir;     // 存世界方向
-                    p.yaw     = in.look.x;
-                    p.pitch   = in.look.y;
-                    p.jump    = in.jump;
-                    if (in.dig)   HandleDig(p);
-                    if (in.place) HandlePlace(p, static_cast<BlockType>(in.placeBlock));
-                    break;
-                }
-            }
+            ApplyPlayerInput(clientId, in);
             break;
         }
         case game::net::MessageType::ChunkRequest: {
@@ -172,6 +163,9 @@ void GameServer::ApplyPlayerInput(int clientId, const net::PlayerInput& in) {
             p.yaw     = in.look.x;
             p.pitch   = in.look.y;
             p.jump    = in.jump;
+            p.flyMode = in.fly;
+            if (in.dig)   HandleDig(p);
+            if (in.place) HandlePlace(p, static_cast<BlockType>(in.placeBlock));
             return;
         }
     }
@@ -179,17 +173,21 @@ void GameServer::ApplyPlayerInput(int clientId, const net::PlayerInput& in) {
 
 void GameServer::TickWorld(float dt) {
     for (auto& p : m_players) {
-        PlayerMotion me;
-        me.position = p.position;
-        me.velocity = p.velocity;
-        me.onGround = p.onGround;
-
-        game::StepPlayer(me, p.moveDir, p.jump, dt,
-            [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
-
-        p.position = me.position;
-        p.velocity = me.velocity;
-        p.onGround = me.onGround;
+        if (p.flyMode) {
+            p.position += p.moveDir * 15.0f * dt;
+            p.velocity = glm::vec3(0.0f);
+            p.onGround = false;
+        } else {
+            PlayerMotion me;
+            me.position = p.position;
+            me.velocity = p.velocity;
+            me.onGround = p.onGround;
+            game::StepPlayer(me, p.moveDir, p.jump, dt,
+                [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
+            p.position = me.position;
+            p.velocity = me.velocity;
+            p.onGround = me.onGround;
+        }
         p.jump = false;
     }
 }

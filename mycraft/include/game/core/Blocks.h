@@ -7,6 +7,8 @@ namespace game {
 enum BlockType : uint8_t {
     Air = 0,
     Stone, GrassBlock, Dirt, Sand, Water,
+    Snow,        // ★ 雪地顶面
+    Sandstone,   // ★ 沙漠深层
     Void
 };
 

@@ -27,6 +27,7 @@ struct PlayerInput {
     bool dig   = false;   // 挖
     bool place = false;   // 放
     uint16_t placeBlock = 1; // 放的方块
+    bool fly = false;
 };
 
 struct PlayerState {

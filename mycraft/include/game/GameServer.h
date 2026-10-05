@@ -40,6 +40,7 @@ private:
         float     yaw   = 0.0f;
         float     pitch = 0.0f;
         glm::vec3 moveDir{0.0f};                  // 水平意图
+        bool      flyMode = false;
     };
     std::vector<ServerPlayer> m_players;
     static constexpr float REACH_DISTANCE = 5.0f;
