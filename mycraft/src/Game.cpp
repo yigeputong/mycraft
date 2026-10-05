@@ -116,41 +116,47 @@ static const char* BlockName(game::BlockType t) {
 
 namespace game {
 
-void MyGame::OnStart(Eng::Engine& engine) {
-    if (!logger) {
-        logger = std::make_unique<Eng::Log>();
-    }
-    m_server = std::make_unique<game::server::GameServer>();
-    if (!m_server->Start(25565)) {              // ← 这里
-        logError(logger, "[Game] Failed to start server");
-        return;
-    }
-    if (!m_client.Connect("localhost", 25565)) {
-        logError(logger, "[Game] Failed to connect to server");
-        return;
-    }
-    logInfo(logger, "[Game] Connected to server");
+// ============================================================
+// OnStart 分阶段
+// ============================================================
 
+bool MyGame::SetupNetwork(Eng::Engine& engine) {
+    if (engine.NeedsLocalServer()) {
+        m_server = std::make_unique<game::server::GameServer>();
+        if (!m_server->Start(25565)) {
+            logError(logger, "[Game] Failed to start server");
+            return false;
+        }
+    }
 
-    const Eng::client::RenderAPItype apiType = Eng::client::RenderAPItype::VULKAN;
-    const bool useVulkan = (apiType == Eng::client::RenderAPItype::VULKAN);
+    if (engine.NeedsClientConnection()) {
+        if (!m_client.Connect("localhost", 25565)) {   // TODO: 支持远程地址
+            logError(logger, "[Game] Failed to connect to server");
+            return false;
+        }
+        logInfo(logger, "[Game] Connected to server");
+    }
+
+    return true;
+}
+
+bool MyGame::SetupWindow(Eng::Engine& engine) {
     Eng::client::WindowConfig windowConfig = {
-        .apitype = apiType,
-        .title = "Mycraft v0.0.0",
-        .windowWidth = 1280,
+        .apitype      = m_apiType,
+        .title        = "Mycraft v0.0.0",
+        .windowWidth  = 1280,
         .windowHeight = 720
     };
+
     winMgr = engine.GetWindowManager();
-    m_win = winMgr->CreateWindow(windowConfig);
+    m_win  = winMgr->CreateWindow(windowConfig);
     mainWin = winMgr->GetWindow(m_win);
-    if (!mainWin) return;
+    if (!mainWin) return false;
+
     mainWin->onEvent = [this](const SDL_Event& e) {
         ImGui_ImplSDL3_ProcessEvent(&e);
-        ImGuiIO& io = ImGui::GetIO();
-        if (io.WantCaptureKeyboard || io.WantCaptureMouse) {
-        }
         Eng::client::Input::Get().ProcessEvent(e);
-        switch(e.type) {
+        switch (e.type) {
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 renderer->DestroyFramebuffer(fbo);
                 fbo = renderer->CreateFramebuffer(e.window.data1, e.window.data2);
@@ -164,52 +170,85 @@ void MyGame::OnStart(Eng::Engine& engine) {
         }
     };
 
+    Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), true);
+    return true;
+}
+
+bool MyGame::SetupRenderer(Eng::Engine& engine) {
     renderer = mainWin->GetAPI();
-    renderer->Initialize(mainWin->GetConfigs().windowWidth, mainWin->GetConfigs().windowHeight, mainWin);
+    if (!renderer) {
+        logError(logger, "[Game] renderer is null");
+        return false;
+    }
+
+    renderer->Initialize(mainWin->GetConfigs().windowWidth,
+                         mainWin->GetConfigs().windowHeight,
+                         mainWin);
+
+    // 从 renderer 反推用哪个后端 —— 不依赖 OnStart 里硬编码的 m_apiType
     m_deviceInfo = renderer->GetDeviceInfo();
+    m_useVulkan  = (m_deviceInfo.backend == "Vulkan");
+
     logInfo(logger, "[RenderAPI] Backend:     " << m_deviceInfo.backend);
     logInfo(logger, "[RenderAPI] Device:      " << m_deviceInfo.deviceName);
     logInfo(logger, "[RenderAPI] Vendor:      " << m_deviceInfo.vendor);
     logInfo(logger, "[RenderAPI] API version: " << m_deviceInfo.apiVersion);
     logInfo(logger, "[RenderAPI] Driver:      " << m_deviceInfo.driverVersion);
     logInfo(logger, "[RenderAPI] Shader lang: " << m_deviceInfo.shadingLanguage);
-    renderer->SetClearColor(0.125f,0.125f,0.125f,0.0f);
 
-    Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), true);
+    renderer->SetClearColor(0.125f, 0.125f, 0.125f, 0.0f);
 
     if (!renderer->InitImGuiBackend()) {
-        logError(logger, "ImGui backend init failed");
+        logError(logger, "[Game] ImGui backend init failed");
+        return false;
+    }
+
+    // 图集纹理
+    auto pixels = GenerateAtlasPixels();
+    m_atlasTexture = renderer->CreateTextureFromPixels(pixels.data(), ATLAS_W, ATLAS_H);
+    logInfo(logger, "[MyGame] atlas texture created");
+
+    // 主 FBO
+    fbo = renderer->CreateFramebuffer(mainWin->GetConfigs().windowWidth,
+                                       mainWin->GetConfigs().windowHeight);
+    if (!fbo.isValid()) {
+        logError(logger, "[Game] FBO creation failed!");
+        return false;
+    }
+
+    return true;
+}
+
+void MyGame::SetupShaders() {
+    m_cubeShader = CreateShaderByName("mesh", /*isSky=*/false);
+    m_skyShader  = CreateShaderByName("sky",  /*isSky=*/true);
+}
+
+Eng::client::ShaderHandle MyGame::CreateShaderByName(const std::string& name, bool isSky) {
+    const std::string ext  = m_useVulkan ? ".vk.spv" : ".gl.spv";
+    const std::string base = "./assets/shaders/build/" + name + "/";
+    const std::string vp   = base + "vert" + ext;
+    const std::string fp   = base + "frag" + ext;
+    return isSky ? renderer->CreateSkybox(vp, fp)
+                 : renderer->CreateShader(vp, fp);
+}
+
+void MyGame::OnStart(Eng::Engine& engine) {
+    if (!logger) {
+        logger = std::make_unique<Eng::Log>();
+    }
+
+    if (!SetupNetwork(engine)) return;
+
+    if (!engine.NeedsWindow()) {
+        logInfo(logger, "[Game] Running as dedicated server (headless)");
         return;
     }
 
-    auto pixels = GenerateAtlasPixels();
-    m_atlasTexture = renderer->CreateTextureFromPixels(
-        pixels.data(), ATLAS_W, ATLAS_H);
-    logInfo(logger, "[MyGame] atlas texture created");
+    if (!SetupWindow(engine))   return;
+    if (!SetupRenderer(engine)) return;
 
-    if (useVulkan) {
-        m_cubeShader = renderer->CreateShader(
-            "./assets/shaders/build/mesh/vert.vk.spv",
-            "./assets/shaders/build/mesh/frag.vk.spv");
-    } else {
-        m_cubeShader = renderer->CreateShader(
-            "./assets/shaders/build/mesh/vert.gl.spv",
-            "./assets/shaders/build/mesh/frag.gl.spv");
-    }
-
-    fbo = renderer->CreateFramebuffer(mainWin->GetConfigs().windowWidth, mainWin->GetConfigs().windowHeight);
-    if (!fbo.isValid()) {
-        logError(logger, "FBO creation failed!");
-    }
-    if (useVulkan) {
-        m_skyShader = renderer->CreateSkybox(
-            "./assets/shaders/build/sky/vert.vk.spv",
-            "./assets/shaders/build/sky/frag.vk.spv");
-    } else {
-        m_skyShader = renderer->CreateSkybox(
-            "./assets/shaders/build/sky/vert.gl.spv",
-            "./assets/shaders/build/sky/frag.gl.spv");
-    }
+    SetupShaders();
 }
 
 bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {

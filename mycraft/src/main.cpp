@@ -4,7 +4,7 @@
 
 int main() {
     Eng::EngineConfig engConfig = {
-        .mode = Eng::Mode::ClientAndServer,
+        .mode = Eng::Mode::SinglePlayer,
         .name = "Mycraft",
         .enableNetwork = true
     };

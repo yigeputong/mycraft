@@ -20,6 +20,18 @@ public:
 
     void OnShutdown(Eng::Engine& engine);
 private:
+    Eng::client::RenderAPItype m_apiType   = Eng::client::RenderAPItype::VULKAN;
+    bool                       m_useVulkan = false;
+
+    // OnStart 拆分
+    bool SetupNetwork(Eng::Engine& engine);
+    bool SetupWindow(Eng::Engine& engine);
+    bool SetupRenderer(Eng::Engine& engine);
+    void SetupShaders();
+
+    // shader 名字 → 路径 → 创建，自动处理 vk/gl 后缀
+    Eng::client::ShaderHandle CreateShaderByName(const std::string& name, bool isSky);
+
     // ==================== 引擎资源 ====================
     Eng::client::WindowManager* winMgr = nullptr;
     Eng::client::Window*       mainWin = nullptr;

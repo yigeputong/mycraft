@@ -32,53 +32,39 @@ bool Engine::Init(const EngineConfig& config, IGame* game) {
         logInfo(m_logger, "[Engine] Networking initialized");
     }
 
-    switch (config.mode) {
-    case Mode::Client:
-        return InitClient(config);
-    case Mode::Server:
-        return InitServer(config);
-    case Mode::ClientAndServer:
-      {
-        bool success = true;
-        if(!InitServer(config)) 
-            success = false;
-        if(!InitClient(config)) 
-            success = false;
-        return success;
-      }
+    // ★ 只有需要窗口的模式才创建 WindowManager
+    if (NeedsWindow()) {
+        m_windowManager = std::make_unique<client::WindowManager>();
     }
-    return true;
-}
 
-bool Engine::InitClient(const EngineConfig& config) {
-    m_windowManager.reset(new client::WindowManager);
+    // 打一行 mode，方便排查
+    const char* modeStr = "?";
+    switch (config.mode) {
+        case Mode::SinglePlayer:    modeStr = "SinglePlayer";    break;
+        case Mode::MultiplayerHost: modeStr = "MultiplayerHost"; break;
+        case Mode::MultiplayerJoin: modeStr = "MultiplayerJoin"; break;
+        case Mode::DedicatedServer: modeStr = "DedicatedServer"; break;
+    }
+    logInfo(m_logger, "[Engine] Mode: " << modeStr);
 
-    IsClient = true;
-    m_logger->log(LogLevel::INFO, "[Engine] Client Init");
-    return true;
-}
-
-bool Engine::InitServer(const EngineConfig& config) {
-    IsServer = true;
-    m_logger->log(LogLevel::INFO, "[Engine] Server Init");
     return true;
 }
 
 void Engine::Run() {
-
-
     m_game->OnStart(*this);
 
     m_running = true;
 
     auto lastTime = std::chrono::steady_clock::now();
-
     m_logger->log(LogLevel::INFO, "[Engine] Run main loop");
+
     while (m_running) {
         auto currentTime = std::chrono::steady_clock::now();
         float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
         lastTime = currentTime;
         if (deltaTime > 0.1f) deltaTime = 0.1f;
+
+        m_deltaTime = deltaTime;
 
         client::Input::Get().Update();
 
@@ -94,11 +80,14 @@ void Engine::Run() {
             break;
         }
 
-        m_game->OnRender(*this);
+        // ★ DedicatedServer 不渲染
+        if (NeedsWindow()) {
+            m_game->OnRender(*this);
+        }
 
-        if (m_windowManager)
+        if (m_windowManager) {
             m_windowManager->Update();
-
+        }
     }
 
     m_game->OnShutdown(*this);
@@ -111,10 +100,18 @@ void Engine::Stop() {
 void Engine::Quit() {
     m_windowManager.reset();
     m_game.reset();
-    NET_Quit();
-    logInfo(m_logger, "[Engine] Networking shutdown");
+
+    // ★ 只有初始化过才 Quit
+    if (m_engConfig.enableNetwork) {
+        NET_Quit();
+        logInfo(m_logger, "[Engine] Networking shutdown");
+    }
     SDL_Quit();
     logInfo(m_logger, "[Engine] Quit");
 }
-    
+
+float Engine::GetDeltaTime() const {
+    return m_deltaTime;
+}
+
 } // namespace Eng
