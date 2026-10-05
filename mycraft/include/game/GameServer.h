@@ -33,7 +33,7 @@ private:
     // ==================== 玩家 ====================
     struct ServerPlayer {
         uint32_t  id = 0;
-        glm::vec3 position{0.0f, 60.0f, 0.0f};   // 脚底
+        glm::vec3 position{0.0f, 256.0f, 0.0f};   // 脚底
         glm::vec3 velocity{0.0f};
         bool      onGround = false;
         bool      jump     = false;
@@ -46,7 +46,7 @@ private:
     static constexpr float REACH_DISTANCE = 5.0f;
 
     // ==================== 世界 ====================
-    TerrainGenerator                    m_terrain;
+    std::unique_ptr<TerrainGenerator>   m_terrain;
     std::unordered_map<uint64_t, Chunk> m_chunks;
 
     struct PendingChunkRequest { int clientId; int cx, cz; };

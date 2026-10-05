@@ -66,7 +66,7 @@ void GameServer::Run() {
 
     logInfo(m_logger, "[Server] Server Run");
     uint32_t seed = static_cast<uint32_t>(std::time(nullptr)) ^ static_cast<uint32_t>(std::clock());
-    m_terrain = TerrainGenerator(seed);
+    m_terrain = std::make_unique<TerrainGenerator>(seed);
     logInfo(m_logger, "[Server] World Seed = " << seed);
 
     while (m_running.load()) {
@@ -283,7 +283,7 @@ Chunk& GameServer::GetOrCreateChunk(int cx, int cz) {
     }
 
     // 未命中，生成一份
-    it = m_chunks.emplace(key, m_terrain.GenerateChunk(cx, cz)).first;
+    it = m_chunks.emplace(key, m_terrain->GenerateChunk(cx, cz)).first;
     Chunk& chunk = it->second;
 
     return chunk;

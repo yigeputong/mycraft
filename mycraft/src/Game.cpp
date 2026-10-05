@@ -31,7 +31,7 @@ uint8_t HashNoise(int x, int y, uint32_t seed) {
 }
 
 struct TileSpec { uint8_t r, g, b; int noise; };
-const TileSpec kTiles[9] = {   // ← 从 6 改成 9
+const TileSpec kTiles[11] = {   // ← 从 6 改成 9
     {128, 128, 128, 30},   // 0 stone
     { 88, 160,  70, 20},   // 1 grass_top
     { 88, 160,  70, 20},   // 2 grass_side
@@ -41,6 +41,8 @@ const TileSpec kTiles[9] = {   // ← 从 6 改成 9
     {210, 218, 228, 20},   // 6 snow_top（微蓝白，加大 noise）
     {210, 218, 228, 20},   // 7 snow_side
     {200, 180, 130, 25},   // 8 sandstone（浅黄）
+    { 60,  60,  60, 25},   // 9  coal_ore（深灰带黑点）
+    {180, 140, 100, 25}   // 10 iron_ore（浅棕带橙点）
 };
 
 // 生成 RGBA 像素数组，64x64
@@ -97,6 +99,8 @@ int TileForBlock(game::BlockType b, int face) {
 
         case game::BlockType::Sandstone:
             return 8;
+        case game::BlockType::CoalOre:  return 9;
+        case game::BlockType::IronOre:  return 10;
         default:                    return 0;
     }
 }

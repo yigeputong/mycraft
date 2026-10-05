@@ -6,9 +6,10 @@ namespace game {
 
 
 constexpr int CHUNK_SIZE_X = 16;
-constexpr int CHUNK_SIZE_Y = 64;   // 世界高度
+constexpr int CHUNK_SIZE_Y = 256;   // 世界高度
 constexpr int CHUNK_SIZE_Z = 16;
 constexpr int CHUNK_VOLUME = CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
+constexpr int SEA_LEVEL = 64;
 
 struct Chunk {
     int chunk_x = 0;   // 区块 X 坐标
