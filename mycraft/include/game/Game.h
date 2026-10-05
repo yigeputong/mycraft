@@ -70,14 +70,14 @@ private:
     glm::mat4 projection = glm::mat4(1.0f);
 
     // ==================== Hotbar ====================
-    static constexpr BlockType kHotbar[] = {
-        BlockType::Stone,
-        BlockType::Dirt,
-        BlockType::GrassBlock,
-        BlockType::Sand
-    };
-    static constexpr int kHotbarSize = std::size(kHotbar);
+    static constexpr int kHotbarSize = 4;
     int m_hotbarIndex = 0;
+    std::array<game::ItemStack, kHotbarSize> m_hotbar = {{
+        game::MakeItemStack(BlockType::Stone,      64),
+        game::MakeItemStack(BlockType::Dirt,       64),
+        game::MakeItemStack(BlockType::GrassBlock, 64),
+        game::MakeItemStack(BlockType::Sand,       64),
+    }};
 
     // ==================== 设置 ====================
     struct Settings {
@@ -136,6 +136,7 @@ private:
     BlockType GetBlockAt(int wx, int wy, int wz) const;
     bool AABBCollides(const glm::vec3& pos) const;
     bool IsSolidAt(int wx, int wy, int wz) const;
+    void AddToInventory(BlockType type, int count);
 
 };
 

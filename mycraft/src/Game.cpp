@@ -5,6 +5,7 @@
 #include "core/MessageWriter.h"
 #include "game/Protocol.h"
 #include "game/GameServer.h"
+#include "game/core/Blocks.h"   
 #include "game/core/Physics.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
@@ -88,6 +89,17 @@ int TileForBlock(game::BlockType b, int face) {
     }
 }
 
+static const char* BlockName(game::BlockType t) {
+    switch (t) {
+        case game::BlockType::Stone:      return "Stone";
+        case game::BlockType::Dirt:       return "Dirt";
+        case game::BlockType::GrassBlock: return "Grass";
+        case game::BlockType::Sand:       return "Sand";
+        case game::BlockType::Water:      return "Water";
+        default:                    return "?";
+    }
+}
+
 } // namespace
 
 namespace game {
@@ -101,8 +113,6 @@ void MyGame::OnStart(Eng::Engine& engine) {
         logError(logger, "[Game] Failed to start server");
         return;
     }
-
-    // 客户端连接（主线程，会阻塞几百毫秒）
     if (!m_client.Connect("localhost", 25565)) {
         logError(logger, "[Game] Failed to connect to server");
         return;
@@ -112,7 +122,6 @@ void MyGame::OnStart(Eng::Engine& engine) {
 
     const Eng::client::RenderAPItype apiType = Eng::client::RenderAPItype::VULKAN;
     const bool useVulkan = (apiType == Eng::client::RenderAPItype::VULKAN);
-
     Eng::client::WindowConfig windowConfig = {
         .apitype = apiType,
         .title = "Mycraft v0.0.0",
@@ -123,25 +132,6 @@ void MyGame::OnStart(Eng::Engine& engine) {
     m_win = winMgr->CreateWindow(windowConfig);
     mainWin = winMgr->GetWindow(m_win);
     if (!mainWin) return;
-
-    renderer = mainWin->GetAPI();
-    renderer->Initialize(mainWin->GetConfigs().windowWidth, mainWin->GetConfigs().windowHeight, mainWin);
-    m_deviceInfo = renderer->GetDeviceInfo();
-    logInfo(logger, "[RenderAPI] Backend:     " << m_deviceInfo.backend);
-    logInfo(logger, "[RenderAPI] Device:      " << m_deviceInfo.deviceName);
-    logInfo(logger, "[RenderAPI] Vendor:      " << m_deviceInfo.vendor);
-    logInfo(logger, "[RenderAPI] API version: " << m_deviceInfo.apiVersion);
-    logInfo(logger, "[RenderAPI] Driver:      " << m_deviceInfo.driverVersion);
-    logInfo(logger, "[RenderAPI] Shader lang: " << m_deviceInfo.shadingLanguage);
-    renderer->SetClearColor(0.125f,0.125f,0.125f,0.0f);
-
-    Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), true);
-
-    if (!renderer->InitImGuiBackend()) {
-        logError(logger, "ImGui backend init failed");
-        return;
-    }
-
     mainWin->onEvent = [&](const SDL_Event& e) {
         ImGui_ImplSDL3_ProcessEvent(&e);
         ImGuiIO& io = ImGui::GetIO();
@@ -163,6 +153,24 @@ void MyGame::OnStart(Eng::Engine& engine) {
                 break;
         }
     };
+
+    renderer = mainWin->GetAPI();
+    renderer->Initialize(mainWin->GetConfigs().windowWidth, mainWin->GetConfigs().windowHeight, mainWin);
+    m_deviceInfo = renderer->GetDeviceInfo();
+    logInfo(logger, "[RenderAPI] Backend:     " << m_deviceInfo.backend);
+    logInfo(logger, "[RenderAPI] Device:      " << m_deviceInfo.deviceName);
+    logInfo(logger, "[RenderAPI] Vendor:      " << m_deviceInfo.vendor);
+    logInfo(logger, "[RenderAPI] API version: " << m_deviceInfo.apiVersion);
+    logInfo(logger, "[RenderAPI] Driver:      " << m_deviceInfo.driverVersion);
+    logInfo(logger, "[RenderAPI] Shader lang: " << m_deviceInfo.shadingLanguage);
+    renderer->SetClearColor(0.125f,0.125f,0.125f,0.0f);
+
+    Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), true);
+
+    if (!renderer->InitImGuiBackend()) {
+        logError(logger, "ImGui backend init failed");
+        return;
+    }
 
     auto pixels = GenerateAtlasPixels();
     m_atlasTexture = renderer->CreateTextureFromPixels(
@@ -371,10 +379,21 @@ void MyGame::DrawUI(Eng::Engine& engine) {
             dl->AddRectFilled(p0, p1, bg);
             dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 255), 0, 0, 2.0f);
 
-            // 用方块名或者一小段纯色表示（后面有纹理再说）
-            const char* names[] = {"Stone", "Dirt", "Grass", "Sand", "Water"};
+            const auto& slot = m_hotbar[i];
+            if (slot.isEmpty()) continue;
+
+            // 方块名
             dl->AddText(ImVec2(x + 4, y + SLOT - 18),
-                        IM_COL32(255, 255, 255, 255), names[i]);
+                        IM_COL32(255, 255, 255, 255),
+                        BlockName(slot.type));
+
+            // 数量（右下角）
+            if (slot.count > 1) {
+                char cnt[8];
+                std::snprintf(cnt, sizeof(cnt), "%d", slot.count);
+                dl->AddText(ImVec2(x + SLOT - 20, y + 4),
+                            IM_COL32(255, 255, 255, 255), cnt);
+            }
         }
     }
 
@@ -548,13 +567,17 @@ bool MyGame::GetInput(float dt) {
     float scroll = Input::GetScrollDelta();
     if (scroll > 0) m_hotbarIndex = (m_hotbarIndex - 1 + kHotbarSize) % kHotbarSize;
     if (scroll < 0) m_hotbarIndex = (m_hotbarIndex + 1) % kHotbarSize;
-    // 也可以数字键 1~5 直接选
+    // 数字键 1~4 直接选（kHotbarSize = 4）
     if (Input::IsKeyPressed(KeyCode::Num1)) m_hotbarIndex = 0;
     if (Input::IsKeyPressed(KeyCode::Num2)) m_hotbarIndex = 1;
     if (Input::IsKeyPressed(KeyCode::Num3)) m_hotbarIndex = 2;
     if (Input::IsKeyPressed(KeyCode::Num4)) m_hotbarIndex = 3;
-    if (Input::IsKeyPressed(KeyCode::Num5)) m_hotbarIndex = 4;
-    input.placeBlock = static_cast<uint16_t>(kHotbar[m_hotbarIndex]);
+    if (m_hotbarIndex < 0 || m_hotbarIndex >= kHotbarSize) {
+        logError(logger, "[BUG] m_hotbarIndex out of range: " << m_hotbarIndex);
+        m_hotbarIndex = 0;
+    }
+
+    input.placeBlock = static_cast<uint16_t>(m_hotbar[m_hotbarIndex].type);
 
     Eng::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::PlayerInput));
@@ -673,7 +696,24 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             auto it = m_chunks.find(ChunkKey(cx, cz));
             if (it == m_chunks.end()) break;
 
+            BlockType oldType = ChunkGet(it->second.chunk, lx, by, lz);
+
             ChunkSet(it->second.chunk, lx, by, lz, t);
+
+            if (oldType != BlockType::Air && t == BlockType::Air) {
+                AddToInventory(oldType, 1);
+            }
+
+            // 放置成功（Air → 非空）→ 扣库存
+            if (oldType == BlockType::Air && t != BlockType::Air) {
+                for (auto& slot : m_hotbar) {
+                    if (slot.type == t && !slot.isEmpty()) {
+                        slot.count--;
+                        if (slot.count <= 0) slot = game::ItemStack{};
+                        break;
+                    }
+                }
+            }
 
             // 重建 mesh
             if (it->second.mesh != 0) {
@@ -942,6 +982,29 @@ bool MyGame::AABBCollides(const glm::vec3& pos) const {
             for (int z = minZ; z <= maxZ; ++z)
                 if (IsSolidAt(x, y, z)) return true;
     return false;
+}
+
+void MyGame::AddToInventory(BlockType type, int count) {
+    if (type == BlockType::Air || count <= 0) return;
+
+    // 1. 已有同类型 → 累加
+    for (auto& slot : m_hotbar) {
+        if (slot.type == type) {
+            slot.count += count;
+            return;
+        }
+    }
+
+    // 2. 空 slot → 新建
+    for (auto& slot : m_hotbar) {
+        if (slot.isEmpty()) {
+            slot.type  = type;
+            slot.count = count;
+            return;
+        }
+    }
+
+    // 3. 背包满 → 丢弃（暂时）
 }
 
 }
