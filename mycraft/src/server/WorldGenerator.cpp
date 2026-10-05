@@ -113,10 +113,10 @@ namespace {
     constexpr int OCEAN_FLOOR = 30;   // 深海底部
     constexpr int COAST_BASE  = 60;   // 海岸（略低于海平面）
     constexpr int INLAND_BASE = 70;   // 内陆基准
-    constexpr int MTN_PEAK    = 140;  // 山峰最高
+    constexpr int MTN_PEAK    = 100;  // 山峰最高
 
     constexpr int PLAINS_AMP = 8;
-    constexpr int MTN_AMP    = 45;
+    constexpr int MTN_AMP    = 25;
 
     // ---- 大陆性阈值 ----
     constexpr float CONT_OCEAN_MAX = -0.3f;   // < -0.3 → 海洋
@@ -291,8 +291,8 @@ BlockType TerrainGenerator::ApplySurfaceRule(Biome biome, int wy, int surfaceY,
 // 阶段 4：雕刻器——3D 噪声洞穴
 // ============================================================
 bool TerrainGenerator::IsCarvedByCave(int wx, int wy, int wz) const {
-    // 只在 y ∈ [5, 200] 范围内判断（避免挖穿基岩/空中）
-    if (wy < 5 || wy > 200) return false;
+    // 只在 y ∈ [8, 120] 范围内判断（避免挖穿基岩/空中）
+    if (wy < 8 || wy > 120) return false;
 
     // 两个独立 3D 噪声
     float n1 = m_noise.Fractal3D(wx * CAVE_SCALE,
@@ -395,10 +395,11 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
                     type = BlockType::Stone;
                 }
 
-                // 阶段 4：雕刻器（挖洞）
+                // 阶段 4：雕刻器
                 if (type != BlockType::Air
                     && type != BlockType::Water
-                    && ly < surfaceY - 1
+                    && ly < surfaceY - 4
+                    && ly > 8                        // 基岩附近不挖
                     && IsCarvedByCave(wx, ly, wz)) {
                     type = BlockType::Air;
                 }
