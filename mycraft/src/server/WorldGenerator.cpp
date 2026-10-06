@@ -120,7 +120,6 @@ namespace {
 
     // ---- 大陆性阈值 ----
     constexpr float CONT_OCEAN_MAX = -0.3f;   // < -0.3 → 海洋
-    constexpr float CONT_INLAND_MIN = 0.25f;  // > 0.25 → 内陆
 
     // ---- 洞穴 ----
     constexpr float CAVE_SCALE       = 0.06f;   // 3D 噪声尺度
@@ -250,24 +249,6 @@ bool TerrainGenerator::IsSolidAt(int wx, int wy, int wz) const {
     return true;
 }
 
-BlockType TerrainGenerator::FillBlock(int wx, int wy, int wz,
-                                       Biome biome, int surfaceY) const {
-    // ---- 空气 / 水 ----
-    if (wy > surfaceY) {
-        return (wy <= SEA_LEVEL) ? BlockType::Water : BlockType::Air;
-    }
-
-    // ---- 洞穴 ----
-    if (wy < surfaceY - 2 && IsCarvedByCave(wx, wy, wz)) {
-        return (wy < 10) ? BlockType::Air : BlockType::Air;
-    }
-
-    // ---- 地表附近：由表面规则决定 ----
-    // （真正的替换在 ApplySurfaceRule，这里先填基础方块）
-    if (wy >= surfaceY - 3) return BlockType::Dirt;   // 占位，会被表面规则覆盖
-    return BlockType::Stone;
-}
-
 BlockType TerrainGenerator::ApplySurfaceRule(Biome biome, int wy, int surfaceY,
                                               bool nearWater) const {
     if (wy != surfaceY) return BlockType::Dirt;  // 中间层
@@ -318,15 +299,16 @@ BlockType TerrainGenerator::OreForPosition(int wx, int wy, int wz,
                                             BlockType base) const {
     if (base != BlockType::Stone) return base;
 
+    // ★ 提前返回：矿脉只在 y ∈ (5, 80)，之外直接跳过 3D 噪声
+    //    逻辑完全等价 —— 下面两个 if 的 y 条件都是 (5, 80) 子集
+    if (wy <= 5 || wy >= 80) return base;
+
     float v = m_noise.Fractal3D(wx * ORE_SCALE,
                                  wy * ORE_SCALE,
                                  wz * ORE_SCALE, 2);
 
-    // 煤：y ∈ [30, 80]
-    if (wy > 30 && wy < 80 && v > 0.55f) return BlockType::CoalOre;
-    // 铁：y ∈ [5, 50]
-    if (wy > 5 && wy < 50 && v < -0.55f) return BlockType::IronOre;
-
+    if (wy > 30 && v > 0.55f) return BlockType::CoalOre;   // y 上界省略（提前返回已判）
+    if (wy > 5  && v < -0.55f) return BlockType::IronOre;
     return base;
 }
 
@@ -341,72 +323,102 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
     const int baseX = cx * CHUNK_SIZE_X;
     const int baseZ = cz * CHUNK_SIZE_Z;
 
-    // ---------- 阶段 1：生物群系 + 高度（带 1 格 padding）----------
-    // 只在 18x18 上算一次 2D 场，避免每方块重算
-    static thread_local std::array<std::array<Biome, 18>, 18> biomes;
-    static thread_local std::array<std::array<int,   18>, 18> heights;
+    // ============================================================
+    // 4×4×4 网格采样
+    // ============================================================
+    constexpr int GX = 20 / 4 + 1;   // 6
+    constexpr int GY = 256 / 4 + 2;  // 66
+    constexpr int GZ = 20 / 4 + 1;   // 6
 
-    for (int dx = -1; dx <= 16; ++dx) {
-        for (int dz = -1; dz <= 16; ++dz) {
-            int wx = baseX + dx;
-            int wz = baseZ + dz;
-            biomes [dx + 1][dz + 1] = GetBiome (wx, wz);
-            heights[dx + 1][dz + 1] = GetHeight(wx, wz);
+    static thread_local float grid[GX][GY][GZ];
+
+    for (int gx = 0; gx < GX; ++gx) {
+        int wx = baseX - 2 + gx * 4;
+        for (int gz = 0; gz < GZ; ++gz) {
+            int wz = baseZ - 2 + gz * 4;
+            DensityParams p = ComputeParams(wx, wz);
+            for (int gy = 0; gy < GY; ++gy) {
+                int wy = gy * 4;
+                grid[gx][gy][gz] = ComputeDensity(wx, wy, wz, p);
+            }
         }
     }
 
-    // ---------- 阶段 2+3+4+5：逐方块填充 ----------
+    // ---- 缓存每列 params（填充循环用）----
+    static thread_local std::array<std::array<DensityParams, 16>, 16> params;
+    for (int lx = 0; lx < 16; ++lx)
+        for (int lz = 0; lz < 16; ++lz)
+            params[lx][lz] = ComputeParams(baseX + lx, baseZ + lz);
+
+    // ---- 三线性插值 ----
+    auto sampleDensity = [&](int lx, int ly, int lz) -> float {
+        float fx = (lx + 2) / 4.0f;
+        float fy = ly / 4.0f;
+        float fz = (lz + 2) / 4.0f;
+
+        int x0 = static_cast<int>(fx), x1 = std::min(x0 + 1, GX - 1);
+        int y0 = static_cast<int>(fy), y1 = std::min(y0 + 1, GY - 1);
+        int z0 = static_cast<int>(fz), z1 = std::min(z0 + 1, GZ - 1);
+
+        float tx = fx - x0, ty = fy - y0, tz = fz - z0;
+
+        auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
+
+        float c00 = lerp(grid[x0][y0][z0], grid[x1][y0][z0], tx);
+        float c10 = lerp(grid[x0][y1][z0], grid[x1][y1][z0], tx);
+        float c01 = lerp(grid[x0][y0][z1], grid[x1][y0][z1], tx);
+        float c11 = lerp(grid[x0][y1][z1], grid[x1][y1][z1], tx);
+
+        float c0 = lerp(c00, c10, ty);
+        float c1 = lerp(c01, c11, ty);
+
+        return lerp(c0, c1, tz);
+    };
+
+    // ★ 整列 density 缓存（避免找地表 + 填充各调一次）
+    static thread_local float colDensity[CHUNK_SIZE_Y];
+
     for (int lx = 0; lx < CHUNK_SIZE_X; ++lx) {
         for (int lz = 0; lz < CHUNK_SIZE_Z; ++lz) {
             const int wx = baseX + lx;
             const int wz = baseZ + lz;
-            const int surfaceY = heights[lx + 1][lz + 1];
-            const Biome biome  = biomes [lx + 1][lz + 1];
 
-            // 判断是否靠水（用 5x5 邻域）
-            bool nearWater = (surfaceY <= SEA_LEVEL + 1);
-            if (!nearWater) {
-                for (int ddx = -2; ddx <= 2 && !nearWater; ++ddx)
-                    for (int ddz = -2; ddz <= 2 && !nearWater; ++ddz) {
-                        int nx = lx + 1 + ddx, nz = lz + 1 + ddz;
-                        if (nx >= 0 && nx < 18 && nz >= 0 && nz < 18) {
-                            if (heights[nx][nz] <= SEA_LEVEL) nearWater = true;
-                        }
-                    }
+            // ★ 一次算完整列
+            for (int ly = 0; ly < CHUNK_SIZE_Y; ++ly)
+                colDensity[ly] = sampleDensity(lx, ly, lz);
+
+            // 找地表（查缓存，不再调 sampleDensity）
+            int surfaceY = 0;
+            for (int ly = CHUNK_SIZE_Y - 1; ly >= 0; --ly) {
+                if (colDensity[ly] > 0.0f) {
+                    surfaceY = ly;
+                    break;
+                }
             }
 
-            // 整列填充
+            const auto& p = params[lx][lz];
+            Biome biome = BiomeAt(p, wx, wz, surfaceY);
+            bool nearWater = (surfaceY <= SEA_LEVEL + 1);
+
             for (int ly = 0; ly < CHUNK_SIZE_Y; ++ly) {
+                float d = colDensity[ly];   // ★ 用缓存
                 BlockType type;
 
-                if (ly > surfaceY) {
-                    type = (ly <= SEA_LEVEL) ? BlockType::Water : BlockType::Air;
-                } else if (ly == surfaceY) {
-                    // 阶段 3：表面规则
-                    type = ApplySurfaceRule(biome, ly, surfaceY, nearWater);
-                } else if (ly >= surfaceY - 3) {
-                    // 中间层：按 biome 分层
-                    switch (biome) {
-                        case Biome::Desert:  type = BlockType::Sandstone; break;
-                        case Biome::Ocean:   type = BlockType::Sand;      break;
-                        default:             type = BlockType::Dirt;      break;
+                if (d > 0.0f) {
+                    if (ly == surfaceY) {
+                        type = ApplySurfaceRule(biome, ly, surfaceY, nearWater);
+                    } else if (ly >= surfaceY - 3) {
+                        switch (biome) {
+                            case Biome::Desert:  type = BlockType::Sandstone; break;
+                            case Biome::Ocean:   type = BlockType::Sand;      break;
+                            default:             type = BlockType::Dirt;      break;
+                        }
+                    } else {
+                        type = BlockType::Stone;
+                        type = OreForPosition(wx, ly, wz, type);
                     }
                 } else {
-                    type = BlockType::Stone;
-                }
-
-                // 阶段 4：雕刻器
-                if (type != BlockType::Air
-                    && type != BlockType::Water
-                    && ly < surfaceY - 4
-                    && ly > 8                        // 基岩附近不挖
-                    && IsCarvedByCave(wx, ly, wz)) {
-                    type = BlockType::Air;
-                }
-
-                // 阶段 5：矿脉（只在石头上）
-                if (type == BlockType::Stone) {
-                    type = OreForPosition(wx, ly, wz, type);
+                    type = (ly <= SEA_LEVEL) ? BlockType::Water : BlockType::Air;
                 }
 
                 chunk.blocks[ChunkIndex(lx, ly, lz)] = type;
@@ -415,6 +427,140 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
     }
 
     return chunk;
+}
+
+// ============================================================
+// 样条采样（控制点线性插值）
+// ============================================================
+struct SplinePoint { float input, output; };
+
+static float SampleSpline(const SplinePoint* pts, size_t n, float x) {
+    if (x <= pts[0].input)      return pts[0].output;
+    if (x >= pts[n-1].input)    return pts[n-1].output;
+    for (size_t i = 1; i < n; ++i) {
+        if (x <= pts[i].input) {
+            float t = (x - pts[i-1].input) / (pts[i].input - pts[i-1].input);
+            return pts[i-1].output + t * (pts[i].output - pts[i-1].output);
+        }
+    }
+    return 0;
+}
+
+// ---- 地形偏移样条：cont → 垂直偏移 ----
+// cont 低 → 负偏移（深海）; cont 高 → 正偏移（高峰）
+static constexpr SplinePoint kOffsetSpline[] = {
+    {-1.0f, -0.35f},   // 深海
+    {-0.5f, -0.15f},   // 海洋
+    {-0.2f, -0.02f},   // 海岸
+    { 0.0f,  0.02f},   // 
+    { 0.3f,  0.10f},   // 
+    { 0.7f,  0.35f},   // 
+    { 1.0f,  0.55f},   // 
+};
+static constexpr size_t kOffsetSplineN = std::size(kOffsetSpline);
+
+// ---- 地形因子样条：erosion → 垂直缩放 ----
+// erosion 低（陡峭）→ factor 大; erosion 高（平坦）→ factor 小
+static constexpr SplinePoint kFactorSpline[] = {
+    {-1.0f, 4.0f},     // 极陡：山壁高耸
+    {-0.5f, 2.5f},
+    { 0.0f, 1.5f},     // 中等
+    { 0.5f, 0.7f},
+    { 1.0f, 0.3f},     // 极平：几乎无起伏
+};
+static constexpr size_t kFactorSplineN = std::size(kFactorSpline);
+
+// ============================================================
+// 5 参数计算
+// ============================================================
+TerrainGenerator::DensityParams TerrainGenerator::ComputeParams(int wx, int wz) const {
+    // ============================================================
+    // Domain Warp：用两个独立噪声偏移采样坐标，打破 Perlin 的圆形
+    // ============================================================
+    constexpr float WARP_FREQ = 0.0055f;   // 扭曲频率（比 cont 高）
+    constexpr float WARP_AMP  = 70.0f;     // 最大偏移 70 格
+
+    float warpX = m_noise.Fractal2D(wx * WARP_FREQ + 11000.0f,
+                                     wz * WARP_FREQ + 11000.0f, 2) * WARP_AMP;
+    float warpZ = m_noise.Fractal2D(wx * WARP_FREQ + 12000.0f,
+                                     wz * WARP_FREQ + 12000.0f, 2) * WARP_AMP;
+
+    // ★ 用扭曲后的浮点坐标采样所有参数
+    float sx = static_cast<float>(wx) + warpX;
+    float sz = static_cast<float>(wz) + warpZ;
+
+    DensityParams p;
+    p.temp = std::clamp(m_noise.Fractal2D(sx * TEMP_FREQ  + 1500.0f, sz * TEMP_FREQ  + 1500.0f, 3)
+                        * 3.0f, -1.0f, 1.0f);
+    p.humid = std::clamp(m_noise.Fractal2D(sx * HUMID_FREQ + 3000.0f, sz * HUMID_FREQ + 3000.0f, 3)
+                        * 2.5f, -1.0f, 1.0f);
+    p.cont = std::clamp(m_noise.Fractal2D(sx * CONT_FREQ + 5000.0f, sz * CONT_FREQ + 5000.0f, 4) * 4.0f,
+                         -1.0f, 1.0f);
+    p.erosion = std::clamp(m_noise.Fractal2D(sx * 0.0025f + 7000.0f,
+                                              sz * 0.0025f + 7000.0f, 3) * 2.5f,
+                            -1.0f, 1.0f);
+    p.weirdness = m_noise.Fractal2D(sx * 0.0045f + 9000.0f,
+                                     sz * 0.0045f + 9000.0f, 2);
+    return p;
+}
+
+// ============================================================
+// 3D 密度核心
+// ============================================================
+float TerrainGenerator::ComputeDensity(int wx, int wy, int wz,
+                                        const DensityParams& p) const {
+    float offset = SampleSpline(kOffsetSpline, kOffsetSplineN, p.cont);
+    float factor = SampleSpline(kFactorSpline, kFactorSplineN, p.erosion);
+
+    // ★ 目标地表高度：cont 高 → 高，cont 低 → 低
+    float targetY = SEA_LEVEL + offset * 64.0f;
+
+    // ★ 用 (targetY - y)：y 越大 d 越小 → 上方空气
+    //    factor 控制"过渡陡峭度"——factor 大 → 山壁陡
+    float d = (targetY - static_cast<float>(wy)) / 96.0f * factor;
+
+    // 3D 噪声（洞穴 + 起伏）
+    float n1 = m_noise.Fractal3D(wx * 0.008f,
+                                  wy * 0.016f,
+                                  wz * 0.008f, 3);
+    float n2 = m_noise.Fractal3D(wx * 0.030f + 500.0f,
+                                  wy * 0.060f,
+                                  wz * 0.030f + 500.0f, 2);
+    float n3 = m_noise.Fractal3D(wx * 0.08f, wy * 0.15f, wz * 0.08f, 2);
+
+    d += n1 * 0.115f + n2 * 0.06f + n3 * 0.06;
+
+    // 上下 clamp（防止地穿基岩 / 山太高）
+    if (wy > 220) d -= (wy - 220) * 0.03f;
+    if (wy < 15)  d += (15 - wy) * 0.05f;
+
+    return d;
+}
+// ============================================================
+// 群系（用 surfaceY 修正温度）
+// ============================================================
+Biome TerrainGenerator::BiomeAt(const DensityParams& p, int /*wx*/, int /*wz*/,
+                                 int surfaceY) const {
+    // 里面不再 ComputeParams，直接用 p
+    float tempAdj = p.temp - (surfaceY - SEA_LEVEL) * 0.008f;
+
+    // 海洋 / 海岸
+    if (p.cont < CONT_OCEAN_MAX)   return Biome::Ocean;
+    if (surfaceY <= SEA_LEVEL + 1) return Biome::Beach;
+
+    // 高海拔强制覆盖
+    if (surfaceY > 175) return Biome::Snow;
+    if (surfaceY > 155) return Biome::Mountain;
+
+    // ★ 沙漠：低海拔 + 干热
+    if (tempAdj > 0.20f && p.humid < -0.05f && surfaceY < 110)
+        return Biome::Desert;
+
+    // 其他
+    if (tempAdj < -0.20f)  return Biome::Snow;
+    if (p.humid  >  0.10f) return Biome::Forest;
+    if (p.cont   >  0.80f) return Biome::Mountain;
+    return Biome::Plains;
 }
 
 } // namespace game::server

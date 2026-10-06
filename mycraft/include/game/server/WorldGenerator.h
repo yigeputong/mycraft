@@ -79,8 +79,6 @@ private:
                                  const std::array<std::array<Biome, 18>, 18>& biomes,
                                  std::array<std::array<int, 18>, 18>& out) const;
 
-    // ---- 阶段 2：密度地形 ----
-    BlockType FillBlock(int wx, int wy, int wz, Biome biome, int surfaceY) const;
 
     // ---- 阶段 3：表面规则 ----
     BlockType ApplySurfaceRule(Biome biome, int wy, int surfaceY,
@@ -91,6 +89,19 @@ private:
 
     // ---- 阶段 5：矿脉 ----
     BlockType OreForPosition(int wx, int wy, int wz, BlockType base) const;
+
+    struct DensityParams {
+        float temp      = 0.0f;
+        float humid     = 0.0f;
+        float cont      = 0.0f;
+        float erosion   = 0.0f;
+        float weirdness = 0.0f;
+    };
+
+    DensityParams ComputeParams(int wx, int wz) const;
+    float ComputeDensity(int wx, int wy, int wz,
+                          const DensityParams& p) const;
+    Biome BiomeAt(const DensityParams& p, int wx, int wz, int surfaceY) const;   // ★ 高度修正
 };
 
 } // namespace game::server
