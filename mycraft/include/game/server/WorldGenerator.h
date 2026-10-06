@@ -102,6 +102,16 @@ private:
     float ComputeDensity(int wx, int wy, int wz,
                           const DensityParams& p) const;
     Biome BiomeAt(const DensityParams& p, int wx, int wz, int surfaceY) const;   // ★ 高度修正
+
+    private:
+    // ---- 树 ----
+    private:
+    // ★ 改成接受 surfaceY 数组
+    void GenerateTrees(Chunk& chunk,
+                        const std::array<std::array<int, 16>, 16>& surfaceYs) const;
+    bool CanPlaceTree(int wx, int wz, int surfaceY, Biome biome) const;
+    void PlaceTree(Chunk& chunk, int wx, int wy, int wz, int height) const;
+    uint32_t TreeHash(int cx, int cz, int idx) const;
 };
 
 } // namespace game::server

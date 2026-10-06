@@ -324,21 +324,22 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
     const int baseZ = cz * CHUNK_SIZE_Z;
 
     // ============================================================
-    // 4×4×4 网格采样
+    // STEP×STEP×STEP 网格采样（STEP = 6）
     // ============================================================
-    constexpr int GX = 20 / 4 + 1;   // 6
-    constexpr int GY = 256 / 4 + 2;  // 66
-    constexpr int GZ = 20 / 4 + 1;   // 6
+    constexpr int STEP = 6;
+    constexpr int GX = 20 / STEP + 1;   // 4
+    constexpr int GY = 256 / STEP + 2;  // 44
+    constexpr int GZ = 20 / STEP + 1;   // 4
 
     static thread_local float grid[GX][GY][GZ];
 
     for (int gx = 0; gx < GX; ++gx) {
-        int wx = baseX - 2 + gx * 4;
+        int wx = baseX - 2 + gx * STEP;
         for (int gz = 0; gz < GZ; ++gz) {
-            int wz = baseZ - 2 + gz * 4;
+            int wz = baseZ - 2 + gz * STEP;
             DensityParams p = ComputeParams(wx, wz);
             for (int gy = 0; gy < GY; ++gy) {
-                int wy = gy * 4;
+                int wy = gy * STEP;
                 grid[gx][gy][gz] = ComputeDensity(wx, wy, wz, p);
             }
         }
@@ -350,11 +351,13 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
         for (int lz = 0; lz < 16; ++lz)
             params[lx][lz] = ComputeParams(baseX + lx, baseZ + lz);
 
+    static thread_local std::array<std::array<int, 16>, 16> surfaceYs;
+
     // ---- 三线性插值 ----
     auto sampleDensity = [&](int lx, int ly, int lz) -> float {
-        float fx = (lx + 2) / 4.0f;
-        float fy = ly / 4.0f;
-        float fz = (lz + 2) / 4.0f;
+        float fx = (lx + 2) / static_cast<float>(STEP);
+        float fy = ly       / static_cast<float>(STEP);
+        float fz = (lz + 2) / static_cast<float>(STEP);
 
         int x0 = static_cast<int>(fx), x1 = std::min(x0 + 1, GX - 1);
         int y0 = static_cast<int>(fy), y1 = std::min(y0 + 1, GY - 1);
@@ -375,7 +378,7 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
         return lerp(c0, c1, tz);
     };
 
-    // ★ 整列 density 缓存（避免找地表 + 填充各调一次）
+    // ---- 整列 density 缓存 ----
     static thread_local float colDensity[CHUNK_SIZE_Y];
 
     for (int lx = 0; lx < CHUNK_SIZE_X; ++lx) {
@@ -383,11 +386,9 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
             const int wx = baseX + lx;
             const int wz = baseZ + lz;
 
-            // ★ 一次算完整列
             for (int ly = 0; ly < CHUNK_SIZE_Y; ++ly)
                 colDensity[ly] = sampleDensity(lx, ly, lz);
 
-            // 找地表（查缓存，不再调 sampleDensity）
             int surfaceY = 0;
             for (int ly = CHUNK_SIZE_Y - 1; ly >= 0; --ly) {
                 if (colDensity[ly] > 0.0f) {
@@ -395,13 +396,14 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
                     break;
                 }
             }
+            surfaceYs[lx][lz] = surfaceY;
 
             const auto& p = params[lx][lz];
             Biome biome = BiomeAt(p, wx, wz, surfaceY);
             bool nearWater = (surfaceY <= SEA_LEVEL + 1);
 
             for (int ly = 0; ly < CHUNK_SIZE_Y; ++ly) {
-                float d = colDensity[ly];   // ★ 用缓存
+                float d = colDensity[ly];
                 BlockType type;
 
                 if (d > 0.0f) {
@@ -426,6 +428,7 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
         }
     }
 
+    GenerateTrees(chunk, surfaceYs);
     return chunk;
 }
 
@@ -539,8 +542,7 @@ float TerrainGenerator::ComputeDensity(int wx, int wy, int wz,
 // ============================================================
 // 群系（用 surfaceY 修正温度）
 // ============================================================
-Biome TerrainGenerator::BiomeAt(const DensityParams& p, int /*wx*/, int /*wz*/,
-                                 int surfaceY) const {
+Biome TerrainGenerator::BiomeAt(const DensityParams& p, int /*wx*/, int /*wz*/, int surfaceY) const {
     // 里面不再 ComputeParams，直接用 p
     float tempAdj = p.temp - (surfaceY - SEA_LEVEL) * 0.008f;
 
@@ -561,6 +563,125 @@ Biome TerrainGenerator::BiomeAt(const DensityParams& p, int /*wx*/, int /*wz*/,
     if (p.humid  >  0.10f) return Biome::Forest;
     if (p.cont   >  0.80f) return Biome::Mountain;
     return Biome::Plains;
+}
+
+// ============================================================
+// 树生成
+// ============================================================
+namespace {
+    // 简单确定性 hash
+    uint32_t HashCoords(int cx, int cz, int idx) {
+        uint32_t h = static_cast<uint32_t>(cx) * 374761393u
+                   ^ static_cast<uint32_t>(cz) * 668265263u
+                   ^ static_cast<uint32_t>(idx) * 2246822519u;
+        h = (h ^ (h >> 13)) * 1274126177u;
+        return h ^ (h >> 16);
+    }
+}
+
+uint32_t TerrainGenerator::TreeHash(int cx, int cz, int idx) const {
+    return HashCoords(cx, cz, idx);
+}
+
+bool TerrainGenerator::CanPlaceTree(int /*wx*/, int /*wz*/,
+                                     int surfaceY, Biome biome) const {
+    if (surfaceY < 30) return false;   // 水下不放
+    if (surfaceY <= SEA_LEVEL) return false;
+    if (biome == Biome::Ocean || biome == Biome::Beach) return false;
+    if (biome == Biome::Snow) return false;
+    if (biome == Biome::Mountain && surfaceY > 130) return false;  // 高岩不放
+    return true;
+}
+
+void TerrainGenerator::PlaceTree(Chunk& chunk, int wx, int wy, int wz, int height) const {
+    // ★ 预计算"相对该 chunk 的本地坐标"
+    const int baseLX = wx - chunk.chunk_x * CHUNK_SIZE_X;
+    const int baseLZ = wz - chunk.chunk_z * CHUNK_SIZE_Z;
+
+    // ★ 局部 lambda：不再每次乘 chunk_x / chunk_z
+    auto put = [&](int dx, int dy, int dz, BlockType type) {
+        int lx = baseLX + dx;
+        int lz = baseLZ + dz;
+        int ly = wy + dy;
+        if (lx < 0 || lx >= CHUNK_SIZE_X) return;
+        if (lz < 0 || lz >= CHUNK_SIZE_Z) return;
+        if (ly < 0 || ly >= CHUNK_SIZE_Y) return;
+        auto& b = chunk.blocks[ChunkIndex(lx, ly, lz)];
+        if (b == BlockType::Air) b = type;   // 不覆盖已有方块
+    };
+
+    // ---- 树干 ----
+    for (int dy = 0; dy < height; ++dy) {
+        put(0, dy, 0, BlockType::Wood);
+    }
+
+    // ---- 树叶：4 层 ----
+    // 树干占 [0, height-1]，树叶从 height-2 开始
+    const int topY = height;   // 相对 wy 的偏移
+
+    // 第 1 层：5×5，去掉四角（dy = height-2）
+    for (int dx = -2; dx <= 2; ++dx)
+        for (int dz = -2; dz <= 2; ++dz) {
+            if (std::abs(dx) == 2 && std::abs(dz) == 2) continue;
+            put(dx, topY - 2, dz, BlockType::Leaves);
+        }
+
+    // 第 2 层：5×5 外圈，跳过树干（dy = height-1）
+    for (int dx = -2; dx <= 2; ++dx)
+        for (int dz = -2; dz <= 2; ++dz) {
+            if (std::abs(dx) == 2 && std::abs(dz) == 2) continue;
+            if (dx == 0 && dz == 0) continue;   // 树干位置
+            put(dx, topY - 1, dz, BlockType::Leaves);
+        }
+
+    // 第 3 层：3×3，跳过树干（dy = height）
+    for (int dx = -1; dx <= 1; ++dx)
+        for (int dz = -1; dz <= 1; ++dz) {
+            if (dx == 0 && dz == 0) continue;
+            put(dx, topY, dz, BlockType::Leaves);
+        }
+
+    // 第 4 层：十字（dy = height+1）
+    put( 0, topY + 1,  0, BlockType::Leaves);
+    put( 1, topY + 1,  0, BlockType::Leaves);
+    put(-1, topY + 1,  0, BlockType::Leaves);
+    put( 0, topY + 1,  1, BlockType::Leaves);
+    put( 0, topY + 1, -1, BlockType::Leaves);
+}
+
+void TerrainGenerator::GenerateTrees(
+        Chunk& chunk,
+        const std::array<std::array<int, 16>, 16>& surfaceYs) const {
+    const int cx = chunk.chunk_x;
+    const int cz = chunk.chunk_z;
+    const int baseX = cx * CHUNK_SIZE_X;
+    const int baseZ = cz * CHUNK_SIZE_Z;
+
+    // 每 chunk 尝试 0~3 棵树
+    uint32_t nSeed = TreeHash(cx, cz, -1);
+    int count = nSeed % 4;   // 0, 1, 2, 3
+
+    for (int i = 0; i < count; ++i) {
+        uint32_t h = TreeHash(cx, cz, i);
+        int lx = 2 + (h & 0xF) % 12;
+        int lz = 2 + ((h >> 8) & 0xF) % 12;
+        int height = 4 + ((h >> 16) & 0x3);
+        int wx = baseX + lx;
+        int wz = baseZ + lz;
+
+        // ★ 直接查，不用重新扫
+        int surfaceY = surfaceYs[lx][lz];
+        if (surfaceY <= 0) continue;
+
+        BlockType top = chunk.blocks[ChunkIndex(lx, surfaceY, lz)];
+        if (top != BlockType::GrassBlock) continue;
+
+        DensityParams p = ComputeParams(wx, wz);
+        Biome biome = BiomeAt(p, wx, wz, surfaceY);
+        if (!CanPlaceTree(wx, wz, surfaceY, biome)) continue;
+
+        PlaceTree(chunk, wx, surfaceY + 1, wz, height);
+    }
 }
 
 } // namespace game::server

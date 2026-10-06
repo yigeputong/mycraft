@@ -31,7 +31,7 @@ uint8_t HashNoise(int x, int y, uint32_t seed) {
 }
 
 struct TileSpec { uint8_t r, g, b; int noise; };
-const TileSpec kTiles[11] = {   // ← 从 6 改成 9
+const TileSpec kTiles[13] = {   // ← 从 6 改成 9
     {128, 128, 128, 30},   // 0 stone
     { 88, 160,  70, 20},   // 1 grass_top
     { 88, 160,  70, 20},   // 2 grass_side
@@ -42,14 +42,16 @@ const TileSpec kTiles[11] = {   // ← 从 6 改成 9
     {210, 218, 228, 20},   // 7 snow_side
     {200, 180, 130, 25},   // 8 sandstone（浅黄）
     { 60,  60,  60, 25},   // 9  coal_ore（深灰带黑点）
-    {180, 140, 100, 25}   // 10 iron_ore（浅棕带橙点）
+    {180, 140, 100, 25},  // 10 iron_ore（浅棕带橙点）
+    {139, 90,  43, 25},   // 11 wood（棕色，纵向纹）
+    { 42, 100, 45, 35}    // 12 leaves（深绿，大 noise）
 };
 
 // 生成 RGBA 像素数组，64x64
 std::vector<uint8_t> GenerateAtlasPixels() {
     std::vector<uint8_t> px(ATLAS_W * ATLAS_H * 4, 0);
 
-    for (int t = 0; t < sizeof(kTiles) / sizeof(TileSpec); ++t) {
+    for (int t = 0; t < static_cast<int>(sizeof(kTiles) / sizeof(TileSpec)); ++t) {
         int col = t % ATLAS_COLS;
         int row = t / ATLAS_COLS;
         int ox = col * ATLAS_TILE;
@@ -66,6 +68,11 @@ std::vector<uint8_t> GenerateAtlasPixels() {
                 if (t == 2 || t == 7) {   // ★ 草侧面 / 雪侧面
                     bool top = (y < 4) || (y == 4 && ((x + HashNoise(x, 0, 99)) % 3 != 0));
                     if (!top) { r = 110 + n; g = 75 + n; b = 50 + n; }   // 下半土色
+                }
+                if (t == 11) {
+                    if ((x + HashNoise(0, y, 42)) % 4 == 0) {
+                        r = 110 + n; g = 70 + n; b = 30 + n;   // 深色条纹
+                    }
                 }
 
                 int i = ((oy + y) * ATLAS_W + (ox + x)) * 4;
@@ -101,6 +108,10 @@ int TileForBlock(game::BlockType b, int face) {
             return 8;
         case game::BlockType::CoalOre:  return 9;
         case game::BlockType::IronOre:  return 10;
+        case game::BlockType::Wood:
+            return 11;
+        case game::BlockType::Leaves:
+            return 12;
         default:                    return 0;
     }
 }

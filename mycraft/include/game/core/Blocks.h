@@ -8,9 +8,11 @@ enum BlockType : uint8_t {
     Air = 0,
     Stone, GrassBlock, Dirt, Sand, Water,
     Snow,           // ★ 雪地顶层
-    Sandstone,      // ★ 沙漠地下
+    Sandstone,      // ★ 砂岩
     CoalOre,        // ★ 煤矿
     IronOre,        // ★ 铁矿
+    Wood,           // ★ 木头
+    Leaves,         // ★ 树叶
     Void
 };
 
