@@ -1,8 +1,10 @@
 #include "Engine.h"
 #include "core/Log.h"
 #include <chrono>
+#include <SDL3/SDL_filesystem.h>
 #include <SDL3_image/SDL_image.h>
 #include "core/Platform.h"
+#include <filesystem>
 
 namespace Eng {
 
@@ -22,6 +24,10 @@ bool Engine::Init(const EngineConfig& config, IGame* game) {
         return false;
     }
     logInfo(m_logger, "[Engine] SDL initialized");
+    
+    if (const char* base = SDL_GetBasePath()) {
+        std::filesystem::current_path(base);
+    }
 
     if (config.enableNetwork) {
         if (!NET_Init()) {

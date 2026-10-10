@@ -160,7 +160,7 @@ bool MyGame::ConnectToServer(const std::string& host, uint16_t port) {
 bool MyGame::SetupWindow(Eng::Engine& engine) {
     Eng::client::WindowConfig windowConfig = {
         .apitype      = m_apiType,
-        .title        = "Mycraft v0.0.0",
+        .title        = "Mycraft v" MYCRAFT_VERSION,
         .windowWidth  = 1280,
         .windowHeight = 720
     };

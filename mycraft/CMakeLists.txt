@@ -22,6 +22,7 @@ target_include_directories(mycraft PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(mycraft PRIVATE game-server)
+target_compile_definitions(mycraft PRIVATE MYCRAFT_VERSION="${PROJECT_VERSION}")
 
 # ============================================================
 # 专用服务端
@@ -41,19 +42,13 @@ add_glsl_shader(shader_mesh mesh)
 add_glsl_shader(shader_sky  sky)
 add_glsl_shader(shader_post post)
 
+# 让 mycraft 依赖 shader 编译完成，保证 POST_BUILD 拷 assets 时
+# 源码树里的 assets/shaders/build/*.spv 已经生成
 add_dependencies(mycraft shader_mesh shader_sky shader_post)
 
 # ============================================================
-# assets 同步（只挂到客户端）
+# assets 同步：整个 assets 目录（含已编译 shader）拷到输出目录
 # ============================================================
-add_custom_target(copy_shaders ALL
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/build
-        $<TARGET_FILE_DIR:mycraft>/assets/shaders/build
-    DEPENDS shader_mesh shader_sky shader_post
-    COMMENT "Copying shaders to output directory"
-)
-
 add_custom_command(TARGET mycraft POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/assets

@@ -2,7 +2,9 @@
 .vscode/
 
 .cache/
-build/
+**/build/
+build-release/
+dist/
 CMakeUserPresets.json
 
 **/imgui.ini

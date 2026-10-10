@@ -48,7 +48,7 @@ private:
 
     Eng::client::DeviceInfo     m_deviceInfo;
 
-        enum class GameState : std::uint8_t {
+    enum class GameState : std::uint8_t {
         MainMenu,
         Connecting,
         Playing,
@@ -96,7 +96,11 @@ private:
     float pitch =  0.0f;
     glm::mat4 view       = glm::mat4(1.0f);
     glm::mat4 projection = glm::mat4(1.0f);
+#ifdef NDEBUG
+    bool m_flyMode = false;
+#else
     bool m_flyMode = true;
+#endif
 
     // ==================== Hotbar ====================
     static constexpr int kHotbarSize = 4;
