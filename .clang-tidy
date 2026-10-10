@@ -18,6 +18,20 @@ Checks: >
   -portability-avoid-pragma-once,
   -performance-enum-size,
   -modernize-use-nodiscard,
+  -misc-include-cleaner,
+  -misc-const-correctness,
+  -misc-use-anonymous-namespace,
+  -misc-use-internal-linkage,
+  -misc-confusable-identifiers,
+  -misc-use-scoped-lock,
+  -modernize-use-designated-initializers,
+  -modernize-use-auto,
+  -modernize-use-ranges,
+  -modernize-macro-to-enum,
+  -modernize-return-braced-init-list,
+  -bugprone-reserved-identifier,
+  -performance-enum-size,
+  -portability-avoid-pragma-once,
 
 WarningsAsErrors: ''
 HeaderFilterRegex: '(Engine|mycraft)/(include|src)/.*'

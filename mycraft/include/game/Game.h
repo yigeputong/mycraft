@@ -12,13 +12,13 @@ namespace game {
 
 class MyGame : public Eng::IGame {
 public:
-    void OnStart(Eng::Engine& engine);
+    void OnStart(Eng::Engine& engine) override;
 
-    bool OnUpdate(Eng::Engine& engine, float deltaTime);
+    bool OnUpdate(Eng::Engine& engine, float deltaTime) override;
 
-    void OnRender(Eng::Engine& engine);
+    void OnRender(Eng::Engine& engine) override;
 
-    void OnShutdown(Eng::Engine& engine);
+    void OnShutdown(Eng::Engine& engine) override;
 private:
     Eng::client::RenderAPItype m_apiType   = Eng::client::RenderAPItype::VULKAN;
     bool                       m_useVulkan = false;

@@ -1,0 +1,575 @@
+[1/15] Processing file C:\Dev\projects\mycraft\Engine\src\Engine.cpp.
+1 warning generated.
+[2/15] Processing file C:\Dev\projects\mycraft\Engine\src\client\Input.cpp.
+1 warning generated.
+[3/15] Processing file C:\Dev\projects\mycraft\Engine\src\client\Window.cpp.
+1 warning generated.
+[4/15] Processing file C:\Dev\projects\mycraft\Engine\src\client\WindowManager.cpp.
+107 warnings generated.
+[5/15] Processing file C:\Dev\projects\mycraft\Engine\src\client\Render\OpenGL.cpp.
+217 warnings generated.
+[6/15] Processing file C:\Dev\projects\mycraft\Engine\src\client\Render\VMAImpl.cpp.
+217 warnings generated.
+[7/15] Processing file C:\Dev\projects\mycraft\Engine\src\client\Render\Vulkan.cpp.
+332 warnings generated.
+[8/15] Processing file C:\Dev\projects\mycraft\Engine\src\core\Log.cpp.
+332 warnings generated.
+[9/15] Processing file C:\Dev\projects\mycraft\Engine\src\core\NetworkChannel.cpp.
+332 warnings generated.
+[10/15] Processing file C:\Dev\projects\mycraft\Engine\src\core\NetworkServer.cpp.
+332 warnings generated.
+[11/15] Processing file C:\Dev\projects\mycraft\Engine\src\core\Platform.cpp.
+332 warnings generated.
+[12/15] Processing file C:\Dev\projects\mycraft\mycraft\src\Game.cpp.
+445 warnings generated.
+[13/15] Processing file C:\Dev\projects\mycraft\mycraft\src\main.cpp.
+450 warnings generated.
+[14/15] Processing file C:\Dev\projects\mycraft\mycraft\src\server.cpp.
+451 warnings generated.
+[15/15] Processing file C:\Dev\projects\mycraft\mycraft\src\server\WorldGenerator.cpp.
+451 warnings generated.
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:369:58: warning: use nullptr [modernize-use-nullptr]
+  369 |     ImTextureRef()                          { _TexData = NULL; _TexID = ImTextureID_Invalid; }
+      |                                                          ^~~~
+      |                                                          nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:369:58: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:370:58: warning: use nullptr [modernize-use-nullptr]
+  370 |     ImTextureRef(ImTextureID tex_id)        { _TexData = NULL; _TexID = tex_id; }
+      |                                                          ^~~~
+      |                                                          nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:370:58: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:372:58: warning: use nullptr [modernize-use-nullptr]
+  372 |     ImTextureRef(void* tex_id)              { _TexData = NULL; _TexID = (ImTextureID)(size_t)tex_id; }  // For legacy backends casting to ImTextureID
+      |                                                          ^~~~
+      |                                                          nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:372:58: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:394:76: warning: use nullptr [modernize-use-nullptr]
+  394 |     IMGUI_API ImGuiContext* CreateContext(ImFontAtlas* shared_font_atlas = NULL);
+      |                                                                            ^~~~
+      |                                                                            nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:394:76: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:395:64: warning: use nullptr [modernize-use-nullptr]
+  395 |     IMGUI_API void          DestroyContext(ImGuiContext* ctx = NULL);   // NULL = destroy current context
+      |                                                                ^~~~
+      |                                                                nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:395:64: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:409:59: warning: use nullptr [modernize-use-nullptr]
+  409 |     IMGUI_API void          ShowDemoWindow(bool* p_open = NULL);        // create Demo window. demonstrate most ImGui features. call this to learn about the library! try to make it always available in your application!
+      |                                                           ^~~~
+      |                                                           nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:409:59: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:410:62: warning: use nullptr [modernize-use-nullptr]
+  410 |     IMGUI_API void          ShowMetricsWindow(bool* p_open = NULL);     // create Metrics/Debugger window. display Dear ImGui internals: windows, draw commands, various internal state, etc.
+      |                                                              ^~~~
+      |                                                              nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:410:62: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:411:63: warning: use nullptr [modernize-use-nullptr]
+  411 |     IMGUI_API void          ShowDebugLogWindow(bool* p_open = NULL);    // create Debug Log window. display a simplified log of important dear imgui events.
+      |                                                               ^~~~
+      |                                                               nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:411:63: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:412:66: warning: use nullptr [modernize-use-nullptr]
+  412 |     IMGUI_API void          ShowIDStackToolWindow(bool* p_open = NULL); // create Stack Tool window. hover items with mouse to query information about the source of their unique ID.
+      |                                                                  ^~~~
+      |                                                                  nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:412:66: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:413:60: warning: use nullptr [modernize-use-nullptr]
+  413 |     IMGUI_API void          ShowAboutWindow(bool* p_open = NULL);       // create About window. display Dear ImGui version, credits and build/system information.
+      |                                                            ^~~~
+      |                                                            nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:413:60: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:414:63: warning: use nullptr [modernize-use-nullptr]
+  414 |     IMGUI_API void          ShowStyleEditor(ImGuiStyle* ref = NULL);    // add style editor block (not a window). you can pass in a reference ImGuiStyle structure to compare to, revert to and save to (else it uses the default style)
+      |                                                               ^~~~
+      |                                                               nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:414:63: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:421:63: warning: use nullptr [modernize-use-nullptr]
+  421 |     IMGUI_API void          StyleColorsDark(ImGuiStyle* dst = NULL);    // new, recommended style (default)
+      |                                                               ^~~~
+      |                                                               nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:421:63: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:422:64: warning: use nullptr [modernize-use-nullptr]
+  422 |     IMGUI_API void          StyleColorsLight(ImGuiStyle* dst = NULL);   // best used with borders and a custom, thicker font
+      |                                                                ^~~~
+      |                                                                nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:422:64: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:423:66: warning: use nullptr [modernize-use-nullptr]
+  423 |     IMGUI_API void          StyleColorsClassic(ImGuiStyle* dst = NULL); // classic imgui style
+      |                                                                  ^~~~
+      |                                                                  nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:423:66: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:437:68: warning: use nullptr [modernize-use-nullptr]
+  437 |     IMGUI_API bool          Begin(const char* name, bool* p_open = NULL, ImGuiWindowFlags flags = 0);
+      |                                                                    ^~~~
+      |                                                                    nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:437:68: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:478:142: warning: use nullptr [modernize-use-nullptr]
+  478 |     IMGUI_API void          SetNextWindowSizeConstraints(const ImVec2& size_min, const ImVec2& size_max, ImGuiSizeCallback custom_callback = NULL, void* custom_callback_data = NULL); // set next window size limits. use 0.0f or FLT_MAX if you don't want limits. Use -1 for both min and max of same axis to preserve current size (which itself is a constraint). Use callback to apply non-trivial programmatic constraints.
+      |                                                                                                                                              ^~~~
+      |                                                                                                                                              nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:478:142: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:478:177: warning: use nullptr [modernize-use-nullptr]
+  478 |     IMGUI_API void          SetNextWindowSizeConstraints(const ImVec2& size_min, const ImVec2& size_max, ImGuiSizeCallback custom_callback = NULL, void* custom_callback_data = NULL); // set next window size limits. use 0.0f or FLT_MAX if you don't want limits. Use -1 for both min and max of same axis to preserve current size (which itself is a constraint). Use callback to apply non-trivial programmatic constraints.
+      |                                                                                                                                                                                 ^~~~
+      |                                                                                                                                                                                 nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:478:177: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:617:86: warning: use nullptr [modernize-use-nullptr]
+  617 |     IMGUI_API void          TextUnformatted(const char* text, const char* text_end = NULL); // raw text without formatting. Practically equivalent to 'Text("%s", text)' but doesn't require null terminated string if 'text_end' is specified.
+      |                                                                                      ^~~~
+      |                                                                                      nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:617:86: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:644:125: warning: use nullptr [modernize-use-nullptr]
+  644 |     IMGUI_API void          ProgressBar(float fraction, const ImVec2& size_arg = ImVec2(-FLT_MIN, 0), const char* overlay = NULL);
+      |                                                                                                                             ^~~~
+      |                                                                                                                             nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:644:125: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:647:82: warning: use nullptr [modernize-use-nullptr]
+  647 |     IMGUI_API bool          TextLinkOpenURL(const char* label, const char* url = NULL);     // hyperlink text button, automatically open file/url when clicked
+      |                                                                                  ^~~~
+      |                                                                                  nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:647:82: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:684:224: warning: use nullptr [modernize-use-nullptr]
+  684 |     IMGUI_API bool          DragFloatRange2(const char* label, float* v_current_min, float* v_current_max, float v_speed = 1.0f, float v_min = 0.0f, float v_max = 0.0f, const char* format = "%.3f", const char* format_max = NULL, ImGuiSliderFlags flags = 0);
+      |                                                                                                                                                                                                                                ^~~~
+      |                                                                                                                                                                                                                                nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:684:224: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:689:206: warning: use nullptr [modernize-use-nullptr]
+  689 |     IMGUI_API bool          DragIntRange2(const char* label, int* v_current_min, int* v_current_max, float v_speed = 1.0f, int v_min = 0, int v_max = 0, const char* format = "%d", const char* format_max = NULL, ImGuiSliderFlags flags = 0);
+      |                                                                                                                                                                                                              ^~~~
+      |                                                                                                                                                                                                              nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:689:206: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:690:140: warning: use nullptr [modernize-use-nullptr]
+  690 |     IMGUI_API bool          DragScalar(const char* label, ImGuiDataType data_type, void* p_data, float v_speed = 1.0f, const void* p_min = NULL, const void* p_max = NULL, const char* format = NULL, ImGuiSliderFlags flags = 0);
+      |                                                                                                                                            ^~~~
+      |                                                                                                                                            nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:690:140: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:690:166: warning: use nullptr [modernize-use-nullptr]
+  690 |     IMGUI_API bool          DragScalar(const char* label, ImGuiDataType data_type, void* p_data, float v_speed = 1.0f, const void* p_min = NULL, const void* p_max = NULL, const char* format = NULL, ImGuiSliderFlags flags = 0);
+      |                                                                                                                                                                      ^~~~
+      |                                                                                                                                                                      nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:690:166: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:690:193: warning: use nullptr [modernize-use-nullptr]
+  690 |     IMGUI_API bool          DragScalar(const char* label, ImGuiDataType data_type, void* p_data, float v_speed = 1.0f, const void* p_min = NULL, const void* p_max = NULL, const char* format = NULL, ImGuiSliderFlags flags = 0);
+      |                                                                                                                                                                                                 ^~~~
+      |                                                                                                                                                                                                 nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:690:193: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:691:157: warning: use nullptr [modernize-use-nullptr]
+  691 |     IMGUI_API bool          DragScalarN(const char* label, ImGuiDataType data_type, void* p_data, int components, float v_speed = 1.0f, const void* p_min = NULL, const void* p_max = NULL, const char* format = NULL, ImGuiSliderFlags flags = 0);
+      |                                                                                                                                                             ^~~~
+      |                                                                                                                                                             nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:691:157: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:691:183: warning: use nullptr [modernize-use-nullptr]
+  691 |     IMGUI_API bool          DragScalarN(const char* label, ImGuiDataType data_type, void* p_data, int components, float v_speed = 1.0f, const void* p_min = NULL, const void* p_max = NULL, const char* format = NULL, ImGuiSliderFlags flags = 0);
+      |                                                                                                                                                                                       ^~~~
+      |                                                                                                                                                                                       nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:691:183: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:691:210: warning: use nullptr [modernize-use-nullptr]
+  691 |     IMGUI_API bool          DragScalarN(const char* label, ImGuiDataType data_type, void* p_data, int components, float v_speed = 1.0f, const void* p_min = NULL, const void* p_max = NULL, const char* format = NULL, ImGuiSliderFlags flags = 0);
+      |                                                                                                                                                                                                                  ^~~~
+      |                                                                                                                                                                                                                  nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:691:210: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:708:159: warning: use nullptr [modernize-use-nullptr]
+  708 |     IMGUI_API bool          SliderScalar(const char* label, ImGuiDataType data_type, void* p_data, const void* p_min, const void* p_max, const char* format = NULL, ImGuiSliderFlags flags = 0);
+      |                                                                                                                                                               ^~~~
+      |                                                                                                                                                               nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:708:159: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:709:176: warning: use nullptr [modernize-use-nullptr]
+  709 |     IMGUI_API bool          SliderScalarN(const char* label, ImGuiDataType data_type, void* p_data, int components, const void* p_min, const void* p_max, const char* format = NULL, ImGuiSliderFlags flags = 0);
+      |                                                                                                                                                                                ^~~~
+      |                                                                                                                                                                                nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:709:176: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:712:180: warning: use nullptr [modernize-use-nullptr]
+  712 |     IMGUI_API bool          VSliderScalar(const char* label, const ImVec2& size, ImGuiDataType data_type, void* p_data, const void* p_min, const void* p_max, const char* format = NULL, ImGuiSliderFlags flags = 0);
+      |                                                                                                                                                                                    ^~~~
+      |                                                                                                                                                                                    nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:712:180: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:717:151: warning: use nullptr [modernize-use-nullptr]
+  717 |     IMGUI_API bool          InputText(const char* label, char* buf, size_t buf_size, ImGuiInputTextFlags flags = 0, ImGuiInputTextCallback callback = NULL, void* user_data = NULL);
+      |                                                                                                                                                       ^~~~
+      |                                                                                                                                                       nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:717:151: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:717:175: warning: use nullptr [modernize-use-nullptr]
+  717 |     IMGUI_API bool          InputText(const char* label, char* buf, size_t buf_size, ImGuiInputTextFlags flags = 0, ImGuiInputTextCallback callback = NULL, void* user_data = NULL);
+      |                                                                                                                                                                               ^~~~
+      |                                                                                                                                                                               nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:717:175: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:718:195: warning: use nullptr [modernize-use-nullptr]
+  718 |     IMGUI_API bool          InputTextMultiline(const char* label, char* buf, size_t buf_size, const ImVec2& size = ImVec2(0, 0), ImGuiInputTextFlags flags = 0, ImGuiInputTextCallback callback = NULL, void* user_data = NULL);
+      |                                                                                                                                                                                                   ^~~~
+      |                                                                                                                                                                                                   nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:718:195: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:718:219: warning: use nullptr [modernize-use-nullptr]
+  718 |     IMGUI_API bool          InputTextMultiline(const char* label, char* buf, size_t buf_size, const ImVec2& size = ImVec2(0, 0), ImGuiInputTextFlags flags = 0, ImGuiInputTextCallback callback = NULL, void* user_data = NULL);
+      |                                                                                                                                                                                                                           ^~~~
+      |                                                                                                                                                                                                                           nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:718:219: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:719:177: warning: use nullptr [modernize-use-nullptr]
+  719 |     IMGUI_API bool          InputTextWithHint(const char* label, const char* hint, char* buf, size_t buf_size, ImGuiInputTextFlags flags = 0, ImGuiInputTextCallback callback = NULL, void* user_data = NULL);
+      |                                                                                                                                                                                 ^~~~
+      |                                                                                                                                                                                 nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:719:177: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:719:201: warning: use nullptr [modernize-use-nullptr]
+  719 |     IMGUI_API bool          InputTextWithHint(const char* label, const char* hint, char* buf, size_t buf_size, ImGuiInputTextFlags flags = 0, ImGuiInputTextCallback callback = NULL, void* user_data = NULL);
+      |                                                                                                                                                                                                         ^~~~
+      |                                                                                                                                                                                                         nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:719:201: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:729:120: warning: use nullptr [modernize-use-nullptr]
+  729 |     IMGUI_API bool          InputScalar(const char* label, ImGuiDataType data_type, void* p_data, const void* p_step = NULL, const void* p_step_fast = NULL, const char* format = NULL, ImGuiInputTextFlags flags = 0);
+      |                                                                                                                        ^~~~
+      |                                                                                                                        nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:729:120: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:729:152: warning: use nullptr [modernize-use-nullptr]
+  729 |     IMGUI_API bool          InputScalar(const char* label, ImGuiDataType data_type, void* p_data, const void* p_step = NULL, const void* p_step_fast = NULL, const char* format = NULL, ImGuiInputTextFlags flags = 0);
+      |                                                                                                                                                        ^~~~
+      |                                                                                                                                                        nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:729:152: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:729:179: warning: use nullptr [modernize-use-nullptr]
+  729 |     IMGUI_API bool          InputScalar(const char* label, ImGuiDataType data_type, void* p_data, const void* p_step = NULL, const void* p_step_fast = NULL, const char* format = NULL, ImGuiInputTextFlags flags = 0);
+      |                                                                                                                                                                                   ^~~~
+      |                                                                                                                                                                                   nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:729:179: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:730:137: warning: use nullptr [modernize-use-nullptr]
+  730 |     IMGUI_API bool          InputScalarN(const char* label, ImGuiDataType data_type, void* p_data, int components, const void* p_step = NULL, const void* p_step_fast = NULL, const char* format = NULL, ImGuiInputTextFlags flags = 0);
+      |                                                                                                                                         ^~~~
+      |                                                                                                                                         nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:730:137: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:730:169: warning: use nullptr [modernize-use-nullptr]
+  730 |     IMGUI_API bool          InputScalarN(const char* label, ImGuiDataType data_type, void* p_data, int components, const void* p_step = NULL, const void* p_step_fast = NULL, const char* format = NULL, ImGuiInputTextFlags flags = 0);
+      |                                                                                                                                                                         ^~~~
+      |                                                                                                                                                                         nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:730:169: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:730:196: warning: use nullptr [modernize-use-nullptr]
+  730 |     IMGUI_API bool          InputScalarN(const char* label, ImGuiDataType data_type, void* p_data, int components, const void* p_step = NULL, const void* p_step_fast = NULL, const char* format = NULL, ImGuiInputTextFlags flags = 0);
+      |                                                                                                                                                                                                    ^~~~
+      |                                                                                                                                                                                                    nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:730:196: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:738:129: warning: use nullptr [modernize-use-nullptr]
+  738 |     IMGUI_API bool          ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags flags = 0, const float* ref_col = NULL);
+      |                                                                                                                                 ^~~~
+      |                                                                                                                                 nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:738:129: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:795:147: warning: use nullptr [modernize-use-nullptr]
+  795 |     IMGUI_API void          PlotLines(const char* label, const float* values, int values_count, int values_offset = 0, const char* overlay_text = NULL, float scale_min = FLT_MAX, float scale_max = FLT_MAX, ImVec2 graph_size = ImVec2(0, 0), int stride = sizeof(float));
+      |                                                                                                                                                   ^~~~
+      |                                                                                                                                                   nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:795:147: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:796:182: warning: use nullptr [modernize-use-nullptr]
+  796 |     IMGUI_API void          PlotLines(const char* label, float(*values_getter)(void* data, int idx), void* data, int values_count, int values_offset = 0, const char* overlay_text = NULL, float scale_min = FLT_MAX, float scale_max = FLT_MAX, ImVec2 graph_size = ImVec2(0, 0));
+      |                                                                                                                                                                                      ^~~~
+      |                                                                                                                                                                                      nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:796:182: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:797:151: warning: use nullptr [modernize-use-nullptr]
+  797 |     IMGUI_API void          PlotHistogram(const char* label, const float* values, int values_count, int values_offset = 0, const char* overlay_text = NULL, float scale_min = FLT_MAX, float scale_max = FLT_MAX, ImVec2 graph_size = ImVec2(0, 0), int stride = sizeof(float));
+      |                                                                                                                                                       ^~~~
+      |                                                                                                                                                       nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:797:151: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:798:187: warning: use nullptr [modernize-use-nullptr]
+  798 |     IMGUI_API void          PlotHistogram(const char* label, float (*values_getter)(void* data, int idx), void* data, int values_count, int values_offset = 0, const char* overlay_text = NULL, float scale_min = FLT_MAX, float scale_max = FLT_MAX, ImVec2 graph_size = ImVec2(0, 0));
+      |                                                                                                                                                                                           ^~~~
+      |                                                                                                                                                                                           nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:798:187: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:805:91: warning: use nullptr [modernize-use-nullptr]
+  805 |     IMGUI_API void          Value(const char* prefix, float v, const char* float_format = NULL);
+      |                                                                                           ^~~~
+      |                                                                                           nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:805:91: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:818:80: warning: use nullptr [modernize-use-nullptr]
+  818 |     IMGUI_API bool          MenuItem(const char* label, const char* shortcut = NULL, bool selected = false, bool enabled = true);  // return true when activated.
+      |                                                                                ^~~~
+      |                                                                                nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:818:80: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:849:78: warning: use nullptr [modernize-use-nullptr]
+  849 |     IMGUI_API bool          BeginPopupModal(const char* name, bool* p_open = NULL, ImGuiWindowFlags flags = 0); // return true if the modal is open, and you can start outputting to it.
+      |                                                                              ^~~~
+      |                                                                              nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:849:78: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:863:71: warning: use nullptr [modernize-use-nullptr]
+  863 |     IMGUI_API bool          OpenPopupOnItemClick(const char* str_id = NULL, ImGuiPopupFlags popup_flags = 0);   // helper to open popup when clicked on last item. Default to ImGuiPopupFlags_MouseButtonRight == 1. (note: actually triggers on the mouse _released_ event to be consistent with popup behaviors)
+      |                                                                       ^~~~
+      |                                                                       nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:863:71: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:875:72: warning: use nullptr [modernize-use-nullptr]
+  875 |     IMGUI_API bool          BeginPopupContextItem(const char* str_id = NULL, ImGuiPopupFlags popup_flags = 0);  // open+begin popup when clicked on last item. Use str_id==NULL to associate the popup to previous item. If you want to use that on a non-interactive item such as Text() you need to pass in an explicit ID here. read comments in .cpp!
+      |                                                                        ^~~~
+      |                                                                        nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:875:72: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:876:74: warning: use nullptr [modernize-use-nullptr]
+  876 |     IMGUI_API bool          BeginPopupContextWindow(const char* str_id = NULL, ImGuiPopupFlags popup_flags = 0);// open+begin popup when clicked on current window.
+      |                                                                          ^~~~
+      |                                                                          nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:876:74: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:877:72: warning: use nullptr [modernize-use-nullptr]
+  877 |     IMGUI_API bool          BeginPopupContextVoid(const char* str_id = NULL, ImGuiPopupFlags popup_flags = 0);  // open+begin popup when clicked in void (where there are no windows).
+      |                                                                        ^~~~
+      |                                                                        nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:877:72: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:945:69: warning: use nullptr [modernize-use-nullptr]
+  945 |     IMGUI_API void          Columns(int count = 1, const char* id = NULL, bool borders = true);
+      |                                                                     ^~~~
+      |                                                                     nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:945:69: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:958:76: warning: use nullptr [modernize-use-nullptr]
+  958 |     IMGUI_API bool          BeginTabItem(const char* label, bool* p_open = NULL, ImGuiTabItemFlags flags = 0); // create a Tab. Returns true if the Tab is selected.
+      |                                                                            ^~~~
+      |                                                                            nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:958:76: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:966:88: warning: use nullptr [modernize-use-nullptr]
+  966 |     IMGUI_API void          LogToFile(int auto_open_depth = -1, const char* filename = NULL);   // start logging to file
+      |                                                                                        ^~~~
+      |                                                                                        nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:966:88: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:1053:83: warning: use nullptr [modernize-use-nullptr]
+ 1053 |     IMGUI_API ImVec2        CalcTextSize(const char* text, const char* text_end = NULL, bool hide_text_after_double_hash = false, float wrap_width = -1.0f);
+      |                                                                                   ^~~~
+      |                                                                                   nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:1053:83: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:1116:71: warning: use nullptr [modernize-use-nullptr]
+ 1116 |     IMGUI_API bool          IsMousePosValid(const ImVec2* mouse_pos = NULL);                    // by convention we use (-FLT_MAX,-FLT_MAX) to denote that there is no mouse available
+      |                                                                       ^~~~
+      |                                                                       nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:1116:71: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:1139:76: warning: use nullptr [modernize-use-nullptr]
+ 1139 |     IMGUI_API const char*   SaveIniSettingsToMemory(size_t* out_ini_size = NULL);               // return a zero-terminated string with the .ini data which you can save by your own mean. call when io.WantSaveIniSettings is set, then save data by your own mean and clear io.WantSaveIniSettings.
+      |                                                                            ^~~~
+      |                                                                            nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:1139:76: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:1158:127: warning: use nullptr [modernize-use-nullptr]
+ 1158 |     IMGUI_API void          SetAllocatorFunctions(ImGuiMemAllocFunc alloc_func, ImGuiMemFreeFunc free_func, void* user_data = NULL);
+      |                                                                                                                               ^~~~
+      |                                                                                                                               nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:1158:127: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2248:91: warning: use nullptr [modernize-use-nullptr]
+ 2248 |     inline ImVector()                                       { Size = Capacity = 0; Data = NULL; }
+      |                                                                                           ^~~~
+      |                                                                                           nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2248:91: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2253:118: warning: use nullptr [modernize-use-nullptr]
+ 2253 |     inline void         clear()                             { if (Data) { Size = Capacity = 0; IM_FREE(Data); Data = NULL; } }  // Important: does not destruct anything
+      |                                                                                                                      ^~~~
+      |                                                                                                                      nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2253:118: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2704:87: warning: use nullptr [modernize-use-nullptr]
+ 2704 |     IMGUI_API void      InsertChars(int pos, const char* text, const char* text_end = NULL);
+      |                                                                                       ^~~~
+      |                                                                                       nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2704:87: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2737:61: warning: use nullptr [modernize-use-nullptr]
+ 2737 |     void Clear()    { SourceId = SourceParentId = 0; Data = NULL; DataSize = 0; memset(DataType, 0, sizeof(DataType)); DataFrameCount = -1; Preview = Delivery = false; }
+      |                                                             ^~~~
+      |                                                             nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2737:61: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2769:77: warning: use nullptr [modernize-use-nullptr]
+ 2769 |     IMGUI_API bool      PassFilter(const char* text, const char* text_end = NULL) const;
+      |                                                                             ^~~~
+      |                                                                             nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2769:77: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2780:67: warning: use nullptr [modernize-use-nullptr]
+ 2780 |         ImGuiTextRange()                                { b = e = NULL; }
+      |                                                                   ^~~~
+      |                                                                   nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2780:67: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2798:73: warning: use nullptr [modernize-use-nullptr]
+ 2798 |     inline char         operator[](int i) const { IM_ASSERT(Buf.Data != NULL); return Buf.Data[i]; }
+      |                                                                         ^~~~
+      |                                                                         nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2798:73: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2807:71: warning: use nullptr [modernize-use-nullptr]
+ 2807 |     IMGUI_API void      append(const char* str, const char* str_end = NULL);
+      |                                                                       ^~~~
+      |                                                                       nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2807:71: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2855:72: warning: use nullptr [modernize-use-nullptr]
+ 2855 |     IMGUI_API void**    GetVoidPtrRef(ImGuiID key, void* default_val = NULL);
+      |                                                                        ^~~~
+      |                                                                        nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:2855:72: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3385:106: warning: use nullptr [modernize-use-nullptr]
+ 3385 |     IMGUI_API void  AddText(const ImVec2& pos, ImU32 col, const char* text_begin, const char* text_end = NULL);
+      |                                                                                                          ^~~~
+      |                                                                                                          nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3385:106: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3386:137: warning: use nullptr [modernize-use-nullptr]
+ 3386 |     IMGUI_API void  AddText(ImFont* font, float font_size, const ImVec2& pos, ImU32 col, const char* text_begin, const char* text_end = NULL, float wrap_width = 0.0f, const ImVec4* cpu_fine_clip_rect = NULL);
+      |                                                                                                                                         ^~~~
+      |                                                                                                                                         nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3386:137: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3386:203: warning: use nullptr [modernize-use-nullptr]
+ 3386 |     IMGUI_API void  AddText(ImFont* font, float font_size, const ImVec2& pos, ImU32 col, const char* text_begin, const char* text_end = NULL, float wrap_width = 0.0f, const ImVec4* cpu_fine_clip_rect = NULL);
+      |                                                                                                                                                                                                           ^~~~
+      |                                                                                                                                                                                                           nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3386:203: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3431:75: warning: use nullptr [modernize-use-nullptr]
+ 3431 |     IMGUI_API void  AddCallback(ImDrawCallback callback, void* userdata = NULL, size_t userdata_size = 0);
+      |                                                                           ^~~~
+      |                                                                           nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3431:75: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3591:75: warning: use nullptr [modernize-use-nullptr]
+ 3591 |     void*               GetPixels()                 { IM_ASSERT(Pixels != NULL); return Pixels; }
+      |                                                                           ^~~~
+      |                                                                           nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3591:75: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3592:75: warning: use nullptr [modernize-use-nullptr]
+ 3592 |     void*               GetPixelsAt(int x, int y)   { IM_ASSERT(Pixels != NULL); return Pixels + (x + y * Width) * BytesPerPixel; }
+      |                                                                           ^~~~
+      |                                                                           nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3592:75: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3678:70: warning: use nullptr [modernize-use-nullptr]
+ 3678 |     IMGUI_API void  AddText(const char* text, const char* text_end = NULL);     // Add string (each character of the UTF-8 string are added)
+      |                                                                      ^~~~
+      |                                                                      nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3678:70: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3733:79: warning: use nullptr [modernize-use-nullptr]
+ 3733 |     IMGUI_API ImFont*           AddFontDefault(const ImFontConfig* font_cfg = NULL);        // Selects between AddFontDefaultVector() and AddFontDefaultBitmap().
+      |                                                                               ^~~~
+      |                                                                               nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3733:79: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3734:85: warning: use nullptr [modernize-use-nullptr]
+ 3734 |     IMGUI_API ImFont*           AddFontDefaultVector(const ImFontConfig* font_cfg = NULL);  // Embedded scalable font. Recommended at any higher size.
+      |                                                                                     ^~~~
+      |                                                                                     nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3734:85: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3735:85: warning: use nullptr [modernize-use-nullptr]
+ 3735 |     IMGUI_API ImFont*           AddFontDefaultBitmap(const ImFontConfig* font_cfg = NULL);  // Embedded classic pixel-clean font. Recommended at Size 13px with no scaling.
+      |                                                                                     ^~~~
+      |                                                                                     nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3735:85: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3736:131: warning: use nullptr [modernize-use-nullptr]
+ 3736 |     IMGUI_API ImFont*           AddFontFromFileTTF(const char* filename, float size_pixels = 0.0f, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL);
+      |                                                                                                                                   ^~~~
+      |                                                                                                                                   nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3736:131: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3736:167: warning: use nullptr [modernize-use-nullptr]
+ 3736 |     IMGUI_API ImFont*           AddFontFromFileTTF(const char* filename, float size_pixels = 0.0f, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL);
+      |                                                                                                                                                                       ^~~~
+      |                                                                                                                                                                       nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3736:167: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3737:148: warning: use nullptr [modernize-use-nullptr]
+ 3737 |     IMGUI_API ImFont*           AddFontFromMemoryTTF(void* font_data, int font_data_size, float size_pixels = 0.0f, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL); // Note: Transfer ownership of 'ttf_data' to ImFontAtlas! Will be deleted after destruction of the atlas. Set font_cfg->FontDataOwnedByAtlas=false to keep ownership of your data and it won't be freed.
+      |                                                                                                                                                    ^~~~
+      |                                                                                                                                                    nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3737:148: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3737:184: warning: use nullptr [modernize-use-nullptr]
+ 3737 |     IMGUI_API ImFont*           AddFontFromMemoryTTF(void* font_data, int font_data_size, float size_pixels = 0.0f, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL); // Note: Transfer ownership of 'ttf_data' to ImFontAtlas! Will be deleted after destruction of the atlas. Set font_cfg->FontDataOwnedByAtlas=false to keep ownership of your data and it won't be freed.
+      |                                                                                                                                                                                        ^~~~
+      |                                                                                                                                                                                        nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3737:184: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3738:186: warning: use nullptr [modernize-use-nullptr]
+ 3738 |     IMGUI_API ImFont*           AddFontFromMemoryCompressedTTF(const void* compressed_font_data, int compressed_font_data_size, float size_pixels = 0.0f, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL); // 'compressed_font_data' still owned by caller. Compress with binary_to_compressed_c.cpp.
+      |                                                                                                                                                                                          ^~~~
+      |                                                                                                                                                                                          nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3738:186: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3738:222: warning: use nullptr [modernize-use-nullptr]
+ 3738 |     IMGUI_API ImFont*           AddFontFromMemoryCompressedTTF(const void* compressed_font_data, int compressed_font_data_size, float size_pixels = 0.0f, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL); // 'compressed_font_data' still owned by caller. Compress with binary_to_compressed_c.cpp.
+      |                                                                                                                                                                                                                              ^~~~
+      |                                                                                                                                                                                                                              nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3738:222: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3739:168: warning: use nullptr [modernize-use-nullptr]
+ 3739 |     IMGUI_API ImFont*           AddFontFromMemoryCompressedBase85TTF(const char* compressed_font_data_base85, float size_pixels = 0.0f, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL);              // 'compressed_font_data_base85' still owned by caller. Compress with binary_to_compressed_c.cpp with -base85 parameter.
+      |                                                                                                                                                                        ^~~~
+      |                                                                                                                                                                        nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3739:168: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3739:204: warning: use nullptr [modernize-use-nullptr]
+ 3739 |     IMGUI_API ImFont*           AddFontFromMemoryCompressedBase85TTF(const char* compressed_font_data_base85, float size_pixels = 0.0f, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL);              // 'compressed_font_data_base85' still owned by caller. Compress with binary_to_compressed_c.cpp with -base85 parameter.
+      |                                                                                                                                                                                                            ^~~~
+      |                                                                                                                                                                                                            nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3739:204: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3763:128: warning: use nullptr [modernize-use-nullptr]
+ 3763 |     IMGUI_API void  GetTexDataAsAlpha8(unsigned char** out_pixels, int* out_width, int* out_height, int* out_bytes_per_pixel = NULL); // 1 byte per-pixel
+      |                                                                                                                                ^~~~
+      |                                                                                                                                nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3763:128: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3764:128: warning: use nullptr [modernize-use-nullptr]
+ 3764 |     IMGUI_API void  GetTexDataAsRGBA32(unsigned char** out_pixels, int* out_width, int* out_height, int* out_bytes_per_pixel = NULL); // 4 bytes-per-pixel
+      |                                                                                                                                ^~~~
+      |                                                                                                                                nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3764:128: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3766:116: warning: use nullptr [modernize-use-nullptr]
+ 3766 |     void            SetTexID(ImTextureRef id)   { IM_ASSERT(TexRef._TexID == ImTextureID_Invalid && id._TexData == NULL); TexRef._TexData->TexID = id._TexID; } // Called by legacy backends.
+      |                                                                                                                    ^~~~
+      |                                                                                                                    nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3766:116: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3812:95: warning: use nullptr [modernize-use-nullptr]
+ 3812 |     IMGUI_API ImFontAtlasRectId AddCustomRect(int width, int height, ImFontAtlasRect* out_r = NULL);// Register a rectangle. Return -1 (ImFontAtlasRectId_Invalid) on error.
+      |                                                                                               ^~~~
+      |                                                                                               nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3812:95: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3867:177: warning: use nullptr [modernize-use-nullptr]
+ 3867 |     inline const ImFontAtlasRect* GetCustomRectByIndex(ImFontAtlasRectId id)                                                { return GetCustomRect(id, &TempRect) ? &TempRect : NULL; } // OBSOLETED in 1.92.0
+      |                                                                                                                                                                                 ^~~~
+      |                                                                                                                                                                                 nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3867:177: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3956:88: warning: use nullptr [modernize-use-nullptr]
+ 3956 |     bool                        IsLoaded() const                { return OwnerAtlas != NULL; }
+      |                                                                                        ^~~~
+      |                                                                                        nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3956:88: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3963:141: warning: use nullptr [modernize-use-nullptr]
+ 3963 |     IMGUI_API ImVec2            CalcTextSizeA(float size, float max_width, float wrap_width, const char* text_begin, const char* text_end = NULL, const char** out_remaining = NULL);
+      |                                                                                                                                             ^~~~
+      |                                                                                                                                             nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3963:141: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3963:176: warning: use nullptr [modernize-use-nullptr]
+ 3963 |     IMGUI_API ImVec2            CalcTextSizeA(float size, float max_width, float wrap_width, const char* text_begin, const char* text_end = NULL, const char** out_remaining = NULL);
+      |                                                                                                                                                                                ^~~~
+      |                                                                                                                                                                                nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3963:176: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3965:150: warning: use nullptr [modernize-use-nullptr]
+ 3965 |     IMGUI_API void              RenderChar(ImDrawList* draw_list, float size, const ImVec2& pos, ImU32 col, ImWchar c, const ImVec4* cpu_fine_clip = NULL);
+      |                                                                                                                                                      ^~~~
+      |                                                                                                                                                      nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3965:150: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3980:29: warning: use nullptr [modernize-use-nullptr]
+ 3980 |     IM_ASSERT(!(_TexData != NULL && _TexID != ImTextureID_Invalid));
+      |                             ^~~~
+      |                             nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3980:29: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3992:28: warning: use nullptr [modernize-use-nullptr]
+ 3992 |     if (TexRef._TexData != NULL)
+      |                            ^~~~
+      |                            nullptr
+C:\Dev\projects\mycraft\Engine\lib\imgui\imgui.h:3992:28: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\src\client\Render\OpenGL.cpp:709:83: warning: use nullptr [modernize-use-nullptr]
+  709 |         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+      |                                                                                   ^
+      |                                                                                   nullptr
+C:\Dev\projects\mycraft\Engine\src\client\Render\OpenGL.cpp:709:83: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\src\client\Render\OpenGL.cpp:905:24: warning: use nullptr [modernize-use-nullptr]
+  905 |                        0);
+      |                        ^
+      |                        nullptr
+C:\Dev\projects\mycraft\Engine\src\client\Render\OpenGL.cpp:905:24: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\Engine\src\client\Render\OpenGL.cpp:975:33: warning: use nullptr [modernize-use-nullptr]
+  975 |                                 0,
+      |                                 ^
+      |                                 nullptr
+C:\Dev\projects\mycraft\Engine\src\client\Render\OpenGL.cpp:975:33: note: FIX-IT applied suggested code changes
+C:\Dev\projects\mycraft\mycraft\include\game/Game.h:15:10: warning: annotate this function with 'override' or (rarely) 'final' [modernize-use-override]
+   15 |     void OnStart(Eng::Engine& engine);
+      |          ^                           
+      |                                       override
+C:\Dev\projects\mycraft\mycraft\include\game/Game.h:15:38: note: FIX-IT applied suggested code changes
+   15 |     void OnStart(Eng::Engine& engine);
+      |                                      ^
+C:\Dev\projects\mycraft\mycraft\include\game/Game.h:17:10: warning: annotate this function with 'override' or (rarely) 'final' [modernize-use-override]
+   17 |     bool OnUpdate(Eng::Engine& engine, float deltaTime);
+      |          ^                                             
+      |                                                         override
+C:\Dev\projects\mycraft\mycraft\include\game/Game.h:17:56: note: FIX-IT applied suggested code changes
+   17 |     bool OnUpdate(Eng::Engine& engine, float deltaTime);
+      |                                                        ^
+C:\Dev\projects\mycraft\mycraft\include\game/Game.h:19:10: warning: annotate this function with 'override' or (rarely) 'final' [modernize-use-override]
+   19 |     void OnRender(Eng::Engine& engine);
+      |          ^                            
+      |                                        override
+C:\Dev\projects\mycraft\mycraft\include\game/Game.h:19:39: note: FIX-IT applied suggested code changes
+   19 |     void OnRender(Eng::Engine& engine);
+      |                                       ^
+C:\Dev\projects\mycraft\mycraft\include\game/Game.h:21:10: warning: annotate this function with 'override' or (rarely) 'final' [modernize-use-override]
+   21 |     void OnShutdown(Eng::Engine& engine);
+      |          ^                              
+      |                                          override
+C:\Dev\projects\mycraft\mycraft\include\game/Game.h:21:41: note: FIX-IT applied suggested code changes
+clang-tidy applied 107 of 107 suggested fixes.
+   21 |     void OnShutdown(Eng::Engine& engine);
+      |                                         ^
+Suppressed 4 warnings (4 with check filters).
