@@ -23,12 +23,12 @@ float PerlinNoise::Lerp(float a, float b, float t) { return a + t * (b - a); }
 
 float PerlinNoise::Grad(int hash, float x, float y) {
     switch (hash & 7) {
-        case 0: return  x + y; case 1: return  x - y;
-        case 2: return -x + y; case 3: return -x - y;
-        case 4: return  x;     case 5: return -x;
-        case 6: return  y;     case 7: return -y;
+        case 0:     return  x + y;  case 1:     return  x - y;
+        case 2:     return -x + y;  case 3:     return -x - y;
+        case 4:     return  x;      case 5:     return -x;
+        case 6:     return  y;      case 7:     return -y;
+        default:    return 0.0f;
     }
-    return 0;
 }
 
 float PerlinNoise::Grad(int hash, float x, float y, float z) {
@@ -41,8 +41,8 @@ float PerlinNoise::Grad(int hash, float x, float y, float z) {
         case 10: return  y - z; case 11: return -y - z;
         case 12: return  y + x; case 13: return -y + z;
         case 14: return  y - x; case 15: return -y - z;
+        default: return 0.0f;
     }
-    return 0;
 }
 
 float PerlinNoise::Noise2D(float x, float y) const {
@@ -136,6 +136,27 @@ namespace {
     }
     float Remap(float v, float a, float b, float c, float d) {
         return c + (d - c) * std::clamp((v - a) / (b - a), 0.0f, 1.0f);
+    }
+
+    // ============================================================
+    // 样条采样（控制点线性插值）
+    // ============================================================
+
+    struct SplinePoint{
+        float input;
+        float output;
+    };
+
+    static float SampleSpline(const SplinePoint* pts, size_t n, float x) {
+        if (x <= pts[0].input)      return pts[0].output;
+        if (x >= pts[n-1].input)    return pts[n-1].output;
+        for (size_t i = 1; i < n; ++i) {
+            if (x <= pts[i].input) {
+                float t = (x - pts[i-1].input) / (pts[i].input - pts[i-1].input);
+                return pts[i-1].output + t * (pts[i].output - pts[i-1].output);
+            }
+        }
+        return 0;
     }
 }
 
@@ -255,10 +276,12 @@ BlockType TerrainGenerator::ApplySurfaceRule(Biome biome, int wy, int surfaceY,
 
     // 顶层方块
     switch (biome) {
-        case Biome::Ocean:  return BlockType::Sand;
-        case Biome::Beach:  return BlockType::Sand;
-        case Biome::Desert: return BlockType::Sand;
-        case Biome::Snow:   return BlockType::Snow;
+        case Biome::Ocean:
+        case Biome::Beach:
+        case Biome::Desert: 
+            return BlockType::Sand;
+        case Biome::Snow:
+                return BlockType::Snow;
         case Biome::Mountain:
             return (surfaceY > 110) ? BlockType::Stone : BlockType::GrassBlock;
         case Biome::Plains:
@@ -430,23 +453,6 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
 
     GenerateTrees(chunk, surfaceYs);
     return chunk;
-}
-
-// ============================================================
-// 样条采样（控制点线性插值）
-// ============================================================
-struct SplinePoint { float input, output; };
-
-static float SampleSpline(const SplinePoint* pts, size_t n, float x) {
-    if (x <= pts[0].input)      return pts[0].output;
-    if (x >= pts[n-1].input)    return pts[n-1].output;
-    for (size_t i = 1; i < n; ++i) {
-        if (x <= pts[i].input) {
-            float t = (x - pts[i-1].input) / (pts[i].input - pts[i-1].input);
-            return pts[i-1].output + t * (pts[i].output - pts[i-1].output);
-        }
-    }
-    return 0;
 }
 
 // ---- 地形偏移样条：cont → 垂直偏移 ----

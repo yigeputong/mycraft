@@ -49,7 +49,7 @@ const TileSpec kTiles[13] = {   // ← 从 6 改成 9
 
 // 生成 RGBA 像素数组，64x64
 std::vector<uint8_t> GenerateAtlasPixels() {
-    std::vector<uint8_t> px(ATLAS_W * ATLAS_H * 4, 0);
+    std::vector<uint8_t> px(static_cast<size_t>(ATLAS_W) * ATLAS_H * 4, 0);
 
     for (int t = 0; t < static_cast<int>(sizeof(kTiles) / sizeof(TileSpec)); ++t) {
         int col = t % ATLAS_COLS;
@@ -182,6 +182,8 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
             case SDL_EVENT_WINDOW_RESTORED:
                 m_minimized = false;
                 break;
+            default:
+                break;
         }
     };
 
@@ -189,7 +191,7 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
     return true;
 }
 
-bool MyGame::SetupRenderer(Eng::Engine& engine) {
+bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
     renderer = mainWin->GetAPI();
     if (!renderer) {
         logError(logger, "[Game] renderer is null");
@@ -350,7 +352,6 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         HandleServerMessage(data);
     }
 
-    constexpr float INTERP_TIME = 1.0f / 20.0f;   // 和服务端 tick 匹配
     constexpr float PICKUP_TIME = 0.2f;   // 0.2 秒飞向玩家
     for (auto it = m_itemEntities.begin(); it != m_itemEntities.end(); ) {
         auto& e = it->second;
@@ -385,7 +386,7 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     UpdateChunkStreaming();
 
     if (!m_meshQueue.empty()) {
-        auto pm = std::move(m_meshQueue.front());
+        auto pm = m_meshQueue.front();
         m_meshQueue.pop();
 
         auto it = m_chunks.find(pm.chunkKey);
@@ -838,13 +839,13 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             cc.mesh = 0;
 
             uint64_t key = ChunkKey(cx, cz);
-            m_chunks[key] = std::move(cc);
+            m_chunks[key] = cc;
             m_pending.erase(key);
 
             PendingMesh pm;
             pm.chunkKey = key;
             pm.chunk = m_chunks[key].chunk;
-            m_meshQueue.push(std::move(pm));
+            m_meshQueue.push(pm);
 
             m_pending.erase(ChunkKey(cx, cz));
             break;
@@ -931,6 +932,10 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             }
             break;
         }
+        case game::net::MessageType::PlayerInput:
+        case game::net::MessageType::ChunkRequest:
+            // 客户端不处理
+            break;
     }
 }
 

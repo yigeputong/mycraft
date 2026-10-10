@@ -226,7 +226,7 @@ MeshHandle OpenGLAPI::CreateMeshInternal(const MeshData& data, bool instanced) {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     MeshHandle handle = m_nextMeshHandle++;
-    m_meshes[handle] = std::move(internal);
+    m_meshes[handle] = internal;
 
     return handle;
 }
@@ -356,7 +356,7 @@ TextureHandle OpenGLAPI::CreateTextureFromMemory(const aiTexture* embedded) {
             return 0;
         }
         std::memcpy(surface->pixels, embedded->pcData,
-                    embedded->mWidth * embedded->mHeight * 4);
+            static_cast<std::size_t>(embedded->mWidth) * embedded->mHeight * 4);
     }
 
     // ===== 转成 ABGR8888（匹配 OpenGL 的 GL_RGBA） =====
@@ -436,34 +436,36 @@ TextureHandle OpenGLAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int
     return handle;
 }
 
-// 读二进制文件
-static std::vector<char> ReadBinaryFile(const std::string& path) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.is_open()) return {};
-    auto size = f.tellg();
-    f.seekg(0);
-    std::vector<char> buf(static_cast<size_t>(size));
-    f.read(buf.data(), size);
-    return buf;
-}
-
-// 从 SPIR-V 编译 shader
-static GLuint CompileShaderSPIRV(GLenum stage, const std::vector<char>& spv) {
-    GLuint shader = glCreateShader(stage);
-    glShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V,
-                   spv.data(), static_cast<GLsizei>(spv.size()));
-    glSpecializeShader(shader, "main", 0, nullptr, nullptr);
-
-    GLint ok = 0;
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char logBuf[2048];
-        glGetShaderInfoLog(shader, sizeof(logBuf), nullptr, logBuf);
-        // 通过参数把 log 传出去不太好，直接吞掉，外面只看 0
-        glDeleteShader(shader);
-        return 0;
+namespace {
+    // 读二进制文件
+    std::vector<char> ReadBinaryFile(const std::string& path) {
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        if (!f.is_open()) return {};
+        auto size = f.tellg();
+        f.seekg(0);
+        std::vector<char> buf(static_cast<size_t>(size));
+        f.read(buf.data(), size);
+        return buf;
     }
-    return shader;
+
+    // 从 SPIR-V 编译 shader
+    GLuint CompileShaderSPIRV(GLenum stage, const std::vector<char>& spv) {
+        GLuint shader = glCreateShader(stage);
+        glShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V,
+                    spv.data(), static_cast<GLsizei>(spv.size()));
+        glSpecializeShader(shader, "main", 0, nullptr, nullptr);
+
+        GLint ok = 0;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            char logBuf[2048];
+            glGetShaderInfoLog(shader, sizeof(logBuf), nullptr, logBuf);
+            // 通过参数把 log 传出去不太好，直接吞掉，外面只看 0
+            glDeleteShader(shader);
+            return 0;
+        }
+        return shader;
+    }
 }
 
 ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath, const std::string& fragPath) {
@@ -1148,7 +1150,7 @@ MeshHandle OpenGLAPI::GetSkyCubeMesh() {
     };
 
     std::vector<Eng::client::Vertex> v(36);
-    for (int i = 0; i < 36; ++i) {
+    for (size_t i = 0; i < 36; ++i) {
         v[i].position = {verts[i*3], verts[i*3+1], verts[i*3+2]};
         v[i].normal   = {0.0f, 0.0f, 0.0f};
         v[i].uv       = {0.0f, 0.0f};

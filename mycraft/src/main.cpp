@@ -12,8 +12,8 @@ int main() {
     Eng::Engine& eng = Eng::Engine::GetInstance();
 
     if (!eng.Init(engConfig, new game::MyGame)) {
-        std::cerr << "[Engine] Failed to initialize!" << std::endl;
-        std::cerr << "[Engine] Error: " << eng.GetLastError() << std::endl;
+        std::cerr << "[Engine] Failed to initialize!" << "\n";
+        std::cerr << "[Engine] Error: " << eng.GetLastError() << "\n";
         return -1;
     }
 

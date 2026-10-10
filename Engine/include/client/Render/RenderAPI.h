@@ -1,7 +1,6 @@
 #pragma once
 
 #include "core/Configs.h"
-#include "core/Error.h"
 
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
@@ -9,7 +8,6 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <string>
-#include <expected>
 
 struct aiTexture;
 

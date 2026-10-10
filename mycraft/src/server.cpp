@@ -153,6 +153,9 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
             // m_server.SendTo(clientId, w.GetBuffer());
             break;
         }
+        default:
+        // 服务端不收 S→C 类消息
+            break;
     }
 }
 

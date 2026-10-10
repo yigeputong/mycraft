@@ -1,2 +1,14 @@
 CompileFlags:
   CompilationDatabase: build
+
+Diagnostics:
+  ClangTidy:
+    Add:
+      - bugprone-*
+      - performance-*
+      - portability-*
+      - modernize-*
+    Remove:
+      - bugprone-easily-swappable-parameters
+      - bugprone-narrowing-conversions
+      - modernize-use-trailing-return-type

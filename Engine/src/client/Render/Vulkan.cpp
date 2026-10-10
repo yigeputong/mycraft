@@ -27,7 +27,11 @@ namespace Eng::client {
 VulkanAPI::VulkanAPI() = default;
 
 VulkanAPI::~VulkanAPI() {
-    try { Shutdown(); } catch (...) {}
+    try { Shutdown(); }
+    catch (...) {
+        // 析构阶段不抛，只记录
+        std::fputs("[Vulkan] Shutdown threw exception\n", stderr);
+    }
 }
 
 // ============================================================
@@ -55,7 +59,7 @@ vk::raii::ShaderModule VulkanAPI::createShaderModule(const std::vector<char>& co
 // ============================================================
 // Initialize
 // ============================================================
-void VulkanAPI::Initialize(int width, int height, Window* window) {
+void VulkanAPI::Initialize(int /*width*/, int /*height*/, Window* window) {
     m_window = window;
 
     createInstance();
@@ -115,19 +119,21 @@ void VulkanAPI::createInstance() {
     volkLoadInstance(*m_instance);
 }
 
-VKAPI_ATTR vk::Bool32 VKAPI_CALL vkDebugCb(
-    vk::DebugUtilsMessageSeverityFlagBitsEXT      severity,
-    vk::DebugUtilsMessageTypeFlagsEXT             /*type*/,
-    const vk::DebugUtilsMessengerCallbackDataEXT* data,
-    void*                                          userData)
-{
-    auto* api = static_cast<VulkanAPI*>(userData);
-    if (api) {
-        api->logValidation(
-            static_cast<VkDebugUtilsMessageSeverityFlagBitsEXT>(severity),
-            data->pMessage);
+namespace {
+    VKAPI_ATTR vk::Bool32 VKAPI_CALL vkDebugCb(
+        vk::DebugUtilsMessageSeverityFlagBitsEXT      severity,
+        vk::DebugUtilsMessageTypeFlagsEXT             /*type*/,
+        const vk::DebugUtilsMessengerCallbackDataEXT* data,
+        void*                                          userData)
+    {
+        auto* api = static_cast<VulkanAPI*>(userData);
+        if (api) {
+            api->logValidation(
+                static_cast<VkDebugUtilsMessageSeverityFlagBitsEXT>(severity),
+                data->pMessage);
+        }
+        return vk::False;
     }
-    return vk::False;
 }
 
 void VulkanAPI::logValidation(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
@@ -998,7 +1004,7 @@ MeshHandle VulkanAPI::CreateMesh(const MeshData& data) {
     }
 
     MeshHandle h = m_nextMesh++;
-    m_meshes.emplace(h, std::move(mi));
+    m_meshes.emplace(h, mi);
     return h;
 }
 
@@ -1739,7 +1745,7 @@ void VulkanAPI::DestroyFramebuffer(const Framebuffer& fb) {
     m_framebuffers.erase(it);
 }
 
-TextureHandle VulkanAPI::CreateTextureFromMemory(const aiTexture* embedded) {
+TextureHandle VulkanAPI::CreateTextureFromMemory(const aiTexture* /*embedded*/) {
     // TODO: 从 assimp 内嵌纹理解出像素
     return 0;
 }
