@@ -1222,7 +1222,7 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath,
 
 void VulkanAPI::DestroyShader(ShaderHandle h) {
     if (!*m_device) return;
-    vkDeviceWaitIdle(*m_device);   // ★ 加这行
+    vkDeviceWaitIdle(*m_device);
     m_shaders.erase(h);
 }
 
@@ -1950,10 +1950,8 @@ bool VulkanAPI::InitImGuiBackend()
     return true;
 }
 
-void VulkanAPI::ShutdownImGuiBackend()
-{
-    if (!m_imguiInitialized)
-        return;
+void VulkanAPI::ShutdownImGuiBackend() {
+    if (ImGui::GetCurrentContext() == nullptr) return;
 
     VkDevice vkDevice = *m_device;
     vkDeviceWaitIdle(vkDevice);
@@ -2022,7 +2020,7 @@ void VulkanAPI::ImGuiRenderDrawData() {
     vkCmdEndRendering(cmd);
 }
 
-DeviceInfo VulkanAPI::GetDeviceInfo() const {
+[[nodiscard]] DeviceInfo VulkanAPI::GetDeviceInfo() const {
     DeviceInfo info;
     info.backend = "Vulkan";
 
@@ -2083,6 +2081,13 @@ void VulkanAPI::ApplySettings(const WindowConfig& win, const RenderConfig& rende
     }
 
     m_globalUBOData.aoStrength = render.m_aoStrength;
+}
+
+void VulkanAPI::WaitIdle() {
+    if (*m_device) {              // ← 成员名按你实际的改
+        m_device.waitIdle();     // vk::raii::Device 写法
+        // 裸 VkDevice 用：vkDeviceWaitIdle(m_device);
+    }
 }
 
 }

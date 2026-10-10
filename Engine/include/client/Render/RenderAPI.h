@@ -168,8 +168,9 @@ public:
     virtual void ImGuiRenderDrawData() = 0;  // 内部调 ImGui_ImplXxx_RenderDrawData
 
     //其他
-    virtual DeviceInfo GetDeviceInfo() const = 0;
+    [[nodiscard]] virtual DeviceInfo GetDeviceInfo() const = 0;
     virtual void ApplySettings(const WindowConfig& win, const RenderConfig& render) = 0;
+    virtual void WaitIdle() = 0;
 };
 
 }

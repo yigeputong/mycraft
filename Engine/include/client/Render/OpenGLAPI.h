@@ -77,8 +77,9 @@ public:
     void ImGuiNewFrame() override;
     void ImGuiRenderDrawData() override;
 
-    DeviceInfo GetDeviceInfo() const override;
+    [[nodiscard]] DeviceInfo GetDeviceInfo() const override;
     void ApplySettings(const WindowConfig& win, const RenderConfig& render) override;
+    void WaitIdle() override;
 
     static constexpr int api_major = 4;
     static constexpr int api_minor = 6;

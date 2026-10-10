@@ -1184,6 +1184,7 @@ bool OpenGLAPI::InitImGuiBackend() {
 }
 
 void OpenGLAPI::ShutdownImGuiBackend() {
+    if (ImGui::GetCurrentContext() == nullptr) return;
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     logInfo(m_logger, "[RenderAPI] ImGui backend shutdown");
@@ -1198,7 +1199,7 @@ void OpenGLAPI::ImGuiRenderDrawData() {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
-DeviceInfo OpenGLAPI::GetDeviceInfo() const {
+[[nodiscard]] DeviceInfo OpenGLAPI::GetDeviceInfo() const {
     DeviceInfo info;
     info.backend = "OpenGL";
 
@@ -1229,6 +1230,10 @@ void OpenGLAPI::ApplySettings(const WindowConfig& win, const RenderConfig& rende
     // 全屏由 MyGame 直接调 SetFullscreen
     SDL_GL_SetSwapInterval(win.vsync ? 1 : 0);
     m_aoStrength = render.m_aoStrength;
+}
+
+void OpenGLAPI::WaitIdle() {
+    glFinish();
 }
     
 } // namespace Eng

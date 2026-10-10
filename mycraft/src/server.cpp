@@ -42,8 +42,18 @@ bool GameServer::Start(uint16_t port) {
         });
 
         m_server.SetDisconnectCallback([this](int id) {
+            // 玩家
             m_players.erase(std::remove_if(m_players.begin(), m_players.end(),
                 [id](const ServerPlayer& p) { return p.id == (uint32_t)id; }), m_players.end());
+
+            // 该 client 的待发 chunk 请求
+            std::queue<PendingChunkRequest> keep;
+            while (!m_chunkQueue.empty()) {
+                if (m_chunkQueue.front().clientId != id) keep.push(m_chunkQueue.front());
+                m_chunkQueue.pop();
+            }
+            m_chunkQueue = std::move(keep);
+
             logInfo(m_logger, "[Server] Player " << id << " left");
         });
 

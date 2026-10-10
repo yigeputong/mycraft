@@ -24,7 +24,7 @@
 
 namespace Eng {
 
-// ★ 游戏模式：Engine 不判断"你是干什么的"，只把 mode 透传给 MyGame
+// 游戏模式：Engine 把 mode 透传给 MyGame
 enum class Mode {
     SinglePlayer,      // 单人：集成服务端（未来：内存连接）
     MultiplayerHost,   // 多人主机：本地服务端 + 允许其他玩家连接

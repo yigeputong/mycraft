@@ -135,23 +135,25 @@ namespace game {
 // OnStart 分阶段
 // ============================================================
 
-bool MyGame::SetupNetwork(Eng::Engine& engine) {
-    if (engine.NeedsLocalServer()) {
-        m_server = std::make_unique<game::server::GameServer>();
-        if (!m_server->Start(25565)) {
-            logError(logger, "[Game] Failed to start server");
-            return false;
-        }
-    }
+bool MyGame::StartLocalServer() {
+    if (m_server) return true;   // 已经在跑
 
-    if (engine.NeedsClientConnection()) {
-        if (!m_client.Connect("localhost", 25565)) {   // TODO: 支持远程地址
-            logError(logger, "[Game] Failed to connect to server");
-            return false;
-        }
-        logInfo(logger, "[Game] Connected to server");
+    m_server = std::make_unique<game::server::GameServer>();
+    if (!m_server->Start(25565)) {
+        logError(logger, "[Game] Failed to start local server");
+        m_server.reset();
+        return false;
     }
+    logInfo(logger, "[Game] Local server started on port 25565");
+    return true;
+}
 
+bool MyGame::ConnectToServer(const std::string& host, uint16_t port) {
+    if (!m_client.Connect(host, port)) {
+        logError(logger, "[Game] Failed to connect to " << host << ":" << port);
+        return false;
+    }
+    logInfo(logger, "[Game] Connected to " << host << ":" << port);
     return true;
 }
 
@@ -187,7 +189,8 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
         }
     };
 
-    Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), true);
+    Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), false);
+    m_relativeMode = false;
     return true;
 }
 
@@ -256,21 +259,25 @@ Eng::client::ShaderHandle MyGame::CreateShaderByName(const std::string& name, bo
 }
 
 void MyGame::OnStart(Eng::Engine& engine) {
-    if (!logger) {
-        logger = std::make_unique<Eng::Log>();
-    }
+    if (!logger) logger = std::make_unique<Eng::Log>();
 
-    if (!SetupNetwork(engine)) return;
-
-    if (!engine.NeedsWindow()) {
-        logInfo(logger, "[Game] Running as dedicated server (headless)");
+    // ============ Dedicated server 模式：无窗口，自动启服务端 ============
+    if (engine.IsDedicatedServer()) {
+        if (!StartLocalServer()) {
+            logError(logger, "[Game] Failed to start dedicated server");
+            m_shouldQuit = true;
+            return;
+        }
+        logInfo(logger, "[Game] Running as dedicated server");
         return;
     }
 
+    // ============ 交互模式：建窗口/渲染器，进主菜单 ============
     if (!SetupWindow(engine))   return;
     if (!SetupRenderer(engine)) return;
-
     SetupShaders();
+
+    m_state = GameState::MainMenu;
 }
 
 bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
@@ -278,27 +285,41 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         SDL_Delay(16);
         return false;
     }
+
+    if (m_returnToMenuPending) {
+        m_returnToMenuPending = false;
+        ReturnToMainMenu();
+        return false;   // 本帧不再跑游戏逻辑
+    }
+
+    const bool wantRelative = (m_state == GameState::Playing) && !m_menuOpen;
+    if (wantRelative != m_relativeMode) {
+        Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), wantRelative);
+        m_relativeMode = wantRelative;
+    }
+
+    // ---- FPS 统计（任何状态都跑，不改）----
     float frameMs = deltaTime * 1000.0f;
     m_lastFrameMs = frameMs;
-    // 累加本秒的统计
     m_fpsTimer      += deltaTime;
     m_fpsFrameCount += 1;
     m_fpsAccumMs    += frameMs;
     m_fpsPeakMs      = std::max(m_fpsPeakMs, frameMs);
-    // 每秒结算一次
     if (m_fpsTimer >= 1.0f) {
         m_fpsDisplay      = m_fpsFrameCount / m_fpsTimer;
         m_frameMsDisplay  = frameMs;
         m_frameMsAvgDisp  = m_fpsAccumMs / m_fpsFrameCount;
         m_frameMsPeakDisp = m_fpsPeakMs;
-
-        m_fpsTimer      = 0.0f;
-        m_fpsFrameCount = 0;
-        m_fpsAccumMs    = 0.0f;
-        m_fpsPeakMs     = 0.0f;
+        m_fpsTimer = 0.0f; m_fpsFrameCount = 0;
+        m_fpsAccumMs = 0.0f; m_fpsPeakMs = 0.0f;
     }
 
     m_animTime += deltaTime;
+
+    // 主菜单状态：只更新动画时间，不跑物理/网络/流式加载
+    if (m_state != GameState::Playing) {
+        return m_shouldQuit;
+    }
 
     game::PlayerMotion m;
     m.position = cameraPos;
@@ -413,6 +434,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     renderer->Clear();
 
+    if (m_state == GameState::Playing) {
         glm::vec3 eye = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
         view = glm::lookAt(eye, eye + cameraFront, cameraUp);
         projection = glm::perspective(glm::radians(engine.GetConfig().render.fov), 
@@ -442,7 +464,6 @@ void MyGame::OnRender(Eng::Engine& engine) {
         constexpr float BOUNCE_AMP  = 0.45f;
         constexpr float XZ_RATIO    = 0.8f;
 
-        // ★ 所有实体共用一个 t，不带 phase
         float t = m_animTime * BOUNCE_FREQ * 6.2831853f;
 
         float sY  = 1.0f + BOUNCE_AMP * std::sin(t);
@@ -461,6 +482,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
 
         renderer->SetUniform(m_skyShader, "uTimeOfDay", m_timeOfDay);
         renderer->DrawSkybox(m_skyShader);
+    }
 
     renderer->UnbindFramebuffer();
     
@@ -475,175 +497,307 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->EndFrame();
 }
 
+void MyGame::DrawMainMenu(Eng::Engine& engine) {
+    ImGuiIO& io = ImGui::GetIO();
+
+    // ---- 主面板 ----
+    ImGui::SetNextWindowPos(
+        ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+        ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(400, 0), ImGuiCond_Always);
+
+    if (ImGui::Begin("##MainMenu", nullptr,
+            ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoTitleBar)) {
+        ImGui::SetWindowFontScale(2.0f);
+        ImGui::TextUnformatted("Mycraft");
+        ImGui::SetWindowFontScale(1.4f);
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if (ImGui::Button("Single Player", ImVec2(-1, 50))) {
+            if (StartLocalServer() && ConnectToServer("localhost", 25565)) {
+                m_state = GameState::Playing;
+                m_statusText.clear();
+            } else {
+                m_statusText = "Failed to start local server";
+            }
+        }
+
+        if (ImGui::Button("Multiplayer", ImVec2(-1, 50))) {
+            m_showMultiplayerDialog = true;
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        if (ImGui::Button("Quit", ImVec2(-1, 40))) {
+            m_shouldQuit = true;
+        }
+
+        if (!m_statusText.empty()) {
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", m_statusText.c_str());
+        }
+    }
+    ImGui::End();
+
+    // ---- 多人连接对话框 ----
+    if (m_showMultiplayerDialog) ImGui::OpenPopup("Connect to Server");
+
+    ImGui::SetNextWindowSize(ImVec2(400, 0), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Connect to Server", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputText("Address", m_ipBuffer, sizeof(m_ipBuffer));
+        ImGui::InputInt("Port", &m_portInput);
+        ImGui::Spacing();
+
+        if (ImGui::Button("Connect", ImVec2(120, 40))) {
+            if (ConnectToServer(m_ipBuffer, (uint16_t)m_portInput)) {
+                m_state = GameState::Playing;
+                m_showMultiplayerDialog = false;
+                m_statusText.clear();
+                ImGui::CloseCurrentPopup();
+            } else {
+                m_statusText = "Connection failed";
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 40))) {
+            m_showMultiplayerDialog = false;
+            m_statusText.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
 void MyGame::DrawUI(Eng::Engine& engine) {
     renderer->ImGuiNewFrame();
     ImGui::NewFrame();
 
-    // 准心
-    if (!m_menuOpen) {
-        ImGuiIO& io = ImGui::GetIO();
-        ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-        ImDrawList* dl = ImGui::GetForegroundDrawList();   // ★ 前景层，画在所有窗口之上
+    if (m_state == GameState::MainMenu) {
+        DrawMainMenu(engine);
+    } else {    
+        // 准心
+        if (!m_menuOpen) {
+            ImGuiIO& io = ImGui::GetIO();
+            ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+            ImDrawList* dl = ImGui::GetForegroundDrawList();   // ★ 前景层，画在所有窗口之上
 
-        constexpr float LEN    = 8.0f;   // 每条臂的长度
-        constexpr float THICK  = 2.0f;   // 线宽
-        constexpr float GAP    = 2.0f;   // 中心留空
-        ImU32 color = IM_COL32(255, 255, 255, 200);
+            constexpr float LEN    = 8.0f;   // 每条臂的长度
+            constexpr float THICK  = 2.0f;   // 线宽
+            constexpr float GAP    = 2.0f;   // 中心留空
+            ImU32 color = IM_COL32(255, 255, 255, 200);
 
-        dl->AddLine(ImVec2(center.x - GAP - LEN, center.y),
-                    ImVec2(center.x - GAP,       center.y), color, THICK);
-        dl->AddLine(ImVec2(center.x + GAP,       center.y),
-                    ImVec2(center.x + GAP + LEN, center.y), color, THICK);
-        dl->AddLine(ImVec2(center.x, center.y - GAP - LEN),
-                    ImVec2(center.x, center.y - GAP),       color, THICK);
-        dl->AddLine(ImVec2(center.x, center.y + GAP),
-                    ImVec2(center.x, center.y + GAP + LEN), color, THICK);
-    }
+            dl->AddLine(ImVec2(center.x - GAP - LEN, center.y),
+                        ImVec2(center.x - GAP,       center.y), color, THICK);
+            dl->AddLine(ImVec2(center.x + GAP,       center.y),
+                        ImVec2(center.x + GAP + LEN, center.y), color, THICK);
+            dl->AddLine(ImVec2(center.x, center.y - GAP - LEN),
+                        ImVec2(center.x, center.y - GAP),       color, THICK);
+            dl->AddLine(ImVec2(center.x, center.y + GAP),
+                        ImVec2(center.x, center.y + GAP + LEN), color, THICK);
+        }
 
-    // 物品栏
-    if (!m_menuOpen) {
-        ImGuiIO& io = ImGui::GetIO();
-        constexpr float SLOT = 50.0f;
-        constexpr float GAP  = 4.0f;
-        float totalW = kHotbarSize * SLOT + (kHotbarSize - 1) * GAP;
-        float startX = (io.DisplaySize.x - totalW) * 0.5f;
-        float y      = io.DisplaySize.y - SLOT - 20.0f;
+        // 物品栏
+        if (!m_menuOpen) {
+            ImGuiIO& io = ImGui::GetIO();
+            constexpr float SLOT = 50.0f;
+            constexpr float GAP  = 4.0f;
+            float totalW = kHotbarSize * SLOT + (kHotbarSize - 1) * GAP;
+            float startX = (io.DisplaySize.x - totalW) * 0.5f;
+            float y      = io.DisplaySize.y - SLOT - 20.0f;
 
-        ImDrawList* dl = ImGui::GetForegroundDrawList();
-        for (int i = 0; i < kHotbarSize; ++i) {
-            float x = startX + i * (SLOT + GAP);
-            ImVec2 p0(x, y), p1(x + SLOT, y + SLOT);
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
+            for (int i = 0; i < kHotbarSize; ++i) {
+                float x = startX + i * (SLOT + GAP);
+                ImVec2 p0(x, y), p1(x + SLOT, y + SLOT);
 
-            ImU32 bg = (i == m_hotbarIndex) ? IM_COL32(255, 255, 255, 200)
-                                            : IM_COL32(0, 0, 0, 120);
-            dl->AddRectFilled(p0, p1, bg);
-            dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 255), 0, 0, 2.0f);
+                ImU32 bg = (i == m_hotbarIndex) ? IM_COL32(255, 255, 255, 200)
+                                                : IM_COL32(0, 0, 0, 120);
+                dl->AddRectFilled(p0, p1, bg);
+                dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 255), 0, 0, 2.0f);
 
-            const auto& slot = m_hotbar[i];
-            if (slot.isEmpty()) continue;
+                const auto& slot = m_hotbar[i];
+                if (slot.isEmpty()) continue;
 
-            // 方块名
-            dl->AddText(ImVec2(x + 4, y + SLOT - 18),
-                        IM_COL32(255, 255, 255, 255),
-                        BlockName(slot.type));
+                // 方块名
+                dl->AddText(ImVec2(x + 4, y + SLOT - 18),
+                            IM_COL32(255, 255, 255, 255),
+                            BlockName(slot.type));
 
-            // 数量（右下角）
-            if (slot.count > 1) {
-                char cnt[8];
-                std::snprintf(cnt, sizeof(cnt), "%d", slot.count);
-                dl->AddText(ImVec2(x + SLOT - 20, y + 4),
-                            IM_COL32(255, 255, 255, 255), cnt);
+                // 数量（右下角）
+                if (slot.count > 1) {
+                    char cnt[8];
+                    std::snprintf(cnt, sizeof(cnt), "%d", slot.count);
+                    dl->AddText(ImVec2(x + SLOT - 20, y + 4),
+                                IM_COL32(255, 255, 255, 255), cnt);
+                }
             }
         }
-    }
 
-    // 调试面板
-    if (m_showDebug) {
-        ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowBgAlpha(0.5f);
-        if (ImGui::Begin("Debug",  nullptr, 
-                        ImGuiWindowFlags_AlwaysAutoResize |
-                        ImGuiWindowFlags_NoNav |
-                        ImGuiWindowFlags_NoInputs |
-                        ImGuiWindowFlags_NoMove)) {
-            ImGui::SetWindowFontScale(1.5f);
-            ImGui::Text("%.0f FPS  |  Frame: %.2f ms (avg %.2f, peak %.2f)",
-                        m_fpsDisplay,
-                        m_frameMsDisplay, m_frameMsAvgDisp, m_frameMsPeakDisp);
-            ImGui::Text("Server tick: %.2f ms (avg %.2f, peak %.2f)",
-                        m_serverTickMs, m_serverTickAvg, m_serverTickMax);
-            ImGui::Text("Pos: %.2f, %.2f, %.2f", cameraPos.x, cameraPos.y, cameraPos.z);
-            ImGui::Text("Yaw/Pitch: %.1f / %.1f", yaw, pitch);
-            ImGui::Separator();
-            ImGui::Text("Chunks loaded: %zu", m_chunks.size());
-            ImGui::Text("Chunks: %zu | pending: %zu", m_chunks.size(), m_pending.size());
-            ImGui::Text("Render R: %d", m_renderDistance);
-            ImGui::Text("Player ID: %d", m_myClientId);
-            int hh = (int)m_timeOfDay;
-            int mm = (int)((m_timeOfDay - hh) * 60);
-            ImGui::Text("Time: %02d:%02d", hh, mm);
-            ImGui::Separator();
-            ImGui::Text("Backend: %s", m_deviceInfo.backend.c_str());
-            ImGui::Text("GPU: %s", m_deviceInfo.deviceName.c_str());
-            ImGui::Text("Vendor: %s", m_deviceInfo.vendor.c_str());
-            ImGui::Text("API: %s", m_deviceInfo.apiVersion.c_str());
-            ImGui::Text("Driver: %s", m_deviceInfo.driverVersion.c_str());
-            ImGui::Text("Shader lang: %s", m_deviceInfo.shadingLanguage.c_str());
+        // 调试面板
+        if (m_showDebug) {
+            ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowBgAlpha(0.5f);
+            if (ImGui::Begin("Debug",  nullptr, 
+                            ImGuiWindowFlags_AlwaysAutoResize |
+                            ImGuiWindowFlags_NoNav |
+                            ImGuiWindowFlags_NoInputs |
+                            ImGuiWindowFlags_NoMove)) {
+                ImGui::SetWindowFontScale(1.5f);
+                ImGui::Text("%.0f FPS  |  Frame: %.2f ms (avg %.2f, peak %.2f)",
+                            m_fpsDisplay,
+                            m_frameMsDisplay, m_frameMsAvgDisp, m_frameMsPeakDisp);
+                ImGui::Text("Server tick: %.2f ms (avg %.2f, peak %.2f)",
+                            m_serverTickMs, m_serverTickAvg, m_serverTickMax);
+                ImGui::Text("Pos: %.2f, %.2f, %.2f", cameraPos.x, cameraPos.y, cameraPos.z);
+                ImGui::Text("Yaw/Pitch: %.1f / %.1f", yaw, pitch);
+                ImGui::Separator();
+                ImGui::Text("Chunks loaded: %zu", m_chunks.size());
+                ImGui::Text("Chunks: %zu | pending: %zu", m_chunks.size(), m_pending.size());
+                ImGui::Text("Render R: %d", m_renderDistance);
+                ImGui::Text("Player ID: %d", m_myClientId);
+                int hh = (int)m_timeOfDay;
+                int mm = (int)((m_timeOfDay - hh) * 60);
+                ImGui::Text("Time: %02d:%02d", hh, mm);
+                ImGui::Separator();
+                ImGui::Text("Backend: %s", m_deviceInfo.backend.c_str());
+                ImGui::Text("GPU: %s", m_deviceInfo.deviceName.c_str());
+                ImGui::Text("Vendor: %s", m_deviceInfo.vendor.c_str());
+                ImGui::Text("API: %s", m_deviceInfo.apiVersion.c_str());
+                ImGui::Text("Driver: %s", m_deviceInfo.driverVersion.c_str());
+                ImGui::Text("Shader lang: %s", m_deviceInfo.shadingLanguage.c_str());
+            }
+            ImGui::End();
         }
-        ImGui::End();
-    }
 
-    // ============ 主菜单 ============
-    if (m_menuOpen) {
-        ImGuiIO& io2 = ImGui::GetIO();
-        ImGui::SetNextWindowPos(
-            ImVec2(io2.DisplaySize.x * 0.5f, io2.DisplaySize.y * 0.5f),
-            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));   // 居中，只第一次
-        ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_Always);
+        // ============ 主菜单 ============
+        if (m_menuOpen) {
+            ImGuiIO& io2 = ImGui::GetIO();
+            ImGui::SetNextWindowPos(
+                ImVec2(io2.DisplaySize.x * 0.5f, io2.DisplaySize.y * 0.5f),
+                ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));   // 居中，只第一次
+            ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_Always);
 
-        if (ImGui::Begin("Menu", nullptr,
-                ImGuiWindowFlags_NoCollapse |
-                ImGuiWindowFlags_NoResize |
-                ImGuiWindowFlags_NoMove)) {
-            ImGui::SetWindowFontScale(1.5f);
+            if (ImGui::Begin("Menu", nullptr,
+                    ImGuiWindowFlags_NoCollapse |
+                    ImGuiWindowFlags_NoResize |
+                    ImGuiWindowFlags_NoMove)) {
+                ImGui::SetWindowFontScale(1.5f);
 
-            if (ImGui::Button("Resume", ImVec2(-1, 44))) {
-                m_menuOpen = false;
+                if (ImGui::Button("Resume", ImVec2(-1, 44))) {
+                    m_menuOpen = false;
+                }
+
+                ImGui::Separator();
+
+                // ---- 窗口 ----
+                auto& wcfg = mainWin->GetConfigs();
+                if (ImGui::Checkbox("VSync", &wcfg.vsync)) {
+                    m_applyPending = true;
+                }
+
+                bool fs = wcfg.fullscreen;
+                if (ImGui::Checkbox("Fullscreen", &fs)) {
+                    wcfg.fullscreen = fs;
+                    mainWin->SetFullscreen(fs);
+                    fbo = renderer->CreateFramebuffer(
+                        mainWin->GetConfigs().windowPixelWidth,
+                        mainWin->GetConfigs().windowPixelHeight);
+                }
+
+                bool ao = engine.GetConfig().render.m_aoStrength > 0.5f;
+                if (ImGui::Checkbox("AO", &ao)) {
+                    engine.GetConfig().render.m_aoStrength = ao ? 1.0f : 0.0f;
+                }
+
+                // ---- 相机 ----
+                ImGui::SliderFloat("FOV", &engine.GetConfig().render.fov, 30.0f, 120.0f, "%.0f");
+
+                ImGui::Separator();
+
+                if (ImGui::Button("Apply", ImVec2(-1, 36))) {
+                    m_applyPending = true;
+                }
+                if (ImGui::Button("Quit", ImVec2(-1, 44))) {
+                    m_returnToMenuPending = true;
+                }
             }
-
-            ImGui::Separator();
-
-            // ---- 窗口 ----
-            auto& wcfg = mainWin->GetConfigs();
-            if (ImGui::Checkbox("VSync", &wcfg.vsync)) {
-                m_applyPending = true;
-            }
-
-            bool fs = wcfg.fullscreen;
-            if (ImGui::Checkbox("Fullscreen", &fs)) {
-                wcfg.fullscreen = fs;
-                mainWin->SetFullscreen(fs);
-                fbo = renderer->CreateFramebuffer(
-                    mainWin->GetConfigs().windowPixelWidth,
-                    mainWin->GetConfigs().windowPixelHeight);
-            }
-
-            bool ao = engine.GetConfig().render.m_aoStrength > 0.5f;
-            if (ImGui::Checkbox("AO", &ao)) {
-                engine.GetConfig().render.m_aoStrength = ao ? 1.0f : 0.0f;
-            }
-
-            // ---- 相机 ----
-            ImGui::SliderFloat("FOV", &engine.GetConfig().render.fov, 30.0f, 120.0f, "%.0f");
-
-            ImGui::Separator();
-
-            if (ImGui::Button("Apply", ImVec2(-1, 36))) {
-                m_applyPending = true;
-            }
-            if (ImGui::Button("Quit", ImVec2(-1, 44))) {
-                m_shouldQuit = true;
-            }
+            ImGui::End();
         }
-        ImGui::End();
     }
 }
 
-void MyGame::OnShutdown(Eng::Engine&) {
+void MyGame::ReturnToMainMenu() {
+    // 0. 等 GPU 不再引用要销毁的资源
+    if (renderer) renderer->WaitIdle();
+    
+    // 1. 断网
+    m_client.Disconnect();
+
+    // 2. 停本地服务器（join 线程 + 释放）
+    if (m_server) {
+        m_server->Stop();
+        m_server.reset();
+    }
+
+    // 3. 销毁客户端 GPU 资源
+    if (renderer) {
+        for (auto& [key, cc] : m_chunks) {
+            if (cc.mesh) renderer->DestroyMesh(cc.mesh);
+        }
+        for (auto& [type, mesh] : m_itemMeshCache) {
+            if (mesh) renderer->DestroyMesh(mesh);
+        }
+    }
+    m_chunks.clear();
+    m_itemMeshCache.clear();
+    m_pending.clear();
+    while (!m_meshQueue.empty()) m_meshQueue.pop();
+    m_itemEntities.clear();
+    m_otherPlayers.clear();
+    m_myClientId = 0;
+
+    // 4. 重置玩家 / 相机
+    cameraPos   = glm::vec3(0.0f, 40.0f, 0.0f);
+    cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
+    yaw   = -90.0f;
+    pitch = 0.0f;
+    m_playerVelocity   = glm::vec3(0.0f);
+    m_positionError    = glm::vec3(0.0f);
+    m_lastPlayerChunkX = INT_MIN;
+    m_lastPlayerChunkZ = INT_MIN;
+
+    // 5. 关暂停菜单，切回主菜单（OnUpdate 会自动放开相对模式）
+    m_menuOpen = false;
+    m_state    = GameState::MainMenu;
+    m_statusText.clear();
+
+    logInfo(logger, "[Game] Returned to main menu");
+}
+
+void MyGame::OnShutdown(Eng::Engine& engine) {
+    // 网络
     m_client.Disconnect();
     if (m_server) {
         m_server->Stop();
         m_server.reset();
     }
 
-    renderer->DestroyShader(m_cubeShader);
-    // renderer->DestroyTexture(m_cubeTexture);
-    renderer->DestroyShader(m_skyShader);
+    // 渲染器资源
+    if (renderer) {
+        if (m_cubeShader) renderer->DestroyShader(m_cubeShader);
+        if (m_skyShader)  renderer->DestroyShader(m_skyShader);
+        renderer->ShutdownImGuiBackend();
+    }
 
-    // ★ 统一走后端接口
-    renderer->ShutdownImGuiBackend();
-
-    winMgr->DestroyWindow(m_win);
+    // 窗口
+    if (winMgr && m_win) {
+        winMgr->DestroyWindow(m_win);
+    }
 }
 
 bool MyGame::GetInput(float dt) {
@@ -654,7 +808,6 @@ bool MyGame::GetInput(float dt) {
         m_menuOpen = !m_menuOpen;
     }
     if (m_menuOpen) { // 菜单打开时冻结游戏输入
-        Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), false);
         return m_shouldQuit;
     }
 
@@ -686,12 +839,9 @@ bool MyGame::GetInput(float dt) {
     glm::vec2 mouseDelta = Input::GetMouseDelta();
     ImGuiIO& io = ImGui::GetIO();
     if (!io.WantCaptureMouse) {
-        Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), true);
         yaw   += mouseDelta.x * 0.1f;
         pitch -= mouseDelta.y * 0.1f;
         pitch = glm::clamp(pitch, -89.0f, 89.0f);
-    } else {
-        Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), false);
     }
     // 鼠标键盘输入
     glm::vec3 mousefront;

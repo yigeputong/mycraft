@@ -4,6 +4,7 @@
 #include "Protocol.h"
 #include "core/NetworkChannel.h"
 #include "game/GameServer.h"
+#include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
 #include <queue>
@@ -24,7 +25,8 @@ private:
     bool                       m_useVulkan = false;
 
     // OnStart 拆分
-    bool SetupNetwork(Eng::Engine& engine);
+    bool StartLocalServer();
+    bool ConnectToServer(const std::string& host, uint16_t port);
     bool SetupWindow(Eng::Engine& engine);
     bool SetupRenderer(Eng::Engine& engine);
     void SetupShaders();
@@ -45,6 +47,19 @@ private:
     Eng::client::ShaderHandle   m_skyShader;
 
     Eng::client::DeviceInfo     m_deviceInfo;
+
+        enum class GameState : std::uint8_t {
+        MainMenu,
+        Connecting,
+        Playing,
+    };
+    GameState m_state = GameState::MainMenu;
+
+    // ---- 主菜单状态 ----
+    bool m_showMultiplayerDialog = false;
+    char m_ipBuffer[128]  = "localhost";
+    int  m_portInput      = 25565;
+    std::string m_statusText;        // 连接中 / 失败提示
 
     // ==================== 网络 ====================
     Eng::NetworkChannel  m_client;
@@ -127,6 +142,8 @@ private:
     bool m_showDebug = true;
 #endif
     bool m_applyPending = false;
+    bool m_returnToMenuPending = false;
+    bool m_relativeMode = true;   // 当前输入模式（true = 捕获鼠标）
 
     // ==================== 指标 ====================
     float m_lastFrameMs = 0.0f;
@@ -161,7 +178,9 @@ private:
     std::unique_ptr<Eng::Log> logger = std::make_unique<Eng::Log>();
 
     // 方法
+    void DrawMainMenu(Eng::Engine& engine);
     void DrawUI(Eng::Engine& engine);
+    void ReturnToMainMenu();
 
     bool keyEvents(const SDL_Event& event);
     bool resizeEvents(const SDL_Event& event);

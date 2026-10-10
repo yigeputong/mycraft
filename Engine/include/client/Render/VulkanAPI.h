@@ -88,8 +88,9 @@ public:
     void ImGuiNewFrame() override;
     void ImGuiRenderDrawData() override;
 
-    DeviceInfo GetDeviceInfo() const override;
+    [[nodiscard]] DeviceInfo GetDeviceInfo() const override;
     void ApplySettings(const WindowConfig& win, const RenderConfig& render) override;
+    void WaitIdle() override;
     void logValidation(VkDebugUtilsMessageSeverityFlagBitsEXT severity, const char* message);
 
 private:
