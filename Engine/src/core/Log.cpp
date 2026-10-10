@@ -26,7 +26,7 @@ enum class Color { Reset, Red, Yellow, Blue, Gray };
 
 static const char* ColorCode(LogLevel lv) {
     switch (lv) {
-        case LogLevel::FATAL:   return "\033[31m";   // 红
+        case LogLevel::FATAL:
         case LogLevel::ERROR:   return "\033[31m";   // 红
         case LogLevel::WARNING: return "\033[33m";   // 黄
         case LogLevel::INFO:    return "\033[90m";   // 灰
@@ -39,7 +39,7 @@ constexpr const char* kReset = "\033[0m";
 Log::Log(bool console) {
     m_consoleOutput = console;
 }
-Log::Log(std::string filepath, bool console) {
+Log::Log(const std::string& filepath, bool console) {
     m_consoleOutput = console;
     std::lock_guard<std::mutex> lock(m_mutex);
     std::filesystem::create_directories("./logs/");
@@ -48,19 +48,27 @@ Log::Log(std::string filepath, bool console) {
     }
     m_file.open("./logs/" + filepath, std::ios::out | std::ios::app);
     if (!m_file.is_open()) {
-        std::cerr << "Failed to open log file: " << filepath << std::endl;
+        std::cerr << "Failed to open log file: " << filepath << '\n';
     }
 }
 Log::~Log() {
-    if (m_file.is_open()) {
-        m_file.close();
+    try {
+        if (m_file.is_open()) {
+            m_file.close();
+        }
+    }
+    catch (const std::exception& e) {
+        std::fprintf(stderr, "[Log] ~Log threw: %s\n", e.what());
+    }
+    catch (...) {
+        std::fputs("[Log] ~Log threw unknown\n", stderr);
     }
 }
 
 void Log::SetConsoleOutput(bool enable) {
     m_consoleOutput = enable;
 }
-void Log::SetFileOutput(const std::string filepath) {
+void Log::SetFileOutput(const std::string& filepath) {
     std::lock_guard<std::mutex> lock(m_mutex);
     std::filesystem::create_directories("./logs/");
     if (m_file.is_open()) {
@@ -68,7 +76,7 @@ void Log::SetFileOutput(const std::string filepath) {
     }
     m_file.open("./logs/" + filepath, std::ios::out | std::ios::app);
     if (!m_file.is_open()) {
-        std::cerr << "Failed to open log file: " << filepath << std::endl;
+        std::cerr << "Failed to open log file: " << filepath << '\n';
     }
 }
 void Log::SetMinLevel(LogLevel level) {
@@ -84,41 +92,14 @@ bool Log::isEnabled(LogLevel level) const {
 }
 
 void Log::log(LogLevel level, std::string message) {
-    switch (level) {
-#ifdef _DEBUG
-    case LogLevel::DEBUG:
-        if (level >= m_minLevel) {
-            out(level, message);
-        }
-        break;
-#endif
-    case LogLevel::INFO:
-        if (level >= m_minLevel) {
-            out(level, message);
-        }
-        break;
-    case LogLevel::WARNING:
-        if (level >= m_minLevel) {
-            out(level, message);
-        }
-        break;
-    case LogLevel::ERROR:
-        if (level >= m_minLevel) {
-            out(level, message);
-        }
-        break;
-    case LogLevel::FATAL:
-        if (level >= m_minLevel) {
-            out(level, message);
-        }
-        break;
-    }
+    if (level < m_minLevel) return;
+    out(level, message);
 }
 
 void Log::out(LogLevel level, std::string& message) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_file.is_open()) {
-        m_file << "[" << GetTime() << " " << LevelToString(level) << "]: " << message << std::endl;
+        m_file << "[" << GetTime() << " " << LevelToString(level) << "]: " << message << '\n';
     }
     if (m_consoleOutput) {
         std::print("{}{} {}]: {}{}\n",

@@ -193,13 +193,12 @@ void GameServer::TickWorld(float dt) {
 }
 
 void GameServer::SpawnItemDrop(const glm::vec3& pos, BlockType type) {
+    static thread_local std::mt19937 s_rng(std::random_device{}());
+    static thread_local std::uniform_real_distribution<float> s_dist(-1.0f, 1.0f);
     ItemEntity e;
     e.id       = AllocEntityId();
     e.position = pos;
-    e.velocity = glm::vec3(
-        ((rand() % 100) / 100.0f - 0.5f) * 2.0f,
-        2.5f,
-        ((rand() % 100) / 100.0f - 0.5f) * 2.0f);
+    e.velocity = glm::vec3(s_dist(s_rng) * 2.0f, 2.5f, s_dist(s_rng) * 2.0f);
     e.pickupDelay = 0.5f;
     e.itemType    = type;
 

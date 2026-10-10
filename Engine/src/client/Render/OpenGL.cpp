@@ -29,7 +29,13 @@ namespace Eng::client {
 OpenGLAPI::OpenGLAPI() = default;
 
 OpenGLAPI::~OpenGLAPI() {
-    Shutdown();
+    try { Shutdown(); }
+    catch (const std::exception& e) {
+        std::fprintf(stderr, "[OpenGLAPI] Shutdown threw: %s\n", e.what());
+    }
+    catch (...) {
+        std::fputs("[OpenGLAPI] Shutdown threw unknown\n", stderr);
+    }
 }
 
 // ---------- 初始化 ----------

@@ -17,11 +17,11 @@ enum class LogLevel {
 class Log {
 public:
     Log(bool console = true);
-    Log(std::string filepath, bool console = true);
+    Log(const std::string& filepath, bool console = true);
     ~Log();
 
     void SetConsoleOutput(bool enable);
-    void SetFileOutput(const std::string filepath);
+    void SetFileOutput(const std::string& filepath);
     void SetMinLevel(LogLevel level);
     bool isEnabled(LogLevel level) const ;
 

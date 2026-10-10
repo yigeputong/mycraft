@@ -21,11 +21,12 @@ bool NetworkServer::PollAccept() {
 
     Client client;
     client.id = m_nextClientId++;
+    const int id = client.id;
     client.channel = NetworkChannel::FromAccepted(socket);
     m_clients.push_back(std::move(client));
 
-    logInfo(m_logger, "[NetworkServer] Client " << client.id << " connected");
-    if (m_connectCb) m_connectCb(client.id);
+    logInfo(m_logger, "[NetworkServer] Client " << id << " connected");
+    if (m_connectCb) m_connectCb(id);
     return true;
 }
 

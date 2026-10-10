@@ -143,6 +143,8 @@ void Input::ProcessEvent(const SDL_Event& event) {
         case SDL_EVENT_MOUSE_WHEEL:
             m_scrollDelta += event.wheel.y; // 累加（向上滚为正，向下为负）
             break;
+        default:
+            break;
     }
 }
 

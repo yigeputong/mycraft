@@ -99,7 +99,7 @@ bool Window::CreateOpenGLWindow() {
     SDL_GL_SetSwapInterval(m_config.vsync ? 1 : 0);
 
     if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
-        std::cout << "Failed to initalize GLAD." << std::endl;
+        std::cout << "Failed to initalize GLAD." << '\n';
         return false;
     }
 

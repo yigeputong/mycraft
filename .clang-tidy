@@ -10,61 +10,39 @@ Checks: >
   -bugprone-easily-swappable-parameters,
   -bugprone-narrowing-conversions,
   -bugprone-macro-parentheses,
+  -bugprone-reserved-identifier,
   -modernize-use-trailing-return-type,
   -modernize-avoid-c-arrays,
-  -misc-non-private-member-variables-in-classes,
-  -misc-no-recursion,
-  -performance-no-int-to-ptr,
-  -portability-avoid-pragma-once,
-  -performance-enum-size,
   -modernize-use-nodiscard,
-  -misc-include-cleaner,
-  -misc-const-correctness,
-  -misc-use-anonymous-namespace,
-  -misc-use-internal-linkage,
-  -misc-confusable-identifiers,
-  -misc-use-scoped-lock,
   -modernize-use-designated-initializers,
   -modernize-use-auto,
   -modernize-use-ranges,
   -modernize-macro-to-enum,
   -modernize-return-braced-init-list,
-  -bugprone-reserved-identifier,
+  -performance-no-int-to-ptr,
   -performance-enum-size,
   -portability-avoid-pragma-once,
+  -misc-non-private-member-variables-in-classes,
+  -misc-no-recursion,
+  -misc-use-anonymous-namespace,
+  -misc-use-internal-linkage,
+  -misc-include-cleaner,
+  -misc-const-correctness,
+  -misc-confusable-identifiers,
+  -misc-use-scoped-lock,
+  -bugprone-invalid-enum-default-initialization,
+  -modernize-avoid-c-style-cast,
+  -modernize-use-integer-sign-comparison,
+  -modernize-use-scoped-lock,
+  -modernize-use-std-print,
+  -modernize-pass-by-value,
+  -modernize-use-starts-ends-with,
+
+CheckOptions:
+  - key: performance-unnecessary-value-param.AllowedTypes
+    value: ''
 
 WarningsAsErrors: ''
 HeaderFilterRegex: '(Engine|mycraft)/(include|src)/.*'
-
-# ---- 命名检查（先不启用，值已配好，将来开时取消注释）----
-# CheckOptions:
-#   - key: readability-identifier-naming.ClassCase
-#     value: CamelCase
-#   - key: readability-identifier-naming.StructCase
-#     value: CamelCase
-#   - key: readability-identifier-naming.StructMemberCase
-#     value: camelBack
-#   - key: readability-identifier-naming.EnumCase
-#     value: CamelCase
-#   - key: readability-identifier-naming.EnumConstantCase
-#     value: UPPER_CASE
-#   - key: readability-identifier-naming.FunctionCase
-#     value: CamelCase
-#   - key: readability-identifier-naming.NamespaceCase
-#     value: CamelCase
-#   - key: readability-identifier-naming.PrivateMemberPrefix
-#     value: 'm_'
-#   - key: readability-identifier-naming.PrivateMemberCase
-#     value: CamelCase
-#   - key: readability-identifier-naming.PublicMemberCase
-#     value: camelBack
-#   - key: readability-identifier-naming.LocalVariableCase
-#     value: camelBack
-#   - key: readability-identifier-naming.ParameterCase
-#     value: camelBack
-#   - key: readability-identifier-naming.ConstexprVariableCase
-#     value: CamelCase
-#   - key: readability-identifier-naming.ConstexprVariablePrefix
-#     value: 'k'
-#   - key: readability-identifier-naming.GlobalConstantCase
-#     value: UPPER_CASE
+ExcludeHeaderFilterRegex: 'imgui|vcpkg_installed|vk_mem_alloc|volk|glad|SDL|glm|vulkan|assimp|stb'
+FormatStyle: file

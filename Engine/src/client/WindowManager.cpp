@@ -8,9 +8,17 @@
 namespace Eng::client {
 
 WindowManager::~WindowManager() {
-    m_windowIds.clear();
-    auto windows = std::move(m_windows);
-    windows.clear();  // 此时 m_windows 已为空
+    try {
+        m_windowIds.clear();
+        auto windows = std::move(m_windows);
+        windows.clear();  // 此时 m_windows 已为空
+    }
+    catch (const std::exception& e) {
+        std::fprintf(stderr, "[WindowManager] Shutdown threw: %s\n", e.what());
+    }
+    catch (...) {
+        std::fputs("[WindowManager] Shutdown threw unknown\n", stderr);
+    }
 }
 
 uint32_t WindowManager::CreateWindow(const WindowConfig& config) {
@@ -99,6 +107,8 @@ void WindowManager::DispatchEvent(const SDL_Event& event) {
                         if (window->onFocusChanged) {
                             window->onFocusChanged(false);
                         }
+                        break;
+                    default:
                         break;
                 }
                 break;
