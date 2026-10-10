@@ -1,12 +1,15 @@
 #pragma once
 
 #include "core/Configs.h"
+#include "core/Error.h"
 
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+
 #include <string>
+#include <expected>
 
 struct aiTexture;
 
@@ -100,7 +103,7 @@ public:
     virtual ~IRenderAPI() = default;
 
     // 初始化与销毁
-    virtual bool Initialize(int width, int height, Window* window) = 0;
+    virtual void Initialize(int width, int height, Window* window) = 0;
     virtual void Shutdown() = 0;
 
     // 视口与清屏

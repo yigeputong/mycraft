@@ -33,8 +33,8 @@ OpenGLAPI::~OpenGLAPI() {
 }
 
 // ---------- 初始化 ----------
-bool OpenGLAPI::Initialize(int width, int height, Window* window) {
-    if (m_initialized) return true;
+void OpenGLAPI::Initialize(int width, int height, Window* window) {
+    if (m_initialized) return;;
     m_window = window;
 
     // 启用深度测试
@@ -70,8 +70,6 @@ bool OpenGLAPI::Initialize(int width, int height, Window* window) {
     glBindBufferBase(GL_UNIFORM_BUFFER, 1, m_materialUBO);
 
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
-
-    return true;
 }
 
 void OpenGLAPI::Shutdown() {

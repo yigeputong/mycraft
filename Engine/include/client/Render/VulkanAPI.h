@@ -25,7 +25,7 @@ public:
     ~VulkanAPI() override;
 
     // ---- 生命周期 ----
-    bool Initialize(int width, int height, Window* window) override;
+   void Initialize(int width, int height, Window* window) override;
     void Shutdown() override;
 
     // ---- 帧循环 ----

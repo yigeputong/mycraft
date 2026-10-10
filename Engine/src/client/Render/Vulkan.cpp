@@ -55,31 +55,25 @@ vk::raii::ShaderModule VulkanAPI::createShaderModule(const std::vector<char>& co
 // ============================================================
 // Initialize
 // ============================================================
-bool VulkanAPI::Initialize(int width, int height, Window* window) {
+void VulkanAPI::Initialize(int width, int height, Window* window) {
     m_window = window;
 
-    try {
-        createInstance();
-        setupDebugMessenger();
-        createSurface();
-        pickPhysicalDevice();
-        createLogicalDevice();
-        createVmaAllocator();
-        createCommandPool();
-        createSwapChain();
-        createImageViews();
-        createDepthResources();
-        createDescriptorPool();
-        createGlobalDescriptors();
-        createFullscreenPipeline();
-        createSkyboxMesh();
-        createCommandBuffers();
-        createSyncObjects();
-    } catch (const std::exception& e) {
-        logFatal(m_logger, "[Vulkan] Initialize failed: " << e.what());
-        return false;
-    }
-    return true;
+    createInstance();
+    setupDebugMessenger();
+    createSurface();
+    pickPhysicalDevice();
+    createLogicalDevice();
+    createVmaAllocator();
+    createCommandPool();
+    createSwapChain();
+    createImageViews();
+    createDepthResources();
+    createDescriptorPool();
+    createGlobalDescriptors();
+    createFullscreenPipeline();
+    createSkyboxMesh();
+    createCommandBuffers();
+    createSyncObjects();
 }
 
 // ============================================================
@@ -277,7 +271,7 @@ void VulkanAPI::createLogicalDevice() {
     VkResult res = vkCreateDevice(*m_physicalDevice, &cDci, nullptr, &rawDevice);
     if (res != VK_SUCCESS) {
         logError(m_logger, "[Vulkan] vkCreateDevice failed: " << (int)res);
-        throw std::runtime_error("vkCreateDevice failed");
+        throw std::runtime_error(std::format("vkCreateDevice failed: result={}", (int)res));
     }
 
     // raii 接管 raw handle
@@ -397,7 +391,7 @@ void VulkanAPI::createFullscreenPipeline() {
                                               &gpciC, nullptr, &rawPipeline);
     if (res != VK_SUCCESS) {
         logError(m_logger, "[Vulkan] vkCreateGraphicsPipelines(fullscreen) failed: " << (int)res);
-        throw std::runtime_error("vkCreateGraphicsPipelines(fullscreen) failed");
+        throw std::runtime_error(std::format("vkCreateGraphicsPipelines(fullscreen) failed: result={}", (int)res));
     }
     m_fullscreenPipeline = vk::raii::Pipeline(m_device, rawPipeline);
 }
@@ -1203,7 +1197,7 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath,
                                               &gpciC, nullptr, &rawPipeline);
     if (res != VK_SUCCESS) {
         logError(m_logger, "[Vulkan] vkCreateGraphicsPipelines failed: " << (int)res);
-        throw std::runtime_error("vkCreateGraphicsPipelines failed");
+        throw std::runtime_error(std::format("vkCreateGraphicsPipelines failed: result={}", (int)res));
     }
 
     si.pipeline = vk::raii::Pipeline(m_device, rawPipeline);

@@ -196,9 +196,14 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
         return false;
     }
 
-    renderer->Initialize(mainWin->GetConfigs().windowWidth,
-                         mainWin->GetConfigs().windowHeight,
-                         mainWin);
+    try {
+        renderer->Initialize(mainWin->GetConfigs().windowWidth,
+                            mainWin->GetConfigs().windowHeight,
+                            mainWin);
+    } catch (const std::exception& e) {
+        logFatal(logger, "[RenderAPI] RenderAPI init failed: " << e.what());
+        return false;
+    }
 
     // 从 renderer 反推用哪个后端 —— 不依赖 OnStart 里硬编码的 m_apiType
     m_deviceInfo = renderer->GetDeviceInfo();

@@ -16,7 +16,7 @@ public:
     ~OpenGLAPI() override;
 
     // 初始化与销毁
-    bool Initialize(int width, int height, Window* window) override;
+    void Initialize(int width, int height, Window* window) override;
     void Shutdown() override;
 
     // 视口与清屏
