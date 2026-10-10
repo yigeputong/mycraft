@@ -746,7 +746,10 @@ void VulkanAPI::SetClearColor(float r, float g, float b, float a) {
     m_clearColor[0] = r; m_clearColor[1] = g; m_clearColor[2] = b; m_clearColor[3] = a;
 }
 
-void VulkanAPI::Clear() { m_clearPending = true; }
+void VulkanAPI::Clear() {
+    m_clearPending = true;
+    ensureRenderPassActive();
+}
 
 void VulkanAPI::SetViewMatrix(const glm::mat4& v)   { m_globalUBOData.view = v; }
 void VulkanAPI::SetProjectionMatrix(const glm::mat4& p) {
@@ -809,7 +812,11 @@ void VulkanAPI::ensureRenderPassActive() {
 
     if (toFBO) {
         auto fit = m_framebuffers.find(m_pendingFramebuffer.handle);
-        if (fit == m_framebuffers.end()) return;
+        if (fit == m_framebuffers.end()) {
+            logError(m_logger, "[Vulkan] ensureRenderPassActive: framebuffer handle "
+                    << m_pendingFramebuffer.handle << " not found");
+            return;
+        }
 
         colorView = *fit->second.colorView;
         depthView = *fit->second.depthView;
@@ -1679,7 +1686,8 @@ Framebuffer VulkanAPI::CreateFramebuffer(int width, int height) {
     fb.width  = width;
     fb.height = height;
 
-    logDebug(m_logger, "[RenderAPI] Framebuffer created: " << width << "x" << height);
+    logDebug(m_logger, "[RenderAPI] Framebuffer created: " << width << "x" << height
+         << " handle=" << fh);
 
     return fb;
 }
@@ -1697,24 +1705,23 @@ void VulkanAPI::UnbindFramebuffer() {
     if (m_renderPassActive) {
         m_commandBuffers[m_frameIndex].endRendering();
         m_renderPassActive = false;
-    }
 
-    // ★ FBO color: ColorAttachment → ShaderReadOnly（供后处理采样）
-    if (m_pendingFramebuffer.handle) {
-        auto fit = m_framebuffers.find(m_pendingFramebuffer.handle);
-        if (fit != m_framebuffers.end()) {
-            transition_image_layout(m_commandBuffers[m_frameIndex],
-                fit->second.colorImage,
-                vk::ImageLayout::eColorAttachmentOptimal,
-                vk::ImageLayout::eShaderReadOnlyOptimal,
-                vk::AccessFlagBits2::eColorAttachmentWrite,
-                vk::AccessFlagBits2::eShaderRead,
-                vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                vk::PipelineStageFlagBits2::eFragmentShader,
-                vk::ImageAspectFlagBits::eColor);
+        // 只有真的进过 render pass，image 才处于 ColorAttachment
+        if (m_pendingFramebuffer.handle) {
+            auto fit = m_framebuffers.find(m_pendingFramebuffer.handle);
+            if (fit != m_framebuffers.end()) {
+                transition_image_layout(m_commandBuffers[m_frameIndex],
+                    fit->second.colorImage,
+                    vk::ImageLayout::eColorAttachmentOptimal,
+                    vk::ImageLayout::eShaderReadOnlyOptimal,
+                    vk::AccessFlagBits2::eColorAttachmentWrite,
+                    vk::AccessFlagBits2::eShaderRead,
+                    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                    vk::PipelineStageFlagBits2::eFragmentShader,
+                    vk::ImageAspectFlagBits::eColor);
+            }
         }
     }
-
     m_pendingFramebuffer = {};
 }
 
