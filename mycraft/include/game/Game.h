@@ -94,10 +94,17 @@ private:
     }};
 
     // ==================== 实体 ====================
-    struct ClientItemEntity {
-        uint32_t  id;
-        glm::vec3 pos;
-        BlockType type;
+    struct ClientItemEntity : game::PointEntity {
+        uint32_t  id          = 0;
+        BlockType itemType    = BlockType::Air;
+        glm::vec3 renderPos{0.0f};   // ★ 渲染用（插值后）
+        glm::vec3 prevPos  {0.0f};   // ★ 插值起点
+        glm::vec3 targetPos{0.0f};   // ★ 插值终点
+        float     interpT = 1.0f;    // 0→1，1 表示已到达
+        // 捡拾动画
+        bool      pickingUp   = false;
+        float     pickupT     = 0.0f;
+        glm::vec3 pickupStart{0.0f};
     };
     std::unordered_map<uint32_t, ClientItemEntity> m_itemEntities;
     std::unordered_map<BlockType, Eng::client::MeshHandle> m_itemMeshCache;

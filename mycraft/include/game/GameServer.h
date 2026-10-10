@@ -5,6 +5,7 @@
 #include "game/server/WorldGenerator.h"
 #include "game/Protocol.h"
 #include "game/core/Entity.h"
+#include "game/core/Physics.h"
 #include <memory>
 #include <thread>
 #include <atomic>
@@ -54,16 +55,24 @@ private:
 
     // ==================== 实体 ====================
 
-    struct ItemEntity {
-        uint32_t  id;
-        glm::vec3 pos;
-        glm::vec3 vel;
-        float     pickupDelay = 0.5f;   // 秒，落地后 0.5s 才能捡
-        float     age         = 0.0f;   // 秒
-        BlockType itemType;
+    struct ItemEntity : game::PointEntity {   // ★ 继承：拿到 position / velocity
+        uint32_t  id          = 0;
+        float     pickupDelay = 0.5f;
+        float     age         = 0.0f;
+        BlockType itemType    = BlockType::Air;
     };
     std::unordered_map<uint32_t, ItemEntity> m_entities;
     uint32_t m_nextEntityId = 1;
+    std::vector<uint32_t> m_freeEntityIds;   // ★ 回收池
+
+    uint32_t AllocEntityId() {
+        if (!m_freeEntityIds.empty()) {
+            uint32_t id = m_freeEntityIds.back();
+            m_freeEntityIds.pop_back();
+            return id;
+        }
+        return m_nextEntityId++;
+    }
 
     void SpawnItemDrop(const glm::vec3& pos, BlockType type);
     void TickEntities(float dt);

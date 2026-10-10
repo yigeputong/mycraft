@@ -293,23 +293,18 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
 
     m_animTime += deltaTime;
 
-    if (m_flyMode) {
-        cameraPos += m_lastMoveDir * 15.0f * deltaTime;
-        m_playerVelocity = glm::vec3(0.0f);
-        m_playerOnGround = false;
-    } else {
-        PlayerMotion me;
-        me.position = cameraPos;
-        me.velocity = m_playerVelocity;
-        me.onGround = m_playerOnGround;
+    game::PlayerMotion m;
+    m.position = cameraPos;
+    m.velocity = m_playerVelocity;
+    m.onGround = m_playerOnGround;
+    m.flyMode  = m_flyMode;   // ★
 
-        game::StepPlayer(me, m_lastMoveDir, m_jumpHoldTimer > 0.0f, deltaTime,
-            [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
+    game::StepPlayer(m, m_lastMoveDir, m_jumpHoldTimer > 0.0f, deltaTime,
+        [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
 
-        cameraPos        = me.position;
-        m_playerVelocity = me.velocity;
-        m_playerOnGround = me.onGround;
-    }
+    cameraPos        = m.position;
+    m_playerVelocity = m.velocity;
+    m_playerOnGround = m.onGround;
 
     constexpr float CORRECTION_RATE = 8.0f;
     float t = 1.0f - std::exp(-CORRECTION_RATE * deltaTime);
@@ -348,6 +343,38 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     std::vector<uint8_t> data;
     while (m_client.Receive(data)) {
         HandleServerMessage(data);
+    }
+
+    constexpr float INTERP_TIME = 1.0f / 20.0f;   // 和服务端 tick 匹配
+    constexpr float PICKUP_TIME = 0.2f;   // 0.2 秒飞向玩家
+    for (auto it = m_itemEntities.begin(); it != m_itemEntities.end(); ) {
+        auto& e = it->second;
+
+        // ---- 捡拾动画 ----
+        if (e.pickingUp) {
+            e.pickupT += deltaTime / PICKUP_TIME;
+            if (e.pickupT >= 1.0f) {
+                // 动画结束 → 进背包 + 删除
+                AddToInventory(e.itemType, 1);
+                it = m_itemEntities.erase(it);
+                continue;
+            }
+            // 飞向玩家眼睛
+            glm::vec3 target = cameraPos + glm::vec3(0.0f, PLAYER_EYE / 2, 0.0f);
+            float t = e.pickupT;
+            t = t * t;   // ease-in：先慢后快
+            e.renderPos = glm::mix(e.pickupStart, target, t);
+            ++it;
+            continue;
+        }
+
+        // ---- 位置插值（原有）----
+        if (e.interpT < 1.0f) {
+            e.interpT += deltaTime * 20.0f;
+            if (e.interpT > 1.0f) e.interpT = 1.0f;
+            e.renderPos = glm::mix(e.prevPos, e.targetPos, e.interpT);
+        }
+        ++it;
     }
 
     UpdateChunkStreaming();
@@ -404,14 +431,25 @@ void MyGame::OnRender(Eng::Engine& engine) {
         Eng::client::Material itemMat;
         itemMat.diffuse = m_atlasTexture;
 
+        // ---- 所有人保持 Q 弹!!! ----
+        constexpr float BOUNCE_FREQ = 1.0f / 0.4f;   // 每 0.4 秒一次
+        constexpr float BOUNCE_AMP  = 0.45f;
+        constexpr float XZ_RATIO    = 0.8f;
+
+        // ★ 所有实体共用一个 t，不带 phase
+        float t = m_animTime * BOUNCE_FREQ * 6.2831853f;
+
+        float sY  = 1.0f + BOUNCE_AMP * std::sin(t);
+        float sXZ = 1.0f - BOUNCE_AMP * XZ_RATIO * std::sin(t);
+
         for (auto& [id, e] : m_itemEntities) {
             glm::mat4 model = glm::mat4(1.0f);
-            model = glm::translate(model, e.pos);
-            model = glm::rotate(model, m_animTime * 2.0f, glm::vec3(0, 1, 0));
-            model = glm::scale(model, glm::vec3(0.3f));
+            model = glm::translate(model, e.renderPos);
+            model = model * glm::rotate(glm::mat4(1.0f), m_animTime * 2.0f, glm::vec3(0, 1, 0));   // 见下方注意
+            model = glm::scale(model, glm::vec3(sXZ * 0.3f, sY * 0.3f, sXZ * 0.3f));
 
             renderer->SetModelMatrix(model);
-            auto mesh = GetOrCreateItemMesh(e.type);
+            auto mesh = GetOrCreateItemMesh(e.itemType);
             renderer->DrawMesh(mesh, m_cubeShader, itemMat);
         }
 
@@ -842,18 +880,34 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             break;
         }
         case game::net::MessageType::EntitySpawn: {
-            uint32_t id = r.Read<uint32_t>();
-            glm::vec3 pos = r.ReadVec3();
-            BlockType bt = static_cast<BlockType>(r.Read<uint16_t>());
+            uint32_t  id   = r.Read<uint32_t>();
+            glm::vec3 pos  = r.ReadVec3();
+            BlockType type = static_cast<BlockType>(r.Read<uint16_t>());
 
             ClientItemEntity e;
-            e.id   = id;
-            e.pos  = pos;
-            e.type = bt;
+            e.id        = id;
+            e.itemType  = type;
+            e.renderPos = pos;
+            e.prevPos   = pos;
+            e.targetPos = pos;
+            e.interpT   = 1.0f;
             m_itemEntities[id] = e;
             break;
         }
 
+        case game::net::MessageType::EntityUpdate: {
+            uint32_t  id  = r.Read<uint32_t>();
+            glm::vec3 pos = r.ReadVec3();
+
+            auto it = m_itemEntities.find(id);
+            if (it != m_itemEntities.end()) {
+                // ★ 关键：起点 = 当前渲染位置（不是上次目标位置）
+                it->second.prevPos   = it->second.renderPos;
+                it->second.targetPos = pos;
+                it->second.interpT   = 0.0f;   // 从 0 开始插值
+            }
+            break;
+        }
         case game::net::MessageType::EntityDestroy: {
             uint32_t id = r.Read<uint32_t>();
             uint8_t reason = r.Read<uint8_t>();
@@ -861,10 +915,14 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             auto it = m_itemEntities.find(id);
             if (it != m_itemEntities.end()) {
                 if (reason == 1) {
-                    // 被捡走 → 进背包
-                    AddToInventory(it->second.type, 1);
+                    // 被捡走 → 启动动画，不立刻删
+                    it->second.pickingUp   = true;
+                    it->second.pickupT     = 0.0f;
+                    it->second.pickupStart = it->second.renderPos;
+                } else {
+                    // 超时消失 → 直接删
+                    m_itemEntities.erase(it);
                 }
-                m_itemEntities.erase(it);
             }
             break;
         }

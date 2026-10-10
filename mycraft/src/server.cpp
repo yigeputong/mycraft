@@ -173,30 +173,27 @@ void GameServer::ApplyPlayerInput(int clientId, const net::PlayerInput& in) {
 
 void GameServer::TickWorld(float dt) {
     for (auto& p : m_players) {
-        if (p.flyMode) {
-            p.position += p.moveDir * 15.0f * dt;
-            p.velocity = glm::vec3(0.0f);
-            p.onGround = false;
-        } else {
-            PlayerMotion me;
-            me.position = p.position;
-            me.velocity = p.velocity;
-            me.onGround = p.onGround;
-            game::StepPlayer(me, p.moveDir, p.jump, dt,
-                [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
-            p.position = me.position;
-            p.velocity = me.velocity;
-            p.onGround = me.onGround;
-        }
+        game::PlayerMotion m;
+        m.position = p.position;
+        m.velocity = p.velocity;
+        m.onGround = p.onGround;
+        m.flyMode  = p.flyMode;   // ★
+
+        game::StepPlayer(m, p.moveDir, p.jump, dt,
+            [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
+
+        p.position = m.position;
+        p.velocity = m.velocity;
+        p.onGround = m.onGround;
         p.jump = false;
     }
 }
 
 void GameServer::SpawnItemDrop(const glm::vec3& pos, BlockType type) {
     ItemEntity e;
-    e.id          = m_nextEntityId++;
-    e.pos         = pos;
-    e.vel         = glm::vec3(
+    e.id       = AllocEntityId();
+    e.position = pos;
+    e.velocity = glm::vec3(
         ((rand() % 100) / 100.0f - 0.5f) * 2.0f,
         2.5f,
         ((rand() % 100) / 100.0f - 0.5f) * 2.0f);
@@ -205,47 +202,41 @@ void GameServer::SpawnItemDrop(const glm::vec3& pos, BlockType type) {
 
     m_entities[e.id] = e;
 
-    // 广播给所有客户端
     Eng::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::EntitySpawn));
     w.Write<uint32_t>(e.id);
-    w.WriteVec3(e.pos);
+    w.WriteVec3(e.position);                       // ★ e.pos → e.position
     w.Write<uint16_t>(static_cast<uint16_t>(type));
     m_server.Broadcast(w.GetBuffer());
-
-    logDebug(m_logger, "[Server] Spawn item drop id=" << e.id
-        << " type=" << (int)type);
 }
 
 void GameServer::TickEntities(float dt) {
     std::vector<uint32_t> toRemove;
 
     for (auto& [id, e] : m_entities) {
-        // 重力
-        e.vel.y -= 20.0f * dt;
+        // ★ 直接传 e —— 它已经继承自 PointEntity
+        game::StepPointEntity(e, dt,
+            [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
 
-        // 简单移动 + 地面碰撞
-        glm::vec3 next = e.pos + e.vel * dt;
-
-        if (IsSolidAt(static_cast<int>(std::floor(next.x)),
-                      static_cast<int>(std::floor(next.y - 0.15f)),
-                      static_cast<int>(std::floor(next.z)))) {
-            next.y = std::floor(next.y) + 1.0f + 0.15f;
-            e.vel.y = 0.0f;
-            e.vel.x *= 0.8f;   // 地面摩擦
-            e.vel.z *= 0.8f;
-        }
-        e.pos = next;
-
+        // 计时器
         if (e.pickupDelay > 0) e.pickupDelay -= dt;
         e.age += dt;
 
-        // 超时（5 分钟）→ 消失
+        // 广播位置
+        {
+            Eng::MessageWriter w;
+            w.Write(static_cast<uint8_t>(game::net::MessageType::EntityUpdate));
+            w.Write<uint32_t>(id);
+            w.WriteVec3(e.position);              // ★ e.pos → e.position
+            m_server.Broadcast(w.GetBuffer());
+        }
+
+        // 超时
         if (e.age > 300.0f) {
             Eng::MessageWriter w;
             w.Write(static_cast<uint8_t>(game::net::MessageType::EntityDestroy));
             w.Write<uint32_t>(id);
-            w.Write<uint8_t>(0);   // reason=0 超时
+            w.Write<uint8_t>(0);
             m_server.Broadcast(w.GetBuffer());
             toRemove.push_back(id);
             continue;
@@ -255,23 +246,24 @@ void GameServer::TickEntities(float dt) {
         if (e.pickupDelay <= 0.0f) {
             for (auto& p : m_players) {
                 glm::vec3 center = p.position + glm::vec3(0.0f, 0.9f, 0.0f);
-                float d2 = glm::distance(e.pos, center);
+                float d2 = glm::distance(e.position, center);   // ★
                 if (d2 < 1.5f * 1.5f) {
                     Eng::MessageWriter w;
                     w.Write(static_cast<uint8_t>(game::net::MessageType::EntityDestroy));
                     w.Write<uint32_t>(id);
-                    w.Write<uint8_t>(1);   // reason=1 被捡走
+                    w.Write<uint8_t>(1);
                     m_server.SendTo(p.id, w.GetBuffer());
                     toRemove.push_back(id);
-                    logDebug(m_logger, "[Server] Player " << p.id
-                        << " picked up id=" << id);
                     break;
                 }
             }
         }
     }
 
-    for (uint32_t id : toRemove) m_entities.erase(id);
+    for (uint32_t id : toRemove) {
+        m_entities.erase(id);
+        m_freeEntityIds.push_back(id);
+    }
 }
 
 Chunk& GameServer::GetOrCreateChunk(int cx, int cz) {
