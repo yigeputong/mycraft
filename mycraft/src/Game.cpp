@@ -31,20 +31,23 @@ uint8_t HashNoise(int x, int y, uint32_t seed) {
 }
 
 struct TileSpec { uint8_t r, g, b; int noise; };
-const TileSpec kTiles[13] = {   // ← 从 6 改成 9
-    {128, 128, 128, 30},   // 0 stone
-    { 88, 160,  70, 20},   // 1 grass_top
-    { 88, 160,  70, 20},   // 2 grass_side
-    {110,  75,  50, 25},   // 3 dirt
-    {220, 210, 160, 20},   // 4 sand
-    { 40,  90, 180, 15},   // 5 water
-    {210, 218, 228, 20},   // 6 snow_top（微蓝白，加大 noise）
-    {210, 218, 228, 20},   // 7 snow_side
-    {200, 180, 130, 25},   // 8 sandstone（浅黄）
-    { 60,  60,  60, 25},   // 9  coal_ore（深灰带黑点）
-    {180, 140, 100, 25},  // 10 iron_ore（浅棕带橙点）
-    {139, 90,  43, 25},   // 11 wood（棕色，纵向纹）
-    { 42, 100, 45, 35}    // 12 leaves（深绿，大 noise）
+const TileSpec kTiles[16] = {
+    {128, 128, 128, 30},    // 0 stone
+    { 88, 160,  70, 20},    // 1 grass_top
+    { 88, 160,  70, 20},    // 2 grass_side
+    {110,  75,  50, 25},    // 3 dirt
+    {220, 210, 160, 20},    // 4 sand
+    { 40,  90, 180, 15},    // 5 water
+    {210, 218, 228, 20},    // 6 snow_top（微蓝白，加大 noise）
+    {210, 218, 228, 20},    // 7 snow_side
+    {200, 180, 130, 25},    // 8 sandstone（浅黄）
+    { 60,  60,  60, 25},    // 9  coal_ore（深灰带黑点）
+    {180, 140, 100, 25},   // 10 iron_ore（浅棕带橙点）
+    {139, 90,  43, 25},    // 11 wood（棕色，纵向纹）
+    { 42, 100, 45, 35},    // 12 leaves（深绿，大 noise）
+    {224, 180, 150, 15},   // 13 skin  （肉色）
+    { 60, 110, 200, 20},   // 14 shirt （蓝）
+    { 45,  55, 110, 20},   // 15 pants （深蓝）
 };
 
 // 生成 RGBA 像素数组，64x64
@@ -483,6 +486,20 @@ void MyGame::OnRender(Eng::Engine& engine) {
             ++drawn;
         }
 
+        // ---- 其他玩家 ----
+        if (m_playerMesh == 0) m_playerMesh = BuildPlayerMesh();
+        Eng::client::Material playerMat;
+        playerMat.diffuse = m_atlasTexture;
+        for (auto& [id, ps] : m_otherPlayers) {
+            glm::mat4 model = glm::mat4(1.0f);
+            model = glm::translate(model, ps.position);
+            // ps.yaw 是弧度（协议里传的），但服务端 yaw 语义看 player input
+            // 现在 input.look.x 是 radians(yaw)，所以直接用
+            model = glm::rotate(model, ps.yaw, glm::vec3(0, 1, 0));
+            renderer->SetModelMatrix(model);
+            renderer->DrawMesh(m_playerMesh, m_cubeShader, playerMat);
+        }
+
         // ---- 实体 ---- 
         Eng::client::Material itemMat;
         itemMat.diffuse = m_atlasTexture;
@@ -786,6 +803,7 @@ void MyGame::ReturnToMainMenu() {
         for (auto& [key, u] : m_lodUnits) {
             if (u.mesh != 0) renderer->DestroyMesh(u.mesh);
         }
+        if (m_playerMesh != 0) { renderer->DestroyMesh(m_playerMesh); m_playerMesh = 0; }
     }
     m_chunks.clear();
     m_itemMeshCache.clear();
@@ -841,7 +859,8 @@ void MyGame::OnShutdown(Eng::Engine& engine) {
 
         if (m_cubeShader) renderer->DestroyShader(m_cubeShader);
         if (m_skyShader)  renderer->DestroyShader(m_skyShader);
-        if (m_lodShader)  renderer->DestroyShader(m_lodShader);   // ← 顺手补上
+        if (m_lodShader)  renderer->DestroyShader(m_lodShader);
+        if (m_playerMesh != 0) { renderer->DestroyMesh(m_playerMesh); m_playerMesh = 0; }
         renderer->ShutdownImGuiBackend();
     }
 
@@ -1393,6 +1412,70 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
     auto handle = renderer->CreateMesh(data);
 
     return handle;
+}
+
+Eng::client::MeshHandle MyGame::BuildPlayerMesh() {
+    std::vector<Eng::client::Vertex> vertices;
+    std::vector<uint32_t> indices;
+
+    // 一个 cuboid：中心 (cx,cy,cz)，尺寸 (sx,sy,sz)，tile = tile 索引
+    auto addBox = [&](glm::vec3 c, glm::vec3 s, int tile) {
+        const float x0 = c.x - s.x*0.5f, x1 = c.x + s.x*0.5f;
+        const float y0 = c.y - s.y*0.5f, y1 = c.y + s.y*0.5f;
+        const float z0 = c.z - s.z*0.5f, z1 = c.z + s.z*0.5f;
+
+        int tileRow = tile / ATLAS_COLS;
+        int tileCol = tile % ATLAS_COLS;
+        float u0 = tileCol * TILE_UV;
+        float v0 = tileRow * TILE_UV;
+
+        // 6 面：+X -X +Y -Y +Z -Z
+        const glm::vec3 corners[8] = {
+            {x0,y0,z0},{x1,y0,z0},{x1,y0,z1},{x0,y0,z1},   // 底 0-3
+            {x0,y1,z0},{x1,y1,z0},{x1,y1,z1},{x0,y1,z1},   // 顶 4-7
+        };
+        const int faces[6][4] = {
+            {1,5,6,2},   // +X ✓
+            {3,7,4,0},   // -X（原来 {0,4,7,3} 反的）
+            {7,6,5,4},   // +Y（原来 {4,5,6,7} 反的）
+            {0,1,2,3},   // -Y ✓
+            {3,2,6,7},   // +Z ✓
+            {0,4,5,1},   // -Z（原来 {0,1,5,4} 反的）
+        };
+        const glm::vec3 normals[6] = {
+            {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}
+        };
+
+        static constexpr float fuv[4][2] = {{0,0},{1,0},{1,1},{0,1}};
+
+        for (int f = 0; f < 6; ++f) {
+            uint32_t base = (uint32_t)vertices.size();
+            for (int k = 0; k < 4; ++k) {
+                Eng::client::Vertex v;
+                v.position = corners[faces[f][k]];
+                v.normal   = normals[f];
+                v.uv = { u0 + fuv[k][0]*TILE_UV,
+                         v0 + (1.0f - fuv[k][1])*TILE_UV };
+                v.ao = 1.0f;
+                vertices.push_back(v);
+            }
+            indices.push_back(base+0); indices.push_back(base+1); indices.push_back(base+2);
+            indices.push_back(base+2); indices.push_back(base+3); indices.push_back(base+0);
+        }
+    };
+
+    // 头 / 身体 / 双臂 / 双腿
+    addBox({0.0f, 1.55f, 0.0f}, {0.5f, 0.5f, 0.5f}, 13);   // 头（skin）
+    addBox({0.0f, 1.05f, 0.0f}, {0.5f, 0.5f, 0.25f}, 14);  // 身体（shirt）
+    addBox({-0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, 14);  // 左臂
+    addBox({ 0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, 14);  // 右臂
+    addBox({-0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, 15);   // 左腿
+    addBox({ 0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, 15);   // 右腿
+
+    Eng::client::MeshData data;
+    data.vertices = std::move(vertices);
+    data.indices  = std::move(indices);
+    return renderer->CreateMesh(data);
 }
 
 void MyGame::UpdateChunkStreaming() {

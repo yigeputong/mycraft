@@ -184,6 +184,10 @@ private:
     bool  AabbInFrustum(const glm::vec3& mn, const glm::vec3& mx) const;
     char m_nameBuffer[32] = "player";
 
+    // ==================== 玩家模型 ====================
+    Eng::client::MeshHandle m_playerMesh = 0;
+    Eng::client::MeshHandle BuildPlayerMesh();
+
     // ==================== Hotbar ====================
     static constexpr int kHotbarSize = 4;
     int m_hotbarIndex = 0;
