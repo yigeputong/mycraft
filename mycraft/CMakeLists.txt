@@ -9,7 +9,7 @@ add_library(game-server STATIC
 target_include_directories(game-server PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(game-server PUBLIC engine)
+target_link_libraries(game-server PUBLIC engine-core engine-net)
 
 # ============================================================
 # 客户端
@@ -21,7 +21,7 @@ add_executable(mycraft
 target_include_directories(mycraft PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(mycraft PRIVATE game-server)
+target_link_libraries(mycraft PRIVATE game-server engine-client)
 target_compile_definitions(mycraft PRIVATE MYCRAFT_VERSION="${PROJECT_VERSION}")
 
 # ============================================================
