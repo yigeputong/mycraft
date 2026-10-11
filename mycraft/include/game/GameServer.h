@@ -10,7 +10,7 @@
 #include <atomic>
 #include <glm/glm.hpp>
 #include <queue>
-#include <random>
+#include <unordered_set>
 
 namespace game::server {
 
@@ -53,6 +53,28 @@ private:
     struct PendingChunkRequest { int clientId; int cx, cz; };
     std::queue<PendingChunkRequest> m_chunkQueue;
 
+    // ==================== 异步 chunk 生成 ====================
+    struct ChunkTask   { int cx, cz; uint64_t key; };
+    struct ChunkResult { uint64_t key; Chunk chunk; };
+
+    std::vector<std::thread>            m_workers;
+    std::mutex                          m_taskMutex;
+    std::condition_variable             m_taskCv;
+    std::queue<ChunkTask>               m_taskQueue;
+    std::atomic<bool>                   m_workersStop{false};
+
+    std::mutex                          m_resultMutex;
+    std::queue<ChunkResult>             m_resultQueue;
+
+    std::unordered_set<uint64_t>        m_inFlight;       // 正在生成的 chunk
+    std::unordered_map<uint64_t, std::vector<int>> m_waitingClients;  // key → 等待的 client
+
+    void StartWorkers(uint32_t seed);
+    void StopWorkers();
+    void WorkerLoop(uint32_t seed);
+    void DrainChunkResults();
+    void SendChunkTo(int clientId, const Chunk& chunk);
+
     // ==================== 实体 ====================
 
     struct ItemEntity : game::PointEntity {   // ★ 继承：拿到 position / velocity
@@ -87,7 +109,7 @@ private:
     void TickWorld(float dt);
 
     // 区块
-    Chunk& GetOrCreateChunk(int cx, int cz);
+    Chunk* GetCachedChunk(int cx, int cz);
 
     // 方块查询/修改
     BlockType GetBlockAt(int wx, int wy, int wz) const;

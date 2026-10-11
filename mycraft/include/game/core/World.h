@@ -17,10 +17,6 @@ struct Chunk {
 
     // 方块数据（x → z → y 顺序，缓存友好）
     std::array<BlockType, CHUNK_VOLUME> blocks{};
-
-    // 客户端用
-    bool dirty = true;       // 是否需要重建网格
-    uint32_t mesh = 0;       // 渲染句柄
 };
 
 // 本地坐标 → 数组索引（y → z → x）
