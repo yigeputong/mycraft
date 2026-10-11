@@ -1,3 +1,4 @@
+#include "core/Platform.h"
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -14,6 +15,12 @@ void EnableAnsiConsole() {
             SetConsoleMode(hOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
         }
     }
+#endif
+}
+void SetConsoleUTF8Output() {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
 #endif
 }
 }

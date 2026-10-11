@@ -7,7 +7,11 @@
 #include "core/Log.h"
 #include "game/GameServer.h"
 
+#include "core/Platform.h"
+
 int main(int argc, char* argv[]) {
+    Eng::SetConsoleUTF8Output();
+
     // 端口：命令行可选参数，默认 25565
     uint16_t port = 25565;
     std::string saveDir = "./saves/world";
@@ -37,9 +41,21 @@ int main(int argc, char* argv[]) {
     logInfo(logger, "[Server] Running. Type 'stop' + Enter to quit.");
 
     // ---- 主循环：等 "stop" / "quit" / "exit" ----
+    std::cout << "> " << std::flush;
     std::string line;
     while (std::getline(std::cin, line)) {
-        if (line == "stop" || line == "quit" || line == "exit") break;
+        if (line.empty()) {
+            // 空行，直接重发提示符
+        } else if (line == "stop" || line == "quit" || line == "exit") {
+            break;
+        } else if (line == "help" || line == "?") {
+            std::cout << "commands:\n"
+                    << "  help / ?     show this\n"
+                    << "  stop / quit  shutdown server\n" << std::flush;
+        } else {
+            std::cout << "unknown command: '" << line << "'. Type 'help'.\n" << std::flush;
+        }
+        std::cout << "> " << std::flush;
     }
 
     server.Stop();

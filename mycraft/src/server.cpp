@@ -18,7 +18,6 @@ namespace game::server {
 void GameServer::StartWorkers(uint32_t seed) {
     unsigned hw = std::thread::hardware_concurrency();
     unsigned n  = std::clamp(hw > 2 ? hw - 2 : 2u, 2u, 12u);
-    logInfo(m_logger, "[Server] Starting " << n << " chunk workers");
     m_workersStop = false;
     for (unsigned i = 0; i < n; ++i) {
         m_workers.emplace_back([this, seed] { WorkerLoop(seed); });
@@ -130,13 +129,20 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir) {
         logInfo(m_logger, "[Server] New world, seed=" << seed);
     }
 
-    // 载入改动集
     auto changes = m_save->LoadChanges();
     for (auto& c : changes) {
         uint64_t k = ChunkKey(c.x >> 4, c.z >> 4);
         m_pendingChanges[k].push_back(c);
     }
     logInfo(m_logger, "[Server] Loaded " << changes.size() << " block changes");
+
+    {
+        unsigned hw = std::thread::hardware_concurrency();
+        unsigned n  = std::clamp(hw > 2 ? hw - 2 : 2u, 2u, 12u);
+        logInfo(m_logger, "[Server] Server Run");
+        logInfo(m_logger, "[Server] World Seed = " << m_worldSeed);
+        logInfo(m_logger, "[Server] Starting " << n << " chunk workers");
+    }
 
     m_running.store(true);
     m_thread = std::thread([this, port]() {
@@ -247,9 +253,7 @@ void GameServer::Run() {
     auto last = std::chrono::steady_clock::now();
     float accumulator = 0.0f;
 
-    logInfo(m_logger, "[Server] Server Run");
     m_terrain = std::make_unique<TerrainGenerator>(m_worldSeed);
-    logInfo(m_logger, "[Server] World Seed = " << m_worldSeed);
 
     StartWorkers(m_worldSeed);
 
