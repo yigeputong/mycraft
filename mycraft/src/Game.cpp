@@ -432,6 +432,9 @@ void MyGame::OnRender(Eng::Engine& engine) {
     }
     renderer->BeginFrame();
 
+    glm::mat4 vp = projection * view;
+    UpdateFrustum(vp);
+
     // ============ Pass 1: 场景 → FBO ============
     renderer->BindFramebuffer(fbo);
     renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -461,11 +464,14 @@ void MyGame::OnRender(Eng::Engine& engine) {
 
         // ---- 远景 LOD ----
         renderer->SetModelMatrix(glm::mat4(1.0f));
+        int drawn = 0, culled = 0;
         for (auto& [key, u] : m_lodUnits) {
             if (u.mesh == 0) continue;
+            if (!AabbInFrustum(u.aabbMin, u.aabbMax)) { ++culled; continue; }
             Eng::client::Material lodMat;
-            lodMat.diffuse = m_atlasTexture;   // 占位，shader 不采样，但 DrawMesh 需要非零 handle
+            lodMat.diffuse = m_atlasTexture;
             renderer->DrawMesh(u.mesh, m_lodShader, lodMat);
+            ++drawn;
         }
 
         // ---- 实体 ---- 
@@ -1022,6 +1028,24 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             m_chunks[key] = cc;
             m_pending.erase(key);
 
+            // 顺便算高度图，供 LOD1 用
+            for (int lx = 0; lx < 16; ++lx) {
+                for (int lz = 0; lz < 16; ++lz) {
+                    int topY = 0;
+                    uint8_t topB = 0;   // Air
+                    for (int y = CHUNK_SIZE_Y - 1; y >= 0; --y) {
+                        BlockType b = ChunkGet(cc.chunk, lx, y, lz);
+                        if (b != BlockType::Air && b != BlockType::Water) {
+                            topY = y;
+                            topB = (uint8_t)b;
+                            break;
+                        }
+                    }
+                    cc.heights[lx * 16 + lz] = (int16_t)topY;
+                    cc.topBlock[lx * 16 + lz] = topB;
+                }
+            }
+
             PendingMesh pm;
             pm.chunkKey = key;
             pm.chunk = m_chunks[key].chunk;
@@ -1503,7 +1527,7 @@ void MyGame::LodWorkerLoop(uint32_t seed) {
     game::server::TerrainGenerator terrain(seed);
 
     while (true) {
-        std::pair<int,int> task;
+        LodTask task;
         {
             std::unique_lock lk(m_lodTaskMutex);
             m_lodTaskCv.wait(lk, [this] {
@@ -1515,9 +1539,11 @@ void MyGame::LodWorkerLoop(uint32_t seed) {
         }
 
         LodResult r;
-        r.cx = task.first;
-        r.cz = task.second;
-        BuildLodUnit(terrain, r.cx, r.cz, r.vertices, r.indices);
+        r.level = task.level;
+        r.cx = task.cx;
+        r.cz = task.cz;
+        BuildLodUnit(terrain, task.level, task.cx, task.cz,
+                     r.vertices, r.indices, r.aabbMin, r.aabbMax);
 
         {
             std::lock_guard lk(m_lodResultMutex);
@@ -1530,18 +1556,23 @@ void MyGame::LodWorkerLoop(uint32_t seed) {
 // 构建一个 LOD 单元：33×33 顶点网格，每格一个水平 quad
 // ============================================================
 void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
-                          int ucx, int ucz,
+                          int level, int ucx, int ucz,
                           std::vector<Eng::client::Vertex>& outV,
-                          std::vector<uint32_t>& outI) const {
-    const int baseX = ucx * kLodUnitSize;
-    const int baseZ = ucz * kLodUnitSize;
-    constexpr int N  = kLodUnitSize;
+                          std::vector<uint32_t>& outI,
+                          glm::vec3& outMin, glm::vec3& outMax) const {
+    const int sampleStep = 1 << level;   // 从 1<<(level-1) → 1<<level，即 2/4/8
+    const int unitSize   = kLodUnitSize * sampleStep; // 32, 64, 128
+    constexpr int N  = kLodUnitSize;                  // 32 格子
     constexpr int NP = N + 1;
 
-    outV.clear();
-    outI.clear();
-    outV.reserve(N * N * 12);   // 顶 4 + 侧壁最多 8
+    const int baseX = ucx * unitSize;
+    const int baseZ = ucz * unitSize;
+
+    outV.clear(); outI.clear();
+    outV.reserve(N * N * 12);
     outI.reserve(N * N * 18);
+    outMin = glm::vec3(1e30f);
+    outMax = glm::vec3(-1e30f);
 
     auto tileForBiome = [](game::server::Biome bb) -> int {
         using B = game::server::Biome;
@@ -1557,22 +1588,18 @@ void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
         }
     };
 
-    // 采样 (N+1)×(N+1) 格点
     static thread_local int     hP[NP][NP];
     static thread_local uint8_t bP[NP][NP];
-    for (int j = 0; j < NP; ++j) {
+    for (int j = 0; j < NP; ++j)
         for (int i = 0; i < NP; ++i) {
-            int wx = baseX + i;
-            int wz = baseZ + j;
+            int wx = baseX + i * sampleStep;
+            int wz = baseZ + j * sampleStep;
             hP[j][i] = terrain.GetSurfaceY(wx, wz);
             bP[j][i] = (uint8_t)terrain.GetBiome(wx, wz);
         }
-    }
 
-    // 格子高度 / tile
     auto cellY = [&](int i, int j) -> float {
-        int h = hP[j][i];
-        return (float)std::max(h + 1, SEA_LEVEL);
+        return (float)std::max(hP[j][i] + 1, SEA_LEVEL);
     };
     auto cellTile = [&](int i, int j) -> int {
         int h = hP[j][i];
@@ -1580,92 +1607,228 @@ void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
         if (h < SEA_LEVEL) b = game::server::Biome::Ocean;
         return tileForBiome(b);
     };
+    auto pushV = [&](const glm::vec3& p, const glm::vec3& n, const glm::vec2& uv) {
+        Eng::client::Vertex v;
+        v.position = p; v.normal = n; v.uv = uv; v.ao = 1.0f;
+        outV.push_back(v);
+        outMin = glm::min(outMin, p);
+        outMax = glm::max(outMax, p);
+    };
 
     for (int j = 0; j < N; ++j) {
         for (int i = 0; i < N; ++i) {
             float ySelf = cellY(i, j);
             int   tile  = cellTile(i, j);
+            float u = ((tile % ATLAS_COLS) + 0.5f) * TILE_UV;
+            float v = ((tile / ATLAS_COLS) + 0.5f) * TILE_UV;
 
-            int tileRow = tile / ATLAS_COLS;
-            int tileCol = tile % ATLAS_COLS;
-            float u = (tileCol + 0.5f) * TILE_UV;
-            float v = (tileRow + 0.5f) * TILE_UV;
-
-            float x0 = (float)(baseX + i);
-            float x1 = (float)(baseX + i + 1);
-            float z0 = (float)(baseZ + j);
-            float z1 = (float)(baseZ + j + 1);
+            float x0 = (float)(baseX + i * sampleStep);
+            float x1 = (float)(baseX + (i + 1) * sampleStep);
+            float z0 = (float)(baseZ + j * sampleStep);
+            float z1 = (float)(baseZ + (j + 1) * sampleStep);
 
             // ---- 顶面 ----
             {
                 uint32_t base = (uint32_t)outV.size();
-                Eng::client::Vertex vt;
-                vt.normal = { 0.0f, 1.0f, 0.0f };
-                vt.uv = { u, v };
-                vt.ao = 1.0f;
-
-                vt.position = { x0, ySelf, z0 }; outV.push_back(vt);
-                vt.position = { x1, ySelf, z0 }; outV.push_back(vt);
-                vt.position = { x1, ySelf, z1 }; outV.push_back(vt);
-                vt.position = { x0, ySelf, z1 }; outV.push_back(vt);
-
-                outI.push_back(base + 0); outI.push_back(base + 3); outI.push_back(base + 2);
-                outI.push_back(base + 0); outI.push_back(base + 2); outI.push_back(base + 1);
+                pushV({x0, ySelf, z0}, {0,1,0}, {u,v});
+                pushV({x1, ySelf, z0}, {0,1,0}, {u,v});
+                pushV({x1, ySelf, z1}, {0,1,0}, {u,v});
+                pushV({x0, ySelf, z1}, {0,1,0}, {u,v});
+                outI.push_back(base+0); outI.push_back(base+3); outI.push_back(base+2);
+                outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+1);
             }
 
-            // ---- 右侧壁 (+X)：右邻居更低 ----
+            // ---- 右壁 +X ----
             if (i + 1 < N) {
                 float yNb = cellY(i + 1, j);
                 if (ySelf > yNb + 0.01f) {
-                    int nbTile = cellTile(i + 1, j);
-                    int nbR = nbTile / ATLAS_COLS;
-                    int nbC = nbTile % ATLAS_COLS;
-                    float nu = (nbC + 0.5f) * TILE_UV;
-                    float nv = (nbR + 0.5f) * TILE_UV;
-
+                    int nt = cellTile(i + 1, j);
+                    float nu = ((nt % ATLAS_COLS) + 0.5f) * TILE_UV;
+                    float nv = ((nt / ATLAS_COLS) + 0.5f) * TILE_UV;
                     uint32_t base = (uint32_t)outV.size();
-                    Eng::client::Vertex vs;
-                    vs.normal = { 1.0f, 0.0f, 0.0f };
-                    vs.uv = { nu, nv };
-                    vs.ao = 1.0f;
-
-                    vs.position = { x1, yNb,   z0 }; outV.push_back(vs);
-                    vs.position = { x1, ySelf, z0 }; outV.push_back(vs);
-                    vs.position = { x1, ySelf, z1 }; outV.push_back(vs);
-                    vs.position = { x1, yNb,   z1 }; outV.push_back(vs);
-
-                    outI.push_back(base + 0); outI.push_back(base + 1); outI.push_back(base + 2);
-                    outI.push_back(base + 0); outI.push_back(base + 2); outI.push_back(base + 3);
+                    pushV({x1, yNb,   z0}, {1,0,0}, {nu,nv});
+                    pushV({x1, ySelf, z0}, {1,0,0}, {nu,nv});
+                    pushV({x1, ySelf, z1}, {1,0,0}, {nu,nv});
+                    pushV({x1, yNb,   z1}, {1,0,0}, {nu,nv});
+                    outI.push_back(base+0); outI.push_back(base+1); outI.push_back(base+2);
+                    outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+3);
                 }
             }
 
-            // ---- 上侧壁 (+Z)：上邻居更低 ----
+            // ---- 上壁 +Z ----
             if (j + 1 < N) {
                 float yNb = cellY(i, j + 1);
                 if (ySelf > yNb + 0.01f) {
-                    int nbTile = cellTile(i, j + 1);
-                    int nbR = nbTile / ATLAS_COLS;
-                    int nbC = nbTile % ATLAS_COLS;
-                    float nu = (nbC + 0.5f) * TILE_UV;
-                    float nv = (nbR + 0.5f) * TILE_UV;
-
+                    int nt = cellTile(i, j + 1);
+                    float nu = ((nt % ATLAS_COLS) + 0.5f) * TILE_UV;
+                    float nv = ((nt / ATLAS_COLS) + 0.5f) * TILE_UV;
                     uint32_t base = (uint32_t)outV.size();
-                    Eng::client::Vertex vs;
-                    vs.normal = { 0.0f, 0.0f, 1.0f };
-                    vs.uv = { nu, nv };
-                    vs.ao = 1.0f;
-
-                    vs.position = { x0, yNb,   z1 }; outV.push_back(vs);
-                    vs.position = { x1, yNb,   z1 }; outV.push_back(vs);
-                    vs.position = { x1, ySelf, z1 }; outV.push_back(vs);
-                    vs.position = { x0, ySelf, z1 }; outV.push_back(vs);
-
-                    outI.push_back(base + 0); outI.push_back(base + 1); outI.push_back(base + 2);
-                    outI.push_back(base + 0); outI.push_back(base + 2); outI.push_back(base + 3);
+                    pushV({x0, yNb,   z1}, {0,0,1}, {nu,nv});
+                    pushV({x1, yNb,   z1}, {0,0,1}, {nu,nv});
+                    pushV({x1, ySelf, z1}, {0,0,1}, {nu,nv});
+                    pushV({x0, ySelf, z1}, {0,0,1}, {nu,nv});
+                    outI.push_back(base+0); outI.push_back(base+1); outI.push_back(base+2);
+                    outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+3);
                 }
             }
         }
     }
+}
+
+void MyGame::BuildLod1FromChunks(const LodKey& key) {
+    constexpr int CELLS = 32;
+    const int baseX = key.cx * CELLS;
+    const int baseZ = key.cz * CELLS;
+
+    auto getChunk = [this](int cx, int cz) -> const ClientChunk* {
+        auto it = m_chunks.find(ChunkKey(cx, cz));
+        return it == m_chunks.end() ? nullptr : &it->second;
+    };
+    const ClientChunk* cs[2][2] = {
+        { getChunk(key.cx*2+0, key.cz*2+0), getChunk(key.cx*2+0, key.cz*2+1) },
+        { getChunk(key.cx*2+1, key.cz*2+0), getChunk(key.cx*2+1, key.cz*2+1) },
+    };
+
+    std::vector<Eng::client::Vertex> outV;
+    std::vector<uint32_t> outI;
+    outV.reserve(CELLS * CELLS * 12);
+    outI.reserve(CELLS * CELLS * 18);
+    glm::vec3 aabbMin(1e30f), aabbMax(-1e30f);
+
+    auto blockToTile = [](uint8_t b) -> int {
+        using BT = BlockType;
+        switch ((BT)b) {
+            case BT::Stone:      return 0;
+            case BT::GrassBlock: return 1;   // grass_top
+            case BT::Dirt:       return 3;
+            case BT::Sand:       return 4;
+            case BT::Water:      return 5;
+            case BT::Snow:       return 6;
+            case BT::Sandstone:  return 8;
+            case BT::CoalOre:    return 9;
+            case BT::IronOre:    return 10;
+            case BT::Wood:       return 11;
+            case BT::Leaves:     return 12;
+            default:             return 1;
+        }
+    };
+
+    // 采样（含 LOD1 外边界兜底 terrain）
+    auto sample = [&](int i, int j, float& y, int& tile) {
+        int cxi = i >> 4, czi = j >> 4;
+        int lx  = i & 15, lz  = j & 15;
+        const ClientChunk* cc = cs[cxi][czi];
+
+        int h;
+        uint8_t tb;
+        if (cc) {
+            h  = cc->heights[lx * 16 + lz];
+            tb = cc->topBlock[lx * 16 + lz];
+        } else {
+            int wx = baseX + i, wz = baseZ + j;
+            h = m_lodTerrain ? m_lodTerrain->GetSurfaceY(wx, wz) : SEA_LEVEL;
+            auto b = m_lodTerrain ? m_lodTerrain->GetBiome(wx, wz)
+                                  : game::server::Biome::Plains;
+            using B = game::server::Biome;
+            switch (b) {
+                case B::Ocean:    tb = (uint8_t)BlockType::Water;      break;
+                case B::Beach:
+                case B::Desert:   tb = (uint8_t)BlockType::Sand;       break;
+                case B::Snow:     tb = (uint8_t)BlockType::Snow;       break;
+                case B::Mountain: tb = (uint8_t)BlockType::Stone;      break;
+                default:          tb = (uint8_t)BlockType::GrassBlock; break;
+            }
+        }
+
+        y = std::max<float>((float)(h + 1), (float)SEA_LEVEL);
+        tile = blockToTile(tb);
+    };
+
+    // 高度矩阵（32×32）
+    static thread_local float hM[CELLS][CELLS];
+    static thread_local int   tM[CELLS][CELLS];
+    for (int j = 0; j < CELLS; ++j)
+        for (int i = 0; i < CELLS; ++i)
+            sample(i, j, hM[j][i], tM[j][i]);
+
+    auto pushV = [&](glm::vec3 p, glm::vec3 n, glm::vec2 uv) {
+        Eng::client::Vertex v;
+        v.position = p; v.normal = n; v.uv = uv; v.ao = 1.0f;
+        outV.push_back(v);
+        aabbMin = glm::min(aabbMin, p);
+        aabbMax = glm::max(aabbMax, p);
+    };
+
+    auto tileUV = [&](int t, float& u, float& v) {
+        u = ((t % ATLAS_COLS) + 0.5f) * TILE_UV;
+        v = ((t / ATLAS_COLS) + 0.5f) * TILE_UV;
+    };
+
+    for (int j = 0; j < CELLS; ++j) {
+        for (int i = 0; i < CELLS; ++i) {
+            float ySelf = hM[j][i];
+            float u, v; tileUV(tM[j][i], u, v);
+
+            float x0 = (float)(baseX + i);
+            float x1 = x0 + 1.0f;
+            float z0 = (float)(baseZ + j);
+            float z1 = z0 + 1.0f;
+
+            // 顶面
+            {
+                uint32_t b = (uint32_t)outV.size();
+                pushV({x0, ySelf, z0}, {0,1,0}, {u,v});
+                pushV({x1, ySelf, z0}, {0,1,0}, {u,v});
+                pushV({x1, ySelf, z1}, {0,1,0}, {u,v});
+                pushV({x0, ySelf, z1}, {0,1,0}, {u,v});
+                outI.push_back(b+0); outI.push_back(b+3); outI.push_back(b+2);
+                outI.push_back(b+0); outI.push_back(b+2); outI.push_back(b+1);
+            }
+
+            // 右壁
+            if (i + 1 < CELLS) {
+                float yNb = hM[j][i+1];
+                if (ySelf > yNb + 0.01f) {
+                    float nu, nv; tileUV(tM[j][i+1], nu, nv);
+                    uint32_t b = (uint32_t)outV.size();
+                    pushV({x1, yNb,   z0}, {1,0,0}, {nu,nv});
+                    pushV({x1, ySelf, z0}, {1,0,0}, {nu,nv});
+                    pushV({x1, ySelf, z1}, {1,0,0}, {nu,nv});
+                    pushV({x1, yNb,   z1}, {1,0,0}, {nu,nv});
+                    outI.push_back(b+0); outI.push_back(b+1); outI.push_back(b+2);
+                    outI.push_back(b+0); outI.push_back(b+2); outI.push_back(b+3);
+                }
+            }
+            // 上壁
+            if (j + 1 < CELLS) {
+                float yNb = hM[j+1][i];
+                if (ySelf > yNb + 0.01f) {
+                    float nu, nv; tileUV(tM[j+1][i], nu, nv);
+                    uint32_t b = (uint32_t)outV.size();
+                    pushV({x0, yNb,   z1}, {0,0,1}, {nu,nv});
+                    pushV({x1, yNb,   z1}, {0,0,1}, {nu,nv});
+                    pushV({x1, ySelf, z1}, {0,0,1}, {nu,nv});
+                    pushV({x0, ySelf, z1}, {0,0,1}, {nu,nv});
+                    outI.push_back(b+0); outI.push_back(b+1); outI.push_back(b+2);
+                    outI.push_back(b+0); outI.push_back(b+2); outI.push_back(b+3);
+                }
+            }
+        }
+    }
+
+    if (outV.empty()) return;
+
+    Eng::client::MeshData data;
+    data.vertices = std::move(outV);
+    data.indices  = std::move(outI);
+    auto mesh = renderer->CreateMesh(data);
+
+    LodUnit u;
+    u.level = 1;
+    u.cx = key.cx; u.cz = key.cz;
+    u.mesh = mesh;
+    u.aabbMin = aabbMin; u.aabbMax = aabbMax;
+    m_lodUnits[key] = u;
 }
 
 // ============================================================
@@ -1676,58 +1839,82 @@ void MyGame::UpdateLodStreaming() {
 
     int pcx = static_cast<int>(std::floor(cameraPos.x)) >> 4;
     int pcz = static_cast<int>(std::floor(cameraPos.z)) >> 4;
-    int pu  = static_cast<int>(std::floor(pcx / 2.0f));
-    int pv  = static_cast<int>(std::floor(pcz / 2.0f));
 
-    const int R     = kLodOuterR / kLodUnitChunks;      // 外半径 = 16
-    const int INNER = kLodInnerR / kLodUnitChunks;      // 内半径 = 8
+    // ---- 只在跨 chunk 时重算 wanted / 卸载 / 重建 need 队列 ----
+    if (pcx != m_lastLodPcx || pcz != m_lastLodPcz) {
+        m_lastLodPcx = pcx;
+        m_lastLodPcz = pcz;
 
-    // 卸载：超出外圈，或完全落在原生渲染范围内
-    for (auto it = m_lodUnits.begin(); it != m_lodUnits.end(); ) {
-        auto& u = it->second;
-        int du = std::abs(u.cx - pu);
-        int dv = std::abs(u.cz - pv);
+        std::unordered_set<LodKey, LodKeyHash> wanted;
+        struct Need { LodKey k; int d2; };
+        std::vector<Need> need;
 
-        bool tooFar       = (du > R + 1) || (dv > R + 1);
-        bool insideNative = (du < INNER) && (dv < INNER);   // ★ 新增
+        for (int level = 1; level <= kLodLevels; ++level) {
+            int unitChunks = 1 << level;
+            constexpr int kRingInnerUnits = 8;
+            constexpr int kRingOuterUnits = 16;
+            int pu = pcx / unitChunks;
+            int pv = pcz / unitChunks;
 
-        if (tooFar || insideNative) {
-            if (u.mesh != 0) renderer->DestroyMesh(u.mesh);
-            it = m_lodUnits.erase(it);
-        } else {
-            ++it;
+            for (int dv = -kRingOuterUnits; dv <= kRingOuterUnits; ++dv) {
+                for (int du = -kRingOuterUnits; du <= kRingOuterUnits; ++du) {
+                    int adu = std::abs(du), adv = std::abs(dv);
+                    if (adu < kRingInnerUnits && adv < kRingInnerUnits) continue;
+                    LodKey k{ (int8_t)level, pu + du, pv + dv };
+                    wanted.insert(k);
+                    if (m_lodUnits.count(k))    continue;
+                    if (m_lodPending.count(k))  continue;
+                    need.push_back({ k, adu*adu + adv*adv });
+                }
+            }
         }
+
+        // 卸载
+        for (auto it = m_lodUnits.begin(); it != m_lodUnits.end(); ) {
+            if (!wanted.count(it->first)) {
+                if (it->second.mesh != 0) renderer->DestroyMesh(it->second.mesh);
+                it = m_lodUnits.erase(it);
+            } else ++it;
+        }
+
+        std::sort(need.begin(), need.end(),
+                  [](const Need& a, const Need& b){ return a.d2 < b.d2; });
+
+        m_lodNeedQueue.clear();
+        m_lodNeedQueue.reserve(need.size());
+        for (auto& n : need) m_lodNeedQueue.push_back(n.k);
+        m_lodNeedCursor = 0;
     }
 
-    // 收集缺失的（内圈跳过，外圈排队）
-    struct Need { int cx, cz, d2; };
-    std::vector<Need> need;
-    for (int dv = -R; dv <= R; ++dv) {
-        for (int du = -R; du <= R; ++du) {
-            if (std::abs(du) < INNER && std::abs(dv) < INNER) continue;
-            int ucx = pu + du;
-            int ucz = pv + dv;
-            uint64_t key = ChunkKey(ucx, ucz);
-            if (m_lodUnits.count(key)) continue;
-            if (m_lodPending.count(key)) continue;
-            need.push_back({ucx, ucz, du*du + dv*dv});
-        }
-    }
+    // 玩家静止时长
+    const float moveDist = glm::length(cameraPos - m_lastCameraPos);
+    if (moveDist < 0.02f) m_stationaryTime += 0.016f;   // 近似帧时间
+    else                  m_stationaryTime = 0.0f;
+    m_lastCameraPos = cameraPos;
 
-    std::sort(need.begin(), need.end(), [](const Need& a, const Need& b) { return a.d2 < b.d2; });
+    const bool stationary = (m_stationaryTime > 1.0f);   // 停稳 1 秒后才派 L2/L3
 
-    // 每帧最多排 K 个
-    constexpr int K = 4;
+    constexpr int K_PER_FRAME = 6;
     int sent = 0;
-    for (const auto& n : need) {
-        if (sent++ >= K) break;
-        uint64_t key = ChunkKey(n.cx, n.cz);
-        m_lodPending.insert(key);
+    while (m_lodNeedCursor < m_lodNeedQueue.size() && sent < K_PER_FRAME) {
+        LodKey k = m_lodNeedQueue[m_lodNeedCursor];
+        if (m_lodUnits.count(k) || m_lodPending.count(k)) { ++m_lodNeedCursor; continue; }
+
+        // ★ 移动中跳过 L2/L3 任务（但不推进游标——下次静止时从头扫）
+        if (k.level > 1 && !stationary) {
+            ++m_lodNeedCursor;
+            continue;
+        }
+
+        m_lodPending.insert(k);
         {
             std::lock_guard lk(m_lodTaskMutex);
-            m_lodTaskQueue.push({n.cx, n.cz});
+            m_lodTaskQueue.push({ k.level, k.cx, k.cz });
         }
-        m_lodTaskCv.notify_all();
+        m_lodTaskCv.notify_one();
+
+        ++m_lodNeedCursor;
+        ++sent;
     }
 }
 
@@ -1735,7 +1922,7 @@ void MyGame::UpdateLodStreaming() {
 // 主线程收结果，创建 GPU mesh
 // ============================================================
 void MyGame::DrainLodResults() {
-    constexpr int K = 4;   // 每帧最多上传 K 个 mesh
+    constexpr int K = 4;
     int done = 0;
     for (;;) {
         LodResult r;
@@ -1746,8 +1933,8 @@ void MyGame::DrainLodResults() {
             m_lodResultQueue.pop();
         }
 
-        uint64_t key = ChunkKey(r.cx, r.cz);
-        m_lodPending.erase(key);
+        LodKey k{ r.level, r.cx, r.cz };
+        m_lodPending.erase(k);
 
         if (r.vertices.empty()) continue;
 
@@ -1757,13 +1944,48 @@ void MyGame::DrainLodResults() {
         auto mesh = renderer->CreateMesh(data);
 
         LodUnit u;
+        u.level = r.level;
         u.cx = r.cx;
         u.cz = r.cz;
         u.mesh = mesh;
-        m_lodUnits[key] = u;
+        u.aabbMin = r.aabbMin;
+        u.aabbMax = r.aabbMax;
+        m_lodUnits[k] = u;
 
         ++done;
     }
+}
+
+void MyGame::UpdateFrustum(const glm::mat4& vp) {
+    auto row = [&](int r) { return glm::vec4(vp[0][r], vp[1][r], vp[2][r], vp[3][r]); };
+    glm::vec4 r0=row(0), r1=row(1), r2=row(2), r3=row(3);
+
+    m_frustum.planes[0] = r3 + r0;   // left
+    m_frustum.planes[1] = r3 - r0;   // right
+    m_frustum.planes[2] = r3 + r1;   // bottom
+    m_frustum.planes[3] = r3 - r1;   // top
+    m_frustum.planes[4] = r3 + r2;   // near
+    m_frustum.planes[5] = r3 - r2;   // far
+
+    for (auto& p : m_frustum.planes) {
+        float len = glm::length(glm::vec3(p));
+        if (len > 0.0f) p /= len;
+    }
+}
+
+bool MyGame::AabbInFrustum(const glm::vec3& mn, const glm::vec3& mx) const {
+    for (const auto& p : m_frustum.planes) {
+        glm::vec3 n = glm::vec3(p);
+        float   d = p.w;
+        // 找 AABB 中"最靠平面"的顶点：沿法线方向最远的点
+        glm::vec3 v(
+            n.x >= 0 ? mx.x : mn.x,
+            n.y >= 0 ? mx.y : mn.y,
+            n.z >= 0 ? mx.z : mn.z
+        );
+        if (glm::dot(n, v) + d < 0.0f) return false;   // 全在平面外侧
+    }
+    return true;
 }
 
 }

@@ -30,8 +30,8 @@ namespace Eng {
         };
 
         struct RenderConfig {
-            float zNear = 0.1f;
-            float zFar  = 1000.0f;
+            float zNear = 0.5f;
+            float zFar  = 4096.0f;
             float fov   = 75.0f;
             float gamma = 2.2f;
             float m_aoStrength  = 1.0f;   // 环境光遮蔽， 0 = 关，1 = 开
