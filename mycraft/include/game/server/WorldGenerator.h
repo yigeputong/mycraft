@@ -67,6 +67,7 @@ public:
     Biome    GetBiome(int wx, int wz) const;
     int      GetHeight(int wx, int wz) const;         // 地表高度
     bool     IsSolidAt(int wx, int wy, int wz) const; // 密度函数查询
+    int      GetSurfaceY(int wx, int wz) const;
 
 private:
     PerlinNoise m_noise;

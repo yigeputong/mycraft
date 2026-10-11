@@ -49,6 +49,8 @@ private:
     // ==================== 世界 ====================
     std::unique_ptr<TerrainGenerator>   m_terrain;
     std::unordered_map<uint64_t, Chunk> m_chunks;
+    uint32_t m_worldSeed = 0;
+    glm::vec3 m_spawnPos{0.0f, 256.0f, 0.0f};
 
     struct PendingChunkRequest { int clientId; int cx, cz; };
     std::queue<PendingChunkRequest> m_chunkQueue;

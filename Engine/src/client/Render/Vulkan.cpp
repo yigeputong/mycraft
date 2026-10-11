@@ -1037,11 +1037,7 @@ ShaderHandle VulkanAPI::CreateSkybox(const std::string& vertPath,
                                 "main", "main");
 }
 
-ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath,
-                                   const std::string& fragPath,
-                                   bool isSky,
-                                   const char* vertEntry,
-                                   const char* fragEntry) {
+ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const std::string& fragPath, bool isSky, const char* vertEntry, const char* fragEntry) {
     ShaderInternal si;
     si.vertModule = createShaderModule(readFile(vertPath));
     si.fragModule = createShaderModule(readFile(fragPath));

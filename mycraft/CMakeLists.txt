@@ -41,10 +41,11 @@ target_link_libraries(mycraft-server PRIVATE game-server)
 add_glsl_shader(shader_mesh mesh)
 add_glsl_shader(shader_sky  sky)
 add_glsl_shader(shader_post post)
+add_glsl_shader(shader_lod  lod)
 
 # 让 mycraft 依赖 shader 编译完成，保证 POST_BUILD 拷 assets 时
 # 源码树里的 assets/shaders/build/*.spv 已经生成
-add_dependencies(mycraft shader_mesh shader_sky shader_post)
+add_dependencies(mycraft shader_mesh shader_sky shader_post shader_lod)
 
 # ============================================================
 # assets 同步：整个 assets 目录（含已编译 shader）拷到输出目录

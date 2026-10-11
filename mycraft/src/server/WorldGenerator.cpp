@@ -258,6 +258,69 @@ int TerrainGenerator::GetHeight(int wx, int wz) const {
     return std::clamp(static_cast<int>(hf), 1, CHUNK_SIZE_Y - 2);
 }
 
+int TerrainGenerator::GetSurfaceY(int wx, int wz) const {
+    constexpr int STEP = 6;
+    constexpr int GX = 20 / STEP + 1;   // 4
+    constexpr int GY = 256 / STEP + 2;  // 44
+    constexpr int GZ = 20 / STEP + 1;   // 4
+
+    int ccx = wx >> 4;
+    int ccz = wz >> 4;
+    int baseX = ccx * CHUNK_SIZE_X;
+    int baseZ = ccz * CHUNK_SIZE_Z;
+
+    // thread_local 缓存：只在跨 chunk 时重建
+    static thread_local float  grid[GX][GY][GZ];
+    static thread_local int    cached_ccx = INT_MIN;
+    static thread_local int    cached_ccz = INT_MIN;
+
+    if (ccx != cached_ccx || ccz != cached_ccz) {
+        cached_ccx = ccx;
+        cached_ccz = ccz;
+        for (int gx = 0; gx < GX; ++gx) {
+            int gwx = baseX - 2 + gx * STEP;
+            for (int gz = 0; gz < GZ; ++gz) {
+                int gwz = baseZ - 2 + gz * STEP;
+                DensityParams p = ComputeParams(gwx, gwz);
+                for (int gy = 0; gy < GY; ++gy) {
+                    grid[gx][gy][gz] = ComputeDensity(gwx, gy * STEP, gwz, p);
+                }
+            }
+        }
+    }
+
+    // 目标列在 grid 里的插值坐标
+    int lx = wx - baseX;
+    int lz = wz - baseZ;
+
+    float fx = (lx + 2) / static_cast<float>(STEP);
+    float fz = (lz + 2) / static_cast<float>(STEP);
+    int x0 = static_cast<int>(fx), x1 = std::min(x0 + 1, GX - 1);
+    int z0 = static_cast<int>(fz), z1 = std::min(z0 + 1, GZ - 1);
+    float tx = fx - x0, tz = fz - z0;
+
+    auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
+
+    // 从上往下扫，找第一个 >0 的 ly（跟 GenerateChunk 完全一致）
+    for (int ly = CHUNK_SIZE_Y - 1; ly >= 0; --ly) {
+        float fy = ly / static_cast<float>(STEP);
+        int y0 = static_cast<int>(fy), y1 = std::min(y0 + 1, GY - 1);
+        float ty = fy - y0;
+
+        float c00 = lerp(grid[x0][y0][z0], grid[x1][y0][z0], tx);
+        float c10 = lerp(grid[x0][y1][z0], grid[x1][y1][z0], tx);
+        float c01 = lerp(grid[x0][y0][z1], grid[x1][y0][z1], tx);
+        float c11 = lerp(grid[x0][y1][z1], grid[x1][y1][z1], tx);
+
+        float c0 = lerp(c00, c10, ty);
+        float c1 = lerp(c01, c11, ty);
+        float d  = lerp(c0, c1, tz);
+
+        if (d > 0.0f) return ly;
+    }
+    return 0;
+}
+
 // ============================================================
 // 阶段 2：密度地形 → 填方块
 // ============================================================
@@ -270,8 +333,7 @@ bool TerrainGenerator::IsSolidAt(int wx, int wy, int wz) const {
     return true;
 }
 
-BlockType TerrainGenerator::ApplySurfaceRule(Biome biome, int wy, int surfaceY,
-                                              bool nearWater) const {
+BlockType TerrainGenerator::ApplySurfaceRule(Biome biome, int wy, int surfaceY, bool nearWater) const {
     if (wy != surfaceY) return BlockType::Dirt;  // 中间层
 
     // 顶层方块

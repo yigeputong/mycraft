@@ -4,7 +4,9 @@
 #include "Protocol.h"
 #include "core/NetworkChannel.h"
 #include "game/GameServer.h"
+#include "game/server/WorldGenerator.h"
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <queue>
@@ -21,7 +23,7 @@ public:
 
     void OnShutdown(Eng::Engine& engine) override;
 private:
-    Eng::client::RenderAPItype m_apiType   = Eng::client::RenderAPItype::VULKAN;
+    Eng::client::RenderAPItype m_apiType   = Eng::client::RenderAPItype::OPENGL;
     bool                       m_useVulkan = false;
 
     // OnStart 拆分
@@ -79,7 +81,7 @@ private:
     std::unordered_map<uint64_t, ClientChunk> m_chunks;
     std::unordered_set<uint64_t>              m_pending;
     std::queue<PendingMesh>                   m_meshQueue;
-    int m_renderDistance    = 16;
+    static constexpr int m_renderDistance = 16;
     int m_lastPlayerChunkX  = INT_MIN;
     int m_lastPlayerChunkZ  = INT_MIN;
     static constexpr int kRequestsPerTick = 1;
@@ -87,6 +89,47 @@ private:
     float m_timeOfDay = 8.0f;                          // 0~24 小时
     static constexpr float kDayLengthSec = 300.0f;     // 一整天 = 5 分钟
     float m_animTime = 0.0f;
+
+    // ==================== LOD ====================
+    std::unique_ptr<game::server::TerrainGenerator> m_lodTerrain;
+    struct LodUnit {
+        int cx = 0, cz = 0;         // LOD 单元坐标（单位 = 32 格）
+        Eng::client::MeshHandle mesh = 0;
+    };
+    std::unordered_map<uint64_t, LodUnit> m_lodUnits;
+    std::unordered_set<uint64_t>          m_lodPending;
+
+    Eng::client::ShaderHandle m_lodShader;
+
+    // worker
+    std::vector<std::thread>      m_lodWorkers;   // ← 从单线程改成线程池
+    std::mutex                    m_lodTaskMutex;
+    std::condition_variable       m_lodTaskCv;
+    std::queue<std::pair<int,int>> m_lodTaskQueue;
+    std::atomic<bool>             m_lodWorkerStop{false};
+
+    struct LodResult {
+        int cx, cz;
+        std::vector<Eng::client::Vertex> vertices;
+        std::vector<uint32_t>            indices;
+    };
+    std::mutex               m_lodResultMutex;
+    std::queue<LodResult>    m_lodResultQueue;
+
+    static constexpr int kLodUnitChunks = 2;                // 2×2 chunk = 32×32 格
+    static constexpr int kLodUnitSize   = kLodUnitChunks * CHUNK_SIZE_X;
+    static constexpr int kLodInnerR     = m_renderDistance; // 内半径（chunk 数），内圈走原生
+    static constexpr int kLodOuterR     = 32;               // 外半径
+
+    void StartLodWorker(uint32_t seed);
+    void LodWorkerLoop(uint32_t seed);
+    void BuildLodUnit(const game::server::TerrainGenerator& terrain,
+                    int ucx, int ucz,
+                    std::vector<Eng::client::Vertex>& outV,
+                    std::vector<uint32_t>& outI) const;
+    void StopLodWorker();
+    void UpdateLodStreaming();
+    void DrainLodResults();
 
     // ==================== 相机 ====================
     glm::vec3 cameraPos{0.0f, 40.0f, 0.0f};

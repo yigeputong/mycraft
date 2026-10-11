@@ -123,6 +123,12 @@ bool GameServer::Start(uint16_t port) {
             m_server.SendTo(id, w.GetBuffer());
 
             logInfo(m_logger, "[Server] Player " << id << " joined");
+            // 发 seed
+            Eng::MessageWriter w2;
+            w2.Write(static_cast<uint8_t>(net::MessageType::ServerInfo));
+            w2.WriteU32BE(m_worldSeed);
+            w2.WriteVec3(m_spawnPos);
+            m_server.SendTo(id, w2.GetBuffer());
         });
 
         m_server.SetMessageCallback([this](int id, const std::vector<uint8_t>& data) {
@@ -163,11 +169,11 @@ void GameServer::Run() {
     float accumulator = 0.0f;
 
     logInfo(m_logger, "[Server] Server Run");
-    uint32_t seed = static_cast<uint32_t>(std::time(nullptr)) ^ static_cast<uint32_t>(std::clock());
-    m_terrain = std::make_unique<TerrainGenerator>(seed);
-    logInfo(m_logger, "[Server] World Seed = " << seed);
+    m_worldSeed = static_cast<uint32_t>(std::time(nullptr)) ^ static_cast<uint32_t>(std::clock());
+    m_terrain = std::make_unique<TerrainGenerator>(m_worldSeed);
+    logInfo(m_logger, "[Server] World Seed = " << m_worldSeed);
 
-    StartWorkers(seed);
+    StartWorkers(m_worldSeed);
 
     while (m_running.load()) {
         m_server.PollAccept();

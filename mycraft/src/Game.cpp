@@ -245,8 +245,9 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
 }
 
 void MyGame::SetupShaders() {
-    m_cubeShader = CreateShaderByName("mesh", /*isSky=*/false);
-    m_skyShader  = CreateShaderByName("sky",  /*isSky=*/true);
+    m_cubeShader = CreateShaderByName("mesh", false);
+    m_skyShader  = CreateShaderByName("sky",  true);
+    m_lodShader = CreateShaderByName("lod", false);
 }
 
 Eng::client::ShaderHandle MyGame::CreateShaderByName(const std::string& name, bool isSky) {
@@ -405,6 +406,8 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     }
 
     UpdateChunkStreaming();
+    UpdateLodStreaming();
+    DrainLodResults();
 
     if (!m_meshQueue.empty()) {
         auto pm = m_meshQueue.front();
@@ -456,6 +459,16 @@ void MyGame::OnRender(Eng::Engine& engine) {
             renderer->DrawMesh(cc.mesh, m_cubeShader, mat);
         }
 
+        // ---- 远景 LOD ----
+        renderer->SetModelMatrix(glm::mat4(1.0f));
+        for (auto& [key, u] : m_lodUnits) {
+            if (u.mesh == 0) continue;
+            Eng::client::Material lodMat;
+            lodMat.diffuse = m_atlasTexture;   // 占位，shader 不采样，但 DrawMesh 需要非零 handle
+            renderer->DrawMesh(u.mesh, m_lodShader, lodMat);
+        }
+
+        // ---- 实体 ---- 
         Eng::client::Material itemMat;
         itemMat.diffuse = m_atlasTexture;
 
@@ -732,25 +745,28 @@ void MyGame::DrawUI(Eng::Engine& engine) {
 }
 
 void MyGame::ReturnToMainMenu() {
-    // 0. 等 GPU 不再引用要销毁的资源
     if (renderer) renderer->WaitIdle();
-    
-    // 1. 断网
-    m_client.Disconnect();
 
-    // 2. 停本地服务器（join 线程 + 释放）
+    // 1. 断网 / 停服务器
+    m_client.Disconnect();
     if (m_server) {
         m_server->Stop();
         m_server.reset();
     }
 
-    // 3. 销毁客户端 GPU 资源
+    // 2. 先停 LOD worker（它有自己的 terrain，但得 join 完）
+    StopLodWorker();
+
+    // 3. 销毁 GPU 资源
     if (renderer) {
         for (auto& [key, cc] : m_chunks) {
             if (cc.mesh) renderer->DestroyMesh(cc.mesh);
         }
         for (auto& [type, mesh] : m_itemMeshCache) {
             if (mesh) renderer->DestroyMesh(mesh);
+        }
+        for (auto& [key, u] : m_lodUnits) {
+            if (u.mesh != 0) renderer->DestroyMesh(u.mesh);
         }
     }
     m_chunks.clear();
@@ -761,7 +777,21 @@ void MyGame::ReturnToMainMenu() {
     m_otherPlayers.clear();
     m_myClientId = 0;
 
-    // 4. 重置玩家 / 相机
+    m_lodUnits.clear();
+    m_lodPending.clear();
+    {
+        std::lock_guard lk(m_lodResultMutex);
+        while (!m_lodResultQueue.empty()) m_lodResultQueue.pop();
+    }
+    {
+        std::lock_guard lk(m_lodTaskMutex);
+        while (!m_lodTaskQueue.empty()) m_lodTaskQueue.pop();
+    }
+
+    // 4. 最后释放 terrain
+    m_lodTerrain.reset();
+
+    // 5. 重置玩家 / 相机
     cameraPos   = glm::vec3(0.0f, 40.0f, 0.0f);
     cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
     yaw   = -90.0f;
@@ -771,7 +801,6 @@ void MyGame::ReturnToMainMenu() {
     m_lastPlayerChunkX = INT_MIN;
     m_lastPlayerChunkZ = INT_MIN;
 
-    // 5. 关暂停菜单，切回主菜单（OnUpdate 会自动放开相对模式）
     m_menuOpen = false;
     m_state    = GameState::MainMenu;
     m_statusText.clear();
@@ -780,24 +809,25 @@ void MyGame::ReturnToMainMenu() {
 }
 
 void MyGame::OnShutdown(Eng::Engine& engine) {
-    // 网络
     m_client.Disconnect();
-    if (m_server) {
-        m_server->Stop();
-        m_server.reset();
-    }
+    if (m_server) { m_server->Stop(); m_server.reset(); }
 
-    // 渲染器资源
     if (renderer) {
+        StopLodWorker();                            // 先停
+        for (auto& [key, u] : m_lodUnits) {
+            if (u.mesh != 0) renderer->DestroyMesh(u.mesh);
+        }
+        m_lodUnits.clear();
+        m_lodPending.clear();
+        m_lodTerrain.reset();                       // 后释放
+
         if (m_cubeShader) renderer->DestroyShader(m_cubeShader);
         if (m_skyShader)  renderer->DestroyShader(m_skyShader);
+        if (m_lodShader)  renderer->DestroyShader(m_lodShader);   // ← 顺手补上
         renderer->ShutdownImGuiBackend();
     }
 
-    // 窗口
-    if (winMgr && m_win) {
-        winMgr->DestroyWindow(m_win);
-    }
+    if (winMgr && m_win) winMgr->DestroyWindow(m_win);
 }
 
 bool MyGame::GetInput(float dt) {
@@ -1080,6 +1110,15 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
                     m_itemEntities.erase(it);
                 }
             }
+            break;
+        }
+        case game::net::MessageType::ServerInfo: {
+            uint32_t seed = r.ReadU32BE();
+            glm::vec3 spawn = r.ReadVec3();
+            m_lodTerrain = std::make_unique<game::server::TerrainGenerator>(seed);
+            StartLodWorker(seed);
+            logInfo(logger, "[LOD] Received world seed: " << seed
+                    << " spawn: " << spawn.x << "," << spawn.y << "," << spawn.z);
             break;
         }
         case game::net::MessageType::PlayerInput:
@@ -1428,6 +1467,245 @@ void MyGame::AddToInventory(BlockType type, int count) {
     }
 
     // 3. 背包满 → 丢弃（暂时）
+}
+
+// ============================================================
+// LOD worker
+// ============================================================
+
+void MyGame::StartLodWorker(uint32_t seed) {
+    unsigned hw = std::thread::hardware_concurrency();
+    unsigned n  = std::clamp(hw > 2 ? hw - 2 : 2u, 2u, 6u);   // 别太多，主线程也要跑
+
+    m_lodWorkerStop = false;
+    for (unsigned i = 0; i < n; ++i) {
+        m_lodWorkers.emplace_back([this, seed] { LodWorkerLoop(seed); });
+    }
+    logInfo(logger, "[LOD] Started " << n << " workers");
+}
+
+void MyGame::StopLodWorker() {
+    if (m_lodWorkers.empty()) return;
+
+    {
+        std::lock_guard lk(m_lodTaskMutex);
+        m_lodWorkerStop = true;
+        while (!m_lodTaskQueue.empty()) m_lodTaskQueue.pop();   // 清空，别让 worker 还跑
+    }
+    m_lodTaskCv.notify_all();
+    for (auto& t : m_lodWorkers) {
+        if (t.joinable()) t.join();
+    }
+    m_lodWorkers.clear();
+}
+
+void MyGame::LodWorkerLoop(uint32_t seed) {
+    game::server::TerrainGenerator terrain(seed);
+
+    while (true) {
+        std::pair<int,int> task;
+        {
+            std::unique_lock lk(m_lodTaskMutex);
+            m_lodTaskCv.wait(lk, [this] {
+                return m_lodWorkerStop.load() || !m_lodTaskQueue.empty();
+            });
+            if (m_lodWorkerStop.load()) return;
+            task = m_lodTaskQueue.front();
+            m_lodTaskQueue.pop();
+        }
+
+        LodResult r;
+        r.cx = task.first;
+        r.cz = task.second;
+        BuildLodUnit(terrain, r.cx, r.cz, r.vertices, r.indices);
+
+        {
+            std::lock_guard lk(m_lodResultMutex);
+            m_lodResultQueue.push(std::move(r));
+        }
+    }
+}
+
+// ============================================================
+// 构建一个 LOD 单元：33×33 顶点网格，每格一个水平 quad
+// ============================================================
+void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
+                          int ucx, int ucz,
+                          std::vector<Eng::client::Vertex>& outV,
+                          std::vector<uint32_t>& outI) const {
+    const int baseX = ucx * kLodUnitSize;
+    const int baseZ = ucz * kLodUnitSize;
+    constexpr int N = kLodUnitSize;
+    constexpr int VN = N + 1;
+
+    outV.clear();
+    outI.clear();
+    outV.reserve(VN * VN);
+    outI.reserve(N * N * 6);
+
+    // biome → 图集 tile 索引（用顶部块）
+    auto tileForBiome = [](game::server::Biome bb) -> int {
+        using B = game::server::Biome;
+        switch (bb) {
+            case B::Ocean:    return 5;   // water
+            case B::Beach:
+            case B::Desert:   return 4;   // sand
+            case B::Snow:     return 6;   // snow_top
+            case B::Mountain: return 0;   // stone
+            case B::Forest:
+            case B::Plains: 
+            default:          return 1;   // grass_top
+        }
+    };
+
+    // ---- 第一步：填顶点 ----
+    for (int j = 0; j <= N; ++j) {
+        for (int i = 0; i <= N; ++i) {
+            int wx = baseX + i;
+            int wz = baseZ + j;
+            int h  = terrain.GetSurfaceY(wx, wz);
+            game::server::Biome b = terrain.GetBiome(wx, wz);
+
+            // 海平面以下 → 抬到 SEA_LEVEL，形成平面水面
+            float y = std::max<float>((float)(h + 1), (float)SEA_LEVEL);
+            // 水下格子 → 强制用 water tile
+            if (h < SEA_LEVEL) b = game::server::Biome::Ocean;
+
+            int tile = tileForBiome(b);
+            int tileRow = tile / ATLAS_COLS;
+            int tileCol = tile % ATLAS_COLS;
+            float u = (tileCol + 0.5f) * TILE_UV;
+            float v = (tileRow + 0.5f) * TILE_UV;
+
+            Eng::client::Vertex vert;
+            vert.position = { (float)wx, y, (float)wz };
+            vert.normal   = { 0.0f, 1.0f, 0.0f };
+            vert.uv       = { u, v };
+            vert.ao       = 1.0f;
+            outV.push_back(vert);
+        }
+    }
+
+    // ---- 第二步：生成索引（此时 outV 已满）----
+    for (int j = 0; j < N; ++j) {
+        for (int i = 0; i < N; ++i) {
+            uint32_t v0 = j * VN + i;
+            uint32_t v1 = j * VN + (i + 1);
+            uint32_t v2 = (j + 1) * VN + (i + 1);
+            uint32_t v3 = (j + 1) * VN + i;
+
+            // 4 个顶点的高度
+            int h00 = (int)outV[v0].position.y;
+            int h10 = (int)outV[v1].position.y;
+            int h01 = (int)outV[v3].position.y;
+            int h11 = (int)outV[v2].position.y;
+
+            // 4 个都低于海平面 → 不画
+            if (h00 < SEA_LEVEL && h10 < SEA_LEVEL &&
+                h01 < SEA_LEVEL && h11 < SEA_LEVEL) continue;
+
+            outI.push_back(v0); outI.push_back(v3); outI.push_back(v2);
+            outI.push_back(v0); outI.push_back(v2); outI.push_back(v1);
+        }
+    }
+}
+
+// ============================================================
+// 每帧：根据相机位置更新 LOD 单元
+// ============================================================
+void MyGame::UpdateLodStreaming() {
+    if (!m_lodTerrain) return;
+
+    int pcx = static_cast<int>(std::floor(cameraPos.x)) >> 4;
+    int pcz = static_cast<int>(std::floor(cameraPos.z)) >> 4;
+    int pu  = static_cast<int>(std::floor(pcx / 2.0f));
+    int pv  = static_cast<int>(std::floor(pcz / 2.0f));
+
+    const int R     = kLodOuterR / kLodUnitChunks;      // 外半径 = 16
+    const int INNER = kLodInnerR / kLodUnitChunks;      // 内半径 = 8
+
+    // 卸载：超出外圈，或完全落在原生渲染范围内
+    for (auto it = m_lodUnits.begin(); it != m_lodUnits.end(); ) {
+        auto& u = it->second;
+        int du = std::abs(u.cx - pu);
+        int dv = std::abs(u.cz - pv);
+
+        bool tooFar       = (du > R + 1) || (dv > R + 1);
+        bool insideNative = (du < INNER) && (dv < INNER);   // ★ 新增
+
+        if (tooFar || insideNative) {
+            if (u.mesh != 0) renderer->DestroyMesh(u.mesh);
+            it = m_lodUnits.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // 收集缺失的（内圈跳过，外圈排队）
+    struct Need { int cx, cz, d2; };
+    std::vector<Need> need;
+    for (int dv = -R; dv <= R; ++dv) {
+        for (int du = -R; du <= R; ++du) {
+            if (std::abs(du) < INNER && std::abs(dv) < INNER) continue;
+            int ucx = pu + du;
+            int ucz = pv + dv;
+            uint64_t key = ChunkKey(ucx, ucz);
+            if (m_lodUnits.count(key)) continue;
+            if (m_lodPending.count(key)) continue;
+            need.push_back({ucx, ucz, du*du + dv*dv});
+        }
+    }
+
+    std::sort(need.begin(), need.end(), [](const Need& a, const Need& b) { return a.d2 < b.d2; });
+
+    // 每帧最多排 K 个
+    constexpr int K = 4;
+    int sent = 0;
+    for (const auto& n : need) {
+        if (sent++ >= K) break;
+        uint64_t key = ChunkKey(n.cx, n.cz);
+        m_lodPending.insert(key);
+        {
+            std::lock_guard lk(m_lodTaskMutex);
+            m_lodTaskQueue.push({n.cx, n.cz});
+        }
+        m_lodTaskCv.notify_all();
+    }
+}
+
+// ============================================================
+// 主线程收结果，创建 GPU mesh
+// ============================================================
+void MyGame::DrainLodResults() {
+    constexpr int K = 4;   // 每帧最多上传 K 个 mesh
+    int done = 0;
+    for (;;) {
+        LodResult r;
+        {
+            std::lock_guard lk(m_lodResultMutex);
+            if (m_lodResultQueue.empty() || done >= K) break;
+            r = std::move(m_lodResultQueue.front());
+            m_lodResultQueue.pop();
+        }
+
+        uint64_t key = ChunkKey(r.cx, r.cz);
+        m_lodPending.erase(key);
+
+        if (r.vertices.empty()) continue;
+
+        Eng::client::MeshData data;
+        data.vertices = std::move(r.vertices);
+        data.indices  = std::move(r.indices);
+        auto mesh = renderer->CreateMesh(data);
+
+        LodUnit u;
+        u.cx = r.cx;
+        u.cz = r.cz;
+        u.mesh = mesh;
+        m_lodUnits[key] = u;
+
+        ++done;
+    }
 }
 
 }
