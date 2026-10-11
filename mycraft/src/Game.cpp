@@ -1535,77 +1535,135 @@ void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                           std::vector<uint32_t>& outI) const {
     const int baseX = ucx * kLodUnitSize;
     const int baseZ = ucz * kLodUnitSize;
-    constexpr int N = kLodUnitSize;
-    constexpr int VN = N + 1;
+    constexpr int N  = kLodUnitSize;
+    constexpr int NP = N + 1;
 
     outV.clear();
     outI.clear();
-    outV.reserve(VN * VN);
-    outI.reserve(N * N * 6);
+    outV.reserve(N * N * 12);   // 顶 4 + 侧壁最多 8
+    outI.reserve(N * N * 18);
 
-    // biome → 图集 tile 索引（用顶部块）
     auto tileForBiome = [](game::server::Biome bb) -> int {
         using B = game::server::Biome;
         switch (bb) {
-            case B::Ocean:    return 5;   // water
-            case B::Beach:
-            case B::Desert:   return 4;   // sand
-            case B::Snow:     return 6;   // snow_top
-            case B::Mountain: return 0;   // stone
-            case B::Forest:
-            case B::Plains: 
-            default:          return 1;   // grass_top
+            case B::Ocean:    return 5;
+            case B::Beach:    return 4;
+            case B::Desert:   return 4;
+            case B::Snow:     return 6;
+            case B::Mountain: return 0;
+            case B::Forest:   return 1;
+            case B::Plains:   return 1;
+            default:          return 1;
         }
     };
 
-    // ---- 第一步：填顶点 ----
-    for (int j = 0; j <= N; ++j) {
-        for (int i = 0; i <= N; ++i) {
+    // 采样 (N+1)×(N+1) 格点
+    static thread_local int     hP[NP][NP];
+    static thread_local uint8_t bP[NP][NP];
+    for (int j = 0; j < NP; ++j) {
+        for (int i = 0; i < NP; ++i) {
             int wx = baseX + i;
             int wz = baseZ + j;
-            int h  = terrain.GetSurfaceY(wx, wz);
-            game::server::Biome b = terrain.GetBiome(wx, wz);
+            hP[j][i] = terrain.GetSurfaceY(wx, wz);
+            bP[j][i] = (uint8_t)terrain.GetBiome(wx, wz);
+        }
+    }
 
-            // 海平面以下 → 抬到 SEA_LEVEL，形成平面水面
-            float y = std::max<float>((float)(h + 1), (float)SEA_LEVEL);
-            // 水下格子 → 强制用 water tile
-            if (h < SEA_LEVEL) b = game::server::Biome::Ocean;
+    // 格子高度 / tile
+    auto cellY = [&](int i, int j) -> float {
+        int h = hP[j][i];
+        return (float)std::max(h + 1, SEA_LEVEL);
+    };
+    auto cellTile = [&](int i, int j) -> int {
+        int h = hP[j][i];
+        auto b = (game::server::Biome)bP[j][i];
+        if (h < SEA_LEVEL) b = game::server::Biome::Ocean;
+        return tileForBiome(b);
+    };
 
-            int tile = tileForBiome(b);
+    for (int j = 0; j < N; ++j) {
+        for (int i = 0; i < N; ++i) {
+            float ySelf = cellY(i, j);
+            int   tile  = cellTile(i, j);
+
             int tileRow = tile / ATLAS_COLS;
             int tileCol = tile % ATLAS_COLS;
             float u = (tileCol + 0.5f) * TILE_UV;
             float v = (tileRow + 0.5f) * TILE_UV;
 
-            Eng::client::Vertex vert;
-            vert.position = { (float)wx, y, (float)wz };
-            vert.normal   = { 0.0f, 1.0f, 0.0f };
-            vert.uv       = { u, v };
-            vert.ao       = 1.0f;
-            outV.push_back(vert);
-        }
-    }
+            float x0 = (float)(baseX + i);
+            float x1 = (float)(baseX + i + 1);
+            float z0 = (float)(baseZ + j);
+            float z1 = (float)(baseZ + j + 1);
 
-    // ---- 第二步：生成索引（此时 outV 已满）----
-    for (int j = 0; j < N; ++j) {
-        for (int i = 0; i < N; ++i) {
-            uint32_t v0 = j * VN + i;
-            uint32_t v1 = j * VN + (i + 1);
-            uint32_t v2 = (j + 1) * VN + (i + 1);
-            uint32_t v3 = (j + 1) * VN + i;
+            // ---- 顶面 ----
+            {
+                uint32_t base = (uint32_t)outV.size();
+                Eng::client::Vertex vt;
+                vt.normal = { 0.0f, 1.0f, 0.0f };
+                vt.uv = { u, v };
+                vt.ao = 1.0f;
 
-            // 4 个顶点的高度
-            int h00 = (int)outV[v0].position.y;
-            int h10 = (int)outV[v1].position.y;
-            int h01 = (int)outV[v3].position.y;
-            int h11 = (int)outV[v2].position.y;
+                vt.position = { x0, ySelf, z0 }; outV.push_back(vt);
+                vt.position = { x1, ySelf, z0 }; outV.push_back(vt);
+                vt.position = { x1, ySelf, z1 }; outV.push_back(vt);
+                vt.position = { x0, ySelf, z1 }; outV.push_back(vt);
 
-            // 4 个都低于海平面 → 不画
-            if (h00 < SEA_LEVEL && h10 < SEA_LEVEL &&
-                h01 < SEA_LEVEL && h11 < SEA_LEVEL) continue;
+                outI.push_back(base + 0); outI.push_back(base + 3); outI.push_back(base + 2);
+                outI.push_back(base + 0); outI.push_back(base + 2); outI.push_back(base + 1);
+            }
 
-            outI.push_back(v0); outI.push_back(v3); outI.push_back(v2);
-            outI.push_back(v0); outI.push_back(v2); outI.push_back(v1);
+            // ---- 右侧壁 (+X)：右邻居更低 ----
+            if (i + 1 < N) {
+                float yNb = cellY(i + 1, j);
+                if (ySelf > yNb + 0.01f) {
+                    int nbTile = cellTile(i + 1, j);
+                    int nbR = nbTile / ATLAS_COLS;
+                    int nbC = nbTile % ATLAS_COLS;
+                    float nu = (nbC + 0.5f) * TILE_UV;
+                    float nv = (nbR + 0.5f) * TILE_UV;
+
+                    uint32_t base = (uint32_t)outV.size();
+                    Eng::client::Vertex vs;
+                    vs.normal = { 1.0f, 0.0f, 0.0f };
+                    vs.uv = { nu, nv };
+                    vs.ao = 1.0f;
+
+                    vs.position = { x1, yNb,   z0 }; outV.push_back(vs);
+                    vs.position = { x1, ySelf, z0 }; outV.push_back(vs);
+                    vs.position = { x1, ySelf, z1 }; outV.push_back(vs);
+                    vs.position = { x1, yNb,   z1 }; outV.push_back(vs);
+
+                    outI.push_back(base + 0); outI.push_back(base + 1); outI.push_back(base + 2);
+                    outI.push_back(base + 0); outI.push_back(base + 2); outI.push_back(base + 3);
+                }
+            }
+
+            // ---- 上侧壁 (+Z)：上邻居更低 ----
+            if (j + 1 < N) {
+                float yNb = cellY(i, j + 1);
+                if (ySelf > yNb + 0.01f) {
+                    int nbTile = cellTile(i, j + 1);
+                    int nbR = nbTile / ATLAS_COLS;
+                    int nbC = nbTile % ATLAS_COLS;
+                    float nu = (nbC + 0.5f) * TILE_UV;
+                    float nv = (nbR + 0.5f) * TILE_UV;
+
+                    uint32_t base = (uint32_t)outV.size();
+                    Eng::client::Vertex vs;
+                    vs.normal = { 0.0f, 0.0f, 1.0f };
+                    vs.uv = { nu, nv };
+                    vs.ao = 1.0f;
+
+                    vs.position = { x0, yNb,   z1 }; outV.push_back(vs);
+                    vs.position = { x1, yNb,   z1 }; outV.push_back(vs);
+                    vs.position = { x1, ySelf, z1 }; outV.push_back(vs);
+                    vs.position = { x0, ySelf, z1 }; outV.push_back(vs);
+
+                    outI.push_back(base + 0); outI.push_back(base + 1); outI.push_back(base + 2);
+                    outI.push_back(base + 0); outI.push_back(base + 2); outI.push_back(base + 3);
+                }
+            }
         }
     }
 }
