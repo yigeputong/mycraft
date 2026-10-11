@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <string>
 #include <glm/glm.hpp>
 
 namespace game::net {
@@ -8,6 +9,7 @@ enum class MessageType : uint8_t {
     // 客户端 → 服务端
     PlayerInput     = 0x10,
     ChunkRequest    = 0x11,
+    ClientHello     = 0x12, // [u8 nameLen][name bytes]
 
     // 服务端 → 客户端
     PlayerId        = 0x20,
@@ -32,10 +34,11 @@ struct PlayerInput {
 };
 
 struct PlayerState {
-    uint32_t  id = 0;
-    glm::vec3 position{0.0f};
-    float     yaw = 0.0f;
-    float     pitch = 0.0f;
+    uint32_t    id = 0;
+    std::string name;
+    glm::vec3   position{0.0f};
+    float       yaw = 0.0f;
+    float       pitch = 0.0f;
 };
 
 constexpr float PLAYER_MOVE_SPEED = 8.0f;

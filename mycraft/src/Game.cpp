@@ -136,15 +136,14 @@ namespace game {
 // ============================================================
 
 bool MyGame::StartLocalServer() {
-    if (m_server) return true;   // 已经在跑
-
+    if (m_server) return true;
     m_server = std::make_unique<game::server::GameServer>();
-    if (!m_server->Start(25565)) {
+    if (!m_server->Start(25565, "./saves/world")) {
         logError(logger, "[Game] Failed to start local server");
         m_server.reset();
         return false;
     }
-    logInfo(logger, "[Game] Local server started on port 25565");
+    logInfo(logger, "[Game] Local server started on port 25565 (save: ./saves/world)");
     return true;
 }
 
@@ -154,6 +153,15 @@ bool MyGame::ConnectToServer(const std::string& host, uint16_t port) {
         return false;
     }
     logInfo(logger, "[Game] Connected to " << host << ":" << port);
+
+    // ★ 发 ClientHello
+    Eng::MessageWriter w;
+    w.Write(static_cast<uint8_t>(game::net::MessageType::ClientHello));
+    uint8_t nlen = (uint8_t)std::min<size_t>(strlen(m_nameBuffer), 32);
+    w.Write<uint8_t>(nlen);
+    w.WriteBytes(reinterpret_cast<const uint8_t*>(m_nameBuffer), nlen);
+    m_client.Send(w.GetBuffer());
+
     return true;
 }
 
@@ -382,8 +390,9 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         if (e.pickingUp) {
             e.pickupT += deltaTime / PICKUP_TIME;
             if (e.pickupT >= 1.0f) {
-                // 动画结束 → 进背包 + 删除
-                AddToInventory(e.itemType, 1);
+                if (e.pickerId == m_myClientId) {       // 只有捡的人进背包
+                    AddToInventory(e.itemType, 1);
+                }
                 it = m_itemEntities.erase(it);
                 continue;
             }
@@ -534,6 +543,9 @@ void MyGame::DrawMainMenu(Eng::Engine& engine) {
         ImGui::TextUnformatted("Mycraft");
         ImGui::SetWindowFontScale(1.4f);
         ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::InputText("Name", m_nameBuffer, sizeof(m_nameBuffer));
         ImGui::Spacing();
 
         if (ImGui::Button("Single Player", ImVec2(-1, 50))) {
@@ -981,7 +993,12 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
 
             for (uint32_t i = 0; i < count; ++i) {
                 game::net::PlayerState ps;
-                ps.id       = r.ReadU32BE();
+                ps.id = r.ReadU32BE();
+
+                uint8_t nlen = r.Read<uint8_t>();
+                auto nbytes = r.ReadBytes(nlen);
+                ps.name.assign(nbytes.begin(), nbytes.end());
+
                 ps.position = r.ReadVec3();
                 ps.yaw      = r.Read<float>();
                 ps.pitch    = r.Read<float>();
@@ -996,7 +1013,6 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
                         m_positionError = diff;
                     }
                 } else {
-                    // 其他玩家，存入玩家表（渲染时用）
                     m_otherPlayers[ps.id] = ps;
                 }
             }
@@ -1119,18 +1135,18 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             break;
         }
         case game::net::MessageType::EntityDestroy: {
-            uint32_t id = r.Read<uint32_t>();
-            uint8_t reason = r.Read<uint8_t>();
+            uint32_t id       = r.Read<uint32_t>();
+            uint8_t  reason   = r.Read<uint8_t>();
+            uint32_t pickerId = r.ReadU32BE();
 
             auto it = m_itemEntities.find(id);
             if (it != m_itemEntities.end()) {
                 if (reason == 1) {
-                    // 被捡走 → 启动动画，不立刻删
                     it->second.pickingUp   = true;
                     it->second.pickupT     = 0.0f;
                     it->second.pickupStart = it->second.renderPos;
+                    it->second.pickerId    = pickerId;
                 } else {
-                    // 超时消失 → 直接删
                     m_itemEntities.erase(it);
                 }
             }

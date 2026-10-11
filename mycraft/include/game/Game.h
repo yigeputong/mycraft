@@ -67,7 +67,7 @@ private:
     Eng::NetworkChannel  m_client;
     std::unique_ptr<game::server::GameServer> m_server = nullptr;
     uint32_t m_myClientId = 0;
-    std::vector<net::PlayerState> m_otherPlayers;
+    std::unordered_map<uint32_t, net::PlayerState> m_otherPlayers;
 
     // ==================== 世界 ====================
     struct ClientChunk {
@@ -182,6 +182,7 @@ private:
 
     void  UpdateFrustum(const glm::mat4& vp);
     bool  AabbInFrustum(const glm::vec3& mn, const glm::vec3& mx) const;
+    char m_nameBuffer[32] = "player";
 
     // ==================== Hotbar ====================
     static constexpr int kHotbarSize = 4;
@@ -205,6 +206,7 @@ private:
         bool      pickingUp   = false;
         float     pickupT     = 0.0f;
         glm::vec3 pickupStart{0.0f};
+        uint32_t  pickerId    = 0;
     };
     std::unordered_map<uint32_t, ClientItemEntity> m_itemEntities;
     std::unordered_map<BlockType, Eng::client::MeshHandle> m_itemMeshCache;

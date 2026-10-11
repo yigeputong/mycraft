@@ -84,6 +84,15 @@ void GameServer::DrainChunkResults() {
             m_resultQueue.pop();
         }
 
+        auto cit = m_pendingChanges.find(r.key);
+        if (cit != m_pendingChanges.end()) {
+            for (const auto& c : cit->second) {
+                int lx = c.x & 15;
+                int lz = c.z & 15;
+                ChunkSet(r.chunk, lx, c.y, lz, (BlockType)c.block);
+            }
+        }
+
         // 存表
         m_chunks.emplace(r.key, std::move(r.chunk));
         m_inFlight.erase(r.key);
@@ -100,8 +109,35 @@ void GameServer::DrainChunkResults() {
     }
 }
 
-bool GameServer::Start(uint16_t port) {
+bool GameServer::Start(uint16_t port, const std::string& saveDir) {
     if (m_running.load()) return false;
+
+    // ---- 存档 ----
+    m_save = std::make_unique<WorldSave>(saveDir);
+
+    uint32_t seed = 0;
+    glm::vec3 spawn(0.0f, 256.0f, 0.0f);
+    if (m_save->LoadLevel(seed, spawn)) {
+        m_worldSeed = seed;
+        m_spawnPos  = spawn;
+        logInfo(m_logger, "[Server] Loaded world, seed=" << seed);
+    } else {
+        seed = static_cast<uint32_t>(std::time(nullptr))
+            ^ static_cast<uint32_t>(std::clock());
+        m_worldSeed = seed;
+        m_spawnPos  = spawn;
+        m_save->SaveLevel(seed, spawn);
+        logInfo(m_logger, "[Server] New world, seed=" << seed);
+    }
+
+    // 载入改动集
+    auto changes = m_save->LoadChanges();
+    for (auto& c : changes) {
+        uint64_t k = ChunkKey(c.x >> 4, c.z >> 4);
+        m_pendingChanges[k].push_back(c);
+    }
+    logInfo(m_logger, "[Server] Loaded " << changes.size() << " block changes");
+
     m_running.store(true);
     m_thread = std::thread([this, port]() {
         // 服务端线程里初始化监听
@@ -116,19 +152,33 @@ bool GameServer::Start(uint16_t port) {
             p.id = (uint32_t)id;
             m_players.push_back(p);
 
-            // 只发一条"你的 ID"给这个客户端
-            Eng::MessageWriter w;
-            w.Write(static_cast<uint8_t>(net::MessageType::PlayerId));   // YourId
-            w.WriteU32BE((uint32_t)id);
-            m_server.SendTo(id, w.GetBuffer());
+            // 你的 ID
+            {
+                Eng::MessageWriter w;
+                w.Write(static_cast<uint8_t>(net::MessageType::PlayerId));
+                w.WriteU32BE((uint32_t)id);
+                m_server.SendTo(id, w.GetBuffer());
+            }
+            // seed
+            {
+                Eng::MessageWriter w;
+                w.Write(static_cast<uint8_t>(net::MessageType::ServerInfo));
+                w.WriteU32BE(m_worldSeed);
+                w.WriteVec3(m_spawnPos);
+                m_server.SendTo(id, w.GetBuffer());
+            }
+
+            // ★ 补发所有现有掉落物
+            for (auto& [eid, e] : m_entities) {
+                Eng::MessageWriter w;
+                w.Write(static_cast<uint8_t>(net::MessageType::EntitySpawn));
+                w.Write<uint32_t>(eid);
+                w.WriteVec3(e.position);
+                w.Write<uint16_t>((uint16_t)e.itemType);
+                m_server.SendTo(id, w.GetBuffer());
+            }
 
             logInfo(m_logger, "[Server] Player " << id << " joined");
-            // 发 seed
-            Eng::MessageWriter w2;
-            w2.Write(static_cast<uint8_t>(net::MessageType::ServerInfo));
-            w2.WriteU32BE(m_worldSeed);
-            w2.WriteVec3(m_spawnPos);
-            m_server.SendTo(id, w2.GetBuffer());
         });
 
         m_server.SetMessageCallback([this](int id, const std::vector<uint8_t>& data) {
@@ -136,7 +186,14 @@ bool GameServer::Start(uint16_t port) {
         });
 
         m_server.SetDisconnectCallback([this](int id) {
-            // 玩家
+            for (auto& p : m_players) {
+                if (p.id == (uint32_t)id) {
+                    if (m_save && !p.name.empty()) {
+                        m_save->SavePlayer(p.name, p.position, p.yaw, p.pitch);
+                    }
+                    break;
+                }
+            }
             m_players.erase(std::remove_if(m_players.begin(), m_players.end(),
                 [id](const ServerPlayer& p) { return p.id == (uint32_t)id; }), m_players.end());
 
@@ -161,6 +218,28 @@ void GameServer::Stop() {
     m_running.store(false);
     if (m_thread.joinable()) m_thread.join();
     m_server.Shutdown();
+
+    for (auto& p : m_players) {
+        if (m_save && !p.name.empty()) {
+            m_save->SavePlayer(p.name, p.position, p.yaw, p.pitch);
+        }
+    }
+
+    if (m_save && m_dirty) {
+        std::vector<BlockChange> flat;
+        for (auto& [k, v] : m_pendingChanges)
+            flat.insert(flat.end(), v.begin(), v.end());
+        m_save->SaveChanges(flat);
+        m_dirty = false;
+    }
+    if (m_save) {
+        for (auto& p : m_players) {
+            if (m_save && !p.name.empty()) {
+                m_save->SavePlayer(p.name, p.position, p.yaw, p.pitch);
+            }
+        }
+    }
+    logInfo(m_logger, "[Server] Stopped");
 }
 
 void GameServer::Run() {
@@ -169,7 +248,6 @@ void GameServer::Run() {
     float accumulator = 0.0f;
 
     logInfo(m_logger, "[Server] Server Run");
-    m_worldSeed = static_cast<uint32_t>(std::time(nullptr)) ^ static_cast<uint32_t>(std::clock());
     m_terrain = std::make_unique<TerrainGenerator>(m_worldSeed);
     logInfo(m_logger, "[Server] World Seed = " << m_worldSeed);
 
@@ -215,6 +293,15 @@ void GameServer::Run() {
 
             TickWorld(TICK_INTERVAL);
             TickEntities(TICK_INTERVAL);
+            m_saveAccum += TICK_INTERVAL;
+            if (m_dirty && m_saveAccum >= kSaveIntervalSec) {
+                std::vector<BlockChange> flat;
+                for (auto& [k, v] : m_pendingChanges)
+                    flat.insert(flat.end(), v.begin(), v.end());
+                m_save->SaveChanges(flat);
+                m_dirty = false;
+                m_saveAccum = 0.0f;
+            }
             BroadcastWorldState();
 
             auto tickEnd = std::chrono::steady_clock::now();
@@ -254,6 +341,27 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
             int cz = r.Read<int>();
 
             m_chunkQueue.push({clientId, cx, cz});
+            break;
+        }
+        case game::net::MessageType::ClientHello: {
+            uint8_t nlen = r.Read<uint8_t>();
+            if (nlen > 32) nlen = 32;
+            auto bytes = r.ReadBytes(nlen);
+            std::string name(bytes.begin(), bytes.end());
+
+            for (auto& p : m_players) {
+                if (p.id == (uint32_t)clientId) {
+                    p.name = name;
+                    glm::vec3 sp; float sy = 0, spitch = 0;
+                    if (m_save && m_save->LoadPlayer(name, sp, sy, spitch)) {
+                        p.position = sp; p.yaw = sy; p.pitch = spitch;
+                        logInfo(m_logger, "[Server] Player '" << name << "' restored");
+                    } else {
+                        logInfo(m_logger, "[Server] Player '" << name << "' is new");
+                    }
+                    break;
+                }
+            }
             break;
         }
         default:
@@ -342,6 +450,7 @@ void GameServer::TickEntities(float dt) {
             w.Write(static_cast<uint8_t>(game::net::MessageType::EntityDestroy));
             w.Write<uint32_t>(id);
             w.Write<uint8_t>(0);
+            w.WriteU32BE(0);
             m_server.Broadcast(w.GetBuffer());
             toRemove.push_back(id);
             continue;
@@ -351,13 +460,14 @@ void GameServer::TickEntities(float dt) {
         if (e.pickupDelay <= 0.0f) {
             for (auto& p : m_players) {
                 glm::vec3 center = p.position + glm::vec3(0.0f, 0.9f, 0.0f);
-                float d2 = glm::distance(e.position, center);   // ★
+                float d2 = glm::distance(e.position, center);
                 if (d2 < 1.5f * 1.5f) {
                     Eng::MessageWriter w;
                     w.Write(static_cast<uint8_t>(game::net::MessageType::EntityDestroy));
                     w.Write<uint32_t>(id);
-                    w.Write<uint8_t>(1);
-                    m_server.SendTo(p.id, w.GetBuffer());
+                    w.Write<uint8_t>(1);                    // 1 = 被捡走
+                    w.WriteU32BE(p.id);
+                    m_server.Broadcast(w.GetBuffer());      // ★ SendTo → Broadcast
                     toRemove.push_back(id);
                     break;
                 }
@@ -448,6 +558,9 @@ void GameServer::SetBlockAt(int wx, int wy, int wz, BlockType bt) {
     auto it = m_chunks.find(ChunkKey(cx, cz));
     if (it == m_chunks.end()) return;
     ChunkSet(it->second, lx, wy, lz, bt);
+    // 记录改动（供存档）
+    m_pendingChanges[ChunkKey(cx, cz)].push_back({ wx, wy, wz, (uint16_t)bt });
+    m_dirty = true;
 }
 
 bool GameServer::IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz) {
@@ -495,6 +608,13 @@ void GameServer::BroadcastWorldState() {
 
     for (auto& p : m_players) {
         w.WriteU32BE(p.id);
+
+        uint8_t nlen = (uint8_t)std::min<size_t>(p.name.size(), 32);
+        w.Write<uint8_t>(nlen);
+        for (uint8_t i = 0; i < nlen; ++i) {
+            w.Write<uint8_t>((uint8_t)p.name[i]);
+        }
+
         w.WriteVec3(p.position);
         w.Write(p.yaw);
         w.Write(p.pitch);

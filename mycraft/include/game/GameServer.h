@@ -5,6 +5,7 @@
 #include "game/server/WorldGenerator.h"
 #include "game/Protocol.h"
 #include "game/core/Physics.h"
+#include "game/server/WorldSave.h"
 #include <memory>
 #include <thread>
 #include <atomic>
@@ -16,7 +17,7 @@ namespace game::server {
 
 class GameServer {
 public:
-    bool Start(uint16_t port);
+    bool Start(uint16_t port, const std::string& saveDir);
     void Stop();
     bool IsRunning() const { return m_running.load(); }
 
@@ -33,15 +34,16 @@ private:
 
     // ==================== 玩家 ====================
     struct ServerPlayer {
-        uint32_t  id = 0;
-        glm::vec3 position{0.0f, 256.0f, 0.0f};   // 脚底
-        glm::vec3 velocity{0.0f};
-        bool      onGround = false;
-        bool      jump     = false;
-        float     yaw   = 0.0f;
-        float     pitch = 0.0f;
-        glm::vec3 moveDir{0.0f};                  // 水平意图
-        bool      flyMode = false;
+        uint32_t    id = 0;
+        std::string name;
+        glm::vec3   position{0.0f, 256.0f, 0.0f};
+        glm::vec3   velocity{0.0f};
+        bool        onGround = false;
+        bool        jump     = false;
+        float       yaw   = 0.0f;
+        float       pitch = 0.0f;
+        glm::vec3   moveDir{0.0f};
+        bool        flyMode = false;
     };
     std::vector<ServerPlayer> m_players;
     static constexpr float REACH_DISTANCE = 5.0f;
@@ -54,6 +56,13 @@ private:
 
     struct PendingChunkRequest { int clientId; int cx, cz; };
     std::queue<PendingChunkRequest> m_chunkQueue;
+
+    // ==================== 存档 ====================
+    std::unique_ptr<WorldSave> m_save;
+    std::unordered_map<uint64_t, std::vector<BlockChange>> m_pendingChanges;
+    bool  m_dirty      = false;
+    float m_saveAccum  = 0.0f;
+    static constexpr float kSaveIntervalSec = 10.0f;
 
     // ==================== 异步 chunk 生成 ====================
     struct ChunkTask   { int cx, cz; uint64_t key; };

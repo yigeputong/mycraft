@@ -10,7 +10,9 @@
 int main(int argc, char* argv[]) {
     // 端口：命令行可选参数，默认 25565
     uint16_t port = 25565;
+    std::string saveDir = "./saves/world";
     if (argc >= 2) port = static_cast<uint16_t>(std::atoi(argv[1]));
+    if (argc >= 3) saveDir = argv[2];
 
     // ---- 日志 ----
     std::unique_ptr<Eng::Log> logger = std::make_unique<Eng::Log>();
@@ -27,7 +29,7 @@ int main(int argc, char* argv[]) {
 
     // ---- 启动服务端（内部起独立线程跑 tick）----
     game::server::GameServer server;
-    if (!server.Start(port)) {
+    if (!server.Start(port, saveDir)) {
         logError(logger, "[Server] Failed to start");
         NET_Quit();
         return 1;

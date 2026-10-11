@@ -5,11 +5,13 @@
 add_library(game-server STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WorldGenerator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WorldSave.cpp
 )
 target_include_directories(game-server PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(game-server PUBLIC engine-core engine-net)
+target_link_libraries(game-server PRIVATE nlohmann_json::nlohmann_json)
 
 # ============================================================
 # 客户端
