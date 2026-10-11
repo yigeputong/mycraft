@@ -85,7 +85,9 @@ private:
                                 bool nearWater) const;
 
     // ---- 阶段 4：雕刻器 ----
-    bool IsCarvedByCave(int wx, int wy, int wz) const;
+    bool IsCarvedByCave(int wx, int wy, int wz, int surfaceY) const;
+    float SampleCaveDiff(int wx, int wy, int wz) const;
+    bool  IsCaveAt(float diff, int ly, int surfaceY) const;
 
     // ---- 阶段 5：矿脉 ----
     BlockType OreForPosition(int wx, int wy, int wz, BlockType base) const;
@@ -106,7 +108,6 @@ private:
     private:
     // ---- 树 ----
     private:
-    // ★ 改成接受 surfaceY 数组
     void GenerateTrees(Chunk& chunk,
                         const std::array<std::array<int, 16>, 16>& surfaceYs) const;
     bool CanPlaceTree(int wx, int wz, int surfaceY, Biome biome) const;

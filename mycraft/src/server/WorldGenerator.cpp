@@ -266,7 +266,7 @@ bool TerrainGenerator::IsSolidAt(int wx, int wy, int wz) const {
     if (wy > surfaceY) return false;
     if (wy < 0) return false;
     // 洞穴
-    if (IsCarvedByCave(wx, wy, wz)) return false;
+    if (IsCarvedByCave(wx, wy, wz, surfaceY)) return false;
     return true;
 }
 
@@ -294,25 +294,30 @@ BlockType TerrainGenerator::ApplySurfaceRule(Biome biome, int wy, int surfaceY,
 // ============================================================
 // 阶段 4：雕刻器——3D 噪声洞穴
 // ============================================================
-bool TerrainGenerator::IsCarvedByCave(int wx, int wy, int wz) const {
-    // 只在 y ∈ [8, 120] 范围内判断（避免挖穿基岩/空中）
-    if (wy < 8 || wy > 120) return false;
+bool TerrainGenerator::IsCarvedByCave(int wx, int wy, int wz, int surfaceY) const {
+    return IsCaveAt(SampleCaveDiff(wx, wy, wz), wy, surfaceY);
+}
 
-    // 两个独立 3D 噪声
-    float n1 = m_noise.Fractal3D(wx * CAVE_SCALE,
-                                  wy * CAVE_SCALE * 1.5f,
-                                  wz * CAVE_SCALE, 3);
-    float n2 = m_noise.Fractal3D(wx * CAVE_SCALE + 1000.0f,
-                                  wy * CAVE_SCALE * 1.5f + 1000.0f,
-                                  wz * CAVE_SCALE + 1000.0f, 3);
+float TerrainGenerator::SampleCaveDiff(int wx, int wy, int wz) const {
+    constexpr float FREQ = 0.010f;
+    float n1 = m_noise.Fractal3D(wx * FREQ + 20000.0f,
+                                  wy * FREQ * 2.0f + 20000.0f,
+                                  wz * FREQ + 20000.0f, 2);
+    float n2 = m_noise.Fractal3D(wx * FREQ + 30000.0f,
+                                  wy * FREQ * 2.0f + 30000.0f,
+                                  wz * FREQ + 30000.0f, 2);
+    return std::abs(n1 - n2);
+}
 
-    // ---- 芝士洞穴：噪声值大 → 挖空 ----
-    if (n1 > CHEESE_THRESHOLD) return true;
+bool TerrainGenerator::IsCaveAt(float diff, int ly, int surfaceY) const {
+    if (ly > surfaceY) return false;
+    if (ly < 5) return false;
+    if (ly > surfaceY - 4) return false;
+    if (surfaceY <= SEA_LEVEL + 1 && ly > surfaceY - 3) return false;
 
-    // ---- 意面洞穴：|噪声| 接近 0 → 挖空 ----
-    if (std::abs(n2) < SPAGHETTI_WIDTH) return true;
-
-    return false;
+    float depth = static_cast<float>(surfaceY - ly);
+    float depthFactor = std::clamp(0.15f + depth / 20.0f, 0.15f, 1.0f);
+    return diff < 0.06f * depthFactor;
 }
 
 // ============================================================
@@ -355,6 +360,7 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
     constexpr int GZ = 20 / STEP + 1;   // 4
 
     static thread_local float grid[GX][GY][GZ];
+    static thread_local float caveGrid[GX][GY][GZ];   // ★ 洞穴粗网格
 
     for (int gx = 0; gx < GX; ++gx) {
         int wx = baseX - 2 + gx * STEP;
@@ -363,7 +369,8 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
             DensityParams p = ComputeParams(wx, wz);
             for (int gy = 0; gy < GY; ++gy) {
                 int wy = gy * STEP;
-                grid[gx][gy][gz] = ComputeDensity(wx, wy, wz, p);
+                grid[gx][gy][gz]     = ComputeDensity(wx, wy, wz, p);
+                caveGrid[gx][gy][gz] = SampleCaveDiff(wx, wy, wz);   // ★
             }
         }
     }
@@ -376,8 +383,8 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
 
     static thread_local std::array<std::array<int, 16>, 16> surfaceYs;
 
-    // ---- 三线性插值 ----
-    auto sampleDensity = [&](int lx, int ly, int lz) -> float {
+    // ---- 三线性插值（通用：取任意 grid）----
+    auto trilinear = [&](const float g[GX][GY][GZ], int lx, int ly, int lz) -> float {
         float fx = (lx + 2) / static_cast<float>(STEP);
         float fy = ly       / static_cast<float>(STEP);
         float fz = (lz + 2) / static_cast<float>(STEP);
@@ -390,16 +397,19 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
 
         auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
 
-        float c00 = lerp(grid[x0][y0][z0], grid[x1][y0][z0], tx);
-        float c10 = lerp(grid[x0][y1][z0], grid[x1][y1][z0], tx);
-        float c01 = lerp(grid[x0][y0][z1], grid[x1][y0][z1], tx);
-        float c11 = lerp(grid[x0][y1][z1], grid[x1][y1][z1], tx);
+        float c00 = lerp(g[x0][y0][z0], g[x1][y0][z0], tx);
+        float c10 = lerp(g[x0][y1][z0], g[x1][y1][z0], tx);
+        float c01 = lerp(g[x0][y0][z1], g[x1][y0][z1], tx);
+        float c11 = lerp(g[x0][y1][z1], g[x1][y1][z1], tx);
 
         float c0 = lerp(c00, c10, ty);
         float c1 = lerp(c01, c11, ty);
 
         return lerp(c0, c1, tz);
     };
+
+    auto sampleDensity = [&](int lx, int ly, int lz) { return trilinear(grid,     lx, ly, lz); };
+    auto sampleCave    = [&](int lx, int ly, int lz) { return trilinear(caveGrid, lx, ly, lz); };
 
     // ---- 整列 density 缓存 ----
     static thread_local float colDensity[CHUNK_SIZE_Y];
@@ -430,7 +440,9 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
                 BlockType type;
 
                 if (d > 0.0f) {
-                    if (ly == surfaceY) {
+                    if (IsCaveAt(sampleCave(lx, ly, lz), ly, surfaceY)) {   // ★ 改这里
+                        type = BlockType::Air;
+                    } else if (ly == surfaceY) {
                         type = ApplySurfaceRule(biome, ly, surfaceY, nearWater);
                     } else if (ly >= surfaceY - 3) {
                         switch (biome) {

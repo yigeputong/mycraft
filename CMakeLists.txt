@@ -33,8 +33,8 @@ find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(nlohmann_json         CONFIG REQUIRED)
 
 add_compile_definitions(
-    GLM_FORCE_DEPTH_ZERO_TO_ONE      # glm::perspective 生成 [0,1] 深度
-    IMGUI_IMPL_VULKAN_USE_VOLK       # ImGui Vulkan 后端走 volk（以后用）
+    GLM_FORCE_DEPTH_ZERO_TO_ONE
+    IMGUI_IMPL_VULKAN_USE_VOLK
     VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 )
 
