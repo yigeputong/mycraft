@@ -2,8 +2,7 @@
 .vscode/
 
 .cache/
-**/build/
-build-release/
+**/build*/
 dist/
 CMakeUserPresets.json
 

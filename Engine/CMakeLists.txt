@@ -12,6 +12,7 @@ target_include_directories(engine-core PUBLIC
 target_link_libraries(engine-core PUBLIC
     SDL3::SDL3
 )
+add_sanitizer(engine-core)
 
 # ============================================================
 # engine-net：网络（依赖 core）
@@ -27,6 +28,7 @@ target_link_libraries(engine-net PUBLIC
     engine-core
     SDL3_net::SDL3_net
 )
+add_sanitizer(engine-net)
 
 # ============================================================
 # engine-client：窗口 / 输入 / 渲染 / ImGui / 主循环
@@ -39,7 +41,7 @@ add_library(engine-client STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/WindowManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/OpenGL.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/Vulkan.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/VmaImpl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/VMAImpl.cpp
 
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui_demo.cpp
@@ -70,3 +72,4 @@ target_link_libraries(engine-client
         assimp::assimp
         nlohmann_json::nlohmann_json
 )
+add_sanitizer(engine-client)

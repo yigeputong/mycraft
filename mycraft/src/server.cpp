@@ -220,31 +220,36 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir) {
 }
 
 void GameServer::Stop() {
-    if (!m_running.load()) return;
+    // 1. 确保运行状态设为 false（即使已经是 false）
     m_running.store(false);
-    if (m_thread.joinable()) m_thread.join();
+
+    // 2. 无论如何，只要线程可 join，就必须 join，防止 std::terminate 闪退
+    if (m_thread.joinable()) {
+        m_thread.join();
+    }
+
+    // 3. 关闭网络层（确保你的 m_server.Shutdown() 在未初始化时调用也是安全的）
     m_server.Shutdown();
 
-    for (auto& p : m_players) {
-        if (m_save && !p.name.empty()) {
-            m_save->SavePlayer(p.name, p.position, p.yaw, p.pitch);
-        }
-    }
-
-    if (m_save && m_dirty) {
-        std::vector<BlockChange> flat;
-        for (auto& [k, v] : m_pendingChanges)
-            flat.insert(flat.end(), v.begin(), v.end());
-        m_save->SaveChanges(flat);
-        m_dirty = false;
-    }
+    // 4. 保存所有玩家数据（去重，合并为一次循环）
     if (m_save) {
         for (auto& p : m_players) {
-            if (m_save && !p.name.empty()) {
+            if (!p.name.empty()) {
                 m_save->SavePlayer(p.name, p.position, p.yaw, p.pitch);
             }
         }
     }
+
+    // 5. 保存世界方块改动
+    if (m_save && m_dirty) {
+        std::vector<BlockChange> flat;
+        for (auto& [k, v] : m_pendingChanges) {
+            flat.insert(flat.end(), v.begin(), v.end());
+        }
+        m_save->SaveChanges(flat);
+        m_dirty = false;
+    }
+
     logInfo(m_logger, "[Server] Stopped");
 }
 
@@ -492,9 +497,9 @@ Chunk* GameServer::GetCachedChunk(int cx, int cz) {
 
 void GameServer::HandleDig(ServerPlayer& p) {
     glm::vec3 front;
-    front.x = cos(p.yaw) * cos(p.pitch);
-    front.y = sin(p.pitch);
-    front.z = sin(p.yaw) * cos(p.pitch);
+    front.x = cosf(p.yaw) * cosf(p.pitch);
+    front.y = sinf(p.pitch);
+    front.z = sinf(p.yaw) * cosf(p.pitch);
     front = glm::normalize(front);
 
     glm::vec3 eye = p.position + glm::vec3(0.0f, game::PLAYER_EYE, 0.0f);

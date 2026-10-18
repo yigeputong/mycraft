@@ -9,7 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if (MSVC)
     add_compile_options(/utf-8 /W4 /WX- /permissive-)
 else()
-    add_compile_options(-Wall -Wextra -Wpedantic)
+    add_compile_options(-Wall -Wextra -Wpedantic -Wshadow)
 endif()
 
 # 输出目录统一
@@ -38,14 +38,12 @@ add_compile_definitions(
     VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 )
 
-# 找 glslc
+# 找 glslc -> 编译 GLSL -> 双 SPIR-V
 find_program(GLSLC_EXECUTABLE glslc HINTS "$ENV{VULKAN_SDK}/Bin")
 if(NOT GLSLC_EXECUTABLE)
     message(FATAL_ERROR "glslc not found")
 endif()
 message(STATUS "glslc: ${GLSLC_EXECUTABLE}")
-
-# 通用函数：编译 GLSL → 双 SPIR-V
 function(add_glsl_shader TARGET NAME)
     set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/src)
     set(OUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/build/${NAME})
@@ -84,6 +82,41 @@ function(add_glsl_shader TARGET NAME)
 
     add_custom_target(${TARGET} DEPENDS
         ${VERT_VK} ${FRAG_VK} ${VERT_GL} ${FRAG_GL})
+endfunction()
+
+set(SANITIZER "" CACHE STRING "启用 Sanitizer: address, undefined, thread, address+undefined")
+
+if (SANITIZER AND MSVC)
+    # 禁用 MSVC STL 的容器注解，解决 LNK2038 annotate_* 不匹配
+    add_compile_definitions(
+        _DISABLE_VECTOR_ANNOTATION
+        _DISABLE_STRING_ANNOTATION
+        _DISABLE_OPTIONAL_ANNOTATION
+    )
+endif()
+
+function(add_sanitizer TARGET)
+    if (NOT SANITIZER)
+        return()
+    endif()
+
+    if (MSVC)
+        if (SANITIZER STREQUAL "address" OR SANITIZER STREQUAL "address+undefined")
+            target_compile_options(${TARGET} PRIVATE /fsanitize=address)
+            target_link_options(${TARGET} PRIVATE /INCREMENTAL:NO)
+        endif()
+    elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        if (SANITIZER STREQUAL "thread")
+            target_compile_options(${TARGET} PRIVATE -fsanitize=thread -g -fno-omit-frame-pointer)
+            target_link_options(${TARGET} PRIVATE -fsanitize=thread)
+        elseif (SANITIZER STREQUAL "address+undefined")
+            target_compile_options(${TARGET} PRIVATE -fsanitize=address,undefined -fno-sanitize-recover=all -g -fno-omit-frame-pointer)
+            target_link_options(${TARGET} PRIVATE -fsanitize=address,undefined)
+        elseif (SANITIZER STREQUAL "address")
+            target_compile_options(${TARGET} PRIVATE -fsanitize=address -g -fno-omit-frame-pointer)
+            target_link_options(${TARGET} PRIVATE -fsanitize=address)
+        endif()
+    endif()
 endfunction()
 
 add_subdirectory(Engine)

@@ -401,9 +401,9 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
             }
             // 飞向玩家眼睛
             glm::vec3 target = cameraPos + glm::vec3(0.0f, PLAYER_EYE / 2, 0.0f);
-            float t = e.pickupT;
-            t = t * t;   // ease-in：先慢后快
-            e.renderPos = glm::mix(e.pickupStart, target, t);
+            float pickupT = e.pickupT;
+            pickupT = pickupT * pickupT;   // ease-in：先慢后快
+            e.renderPos = glm::mix(e.pickupStart, target, pickupT);
             ++it;
             continue;
         }
@@ -542,7 +542,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->EndFrame();
 }
 
-void MyGame::DrawMainMenu(Eng::Engine& engine) {
+void MyGame::DrawMainMenu(Eng::Engine& /*engine*/) {
     ImGuiIO& io = ImGui::GetIO();
 
     // ---- 主面板 ----
@@ -844,7 +844,7 @@ void MyGame::ReturnToMainMenu() {
     logInfo(logger, "[Game] Returned to main menu");
 }
 
-void MyGame::OnShutdown(Eng::Engine& engine) {
+void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
     m_client.Disconnect();
     if (m_server) { m_server->Stop(); m_server.reset(); }
 
@@ -1127,11 +1127,11 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
         case game::net::MessageType::EntitySpawn: {
             uint32_t  id   = r.Read<uint32_t>();
             glm::vec3 pos  = r.ReadVec3();
-            BlockType type = static_cast<BlockType>(r.Read<uint16_t>());
+            BlockType blockType = static_cast<BlockType>(r.Read<uint16_t>());
 
             ClientItemEntity e;
             e.id        = id;
-            e.itemType  = type;
+            e.itemType  = blockType;
             e.renderPos = pos;
             e.prevPos   = pos;
             e.targetPos = pos;
@@ -1182,6 +1182,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
         }
         case game::net::MessageType::PlayerInput:
         case game::net::MessageType::ChunkRequest:
+        case game::net::MessageType::ClientHello:
             // 客户端不处理
             break;
     }
@@ -1419,10 +1420,10 @@ Eng::client::MeshHandle MyGame::BuildPlayerMesh() {
     std::vector<uint32_t> indices;
 
     // 一个 cuboid：中心 (cx,cy,cz)，尺寸 (sx,sy,sz)，tile = tile 索引
-    auto addBox = [&](glm::vec3 c, glm::vec3 s, int tile) {
-        const float x0 = c.x - s.x*0.5f, x1 = c.x + s.x*0.5f;
-        const float y0 = c.y - s.y*0.5f, y1 = c.y + s.y*0.5f;
-        const float z0 = c.z - s.z*0.5f, z1 = c.z + s.z*0.5f;
+    auto addBox = [&](glm::vec3 c, glm::vec3 size, int tile) {
+        const float x0 = c.x - size.x*0.5f, x1 = c.x + size.x*0.5f;
+        const float y0 = c.y - size.y*0.5f, y1 = c.y + size.y*0.5f;
+        const float z0 = c.z - size.z*0.5f, z1 = c.z + size.z*0.5f;
 
         int tileRow = tile / ATLAS_COLS;
         int tileCol = tile % ATLAS_COLS;

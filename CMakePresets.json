@@ -2,11 +2,63 @@
   "version": 6,
   "configurePresets": [
     {
-      "name": "vcpkg",
+      "name": "vcpkg-base",
+      "hidden": true,
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug",
+      "inherits": "vcpkg-base",
+      "binaryDir": "${sourceDir}/build",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "windows-asan",
+      "displayName": "Windows ASan",
+      "inherits": "vcpkg-base",
+      "binaryDir": "${sourceDir}/build-asan",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SANITIZER": "address"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug",
+      "inherits": "vcpkg-base",
+      "binaryDir": "${sourceDir}/build",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build-asan/vcpkg_installed"
+      }
+    },
+    {
+      "name": "linux-asan-ubsan",
+      "displayName": "Linux ASan + UBSan",
+      "inherits": "vcpkg-base",
+      "binaryDir": "${sourceDir}/build-asan",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SANITIZER": "address+undefined"
+      }
+    },
+    {
+      "name": "linux-tsan",
+      "displayName": "Linux TSan",
+      "inherits": "vcpkg-base",
+      "binaryDir": "${sourceDir}/build-tsan",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SANITIZER": "thread"
       }
     }
   ]

@@ -25,6 +25,7 @@ target_include_directories(mycraft PRIVATE
 )
 target_link_libraries(mycraft PRIVATE game-server engine-client)
 target_compile_definitions(mycraft PRIVATE MYCRAFT_VERSION="${PROJECT_VERSION}")
+add_sanitizer(mycraft)
 
 # ============================================================
 # 专用服务端
@@ -36,6 +37,7 @@ target_include_directories(mycraft-server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(mycraft-server PRIVATE game-server)
+add_sanitizer(mycraft-server)
 
 # ============================================================
 # Shader 编译（只挂到客户端，服务端不需要）

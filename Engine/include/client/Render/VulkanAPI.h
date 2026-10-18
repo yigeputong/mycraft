@@ -2,7 +2,11 @@
 
 #include <volk.h>
 #include <vulkan/vulkan_raii.hpp>
+#if defined(_WIN32)
 #include <vma/vk_mem_alloc.h>
+#else
+#include <vk_mem_alloc.h>
+#endif
 
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>

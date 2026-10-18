@@ -1,6 +1,7 @@
 #include "game/server/WorldGenerator.h"
 #include <numeric>
 #include <random>
+#include <climits>
 
 namespace game::server {
 

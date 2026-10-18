@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 #include <queue>
 #include <unordered_set>
+#include <condition_variable>
 
 namespace game::server {
 
