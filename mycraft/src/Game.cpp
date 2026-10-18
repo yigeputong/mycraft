@@ -17,23 +17,23 @@
 namespace {
 
 constexpr int ATLAS_TILE = 16;                    // 每格 16x16
-constexpr int ATLAS_COLS = 4;
-constexpr int ATLAS_ROWS = 4;
-constexpr int ATLAS_W    = ATLAS_TILE * ATLAS_COLS;   // 64
-constexpr int ATLAS_H    = ATLAS_TILE * ATLAS_ROWS;   // 64
-constexpr float TILE_UV  = 1.0f / ATLAS_COLS;         // 0.25
+constexpr int ATLAS_COLS = 8;
+constexpr int ATLAS_ROWS = 8;
+constexpr int ATLAS_W    = ATLAS_TILE * ATLAS_COLS;
+constexpr int ATLAS_H    = ATLAS_TILE * ATLAS_ROWS;
+constexpr float TILE_UV  = 1.0f / ATLAS_COLS;
 
 // 简单 hash 噪声，让每个像素略有差异，不至于纯色块
-uint8_t HashNoise(int x, int y, uint32_t seed) {
+constexpr auto HashNoise = [](int x, int y, uint32_t seed) -> uint8_t {
     uint32_t h = static_cast<uint32_t>(x) * 374761393u
                + static_cast<uint32_t>(y) * 668265263u
                + seed * 2246822519u;
     h = (h ^ (h >> 13)) * 1274126177u;
     return static_cast<uint8_t>((h ^ (h >> 16)) & 0xFF);
-}
+};
 
 struct TileSpec { uint8_t r, g, b; int noise; };
-const TileSpec kTiles[16] = {
+const TileSpec kTiles[19] = {
     {128, 128, 128, 30},    // 0 stone
     { 88, 160,  70, 20},    // 1 grass_top
     { 88, 160,  70, 20},    // 2 grass_side
@@ -50,6 +50,9 @@ const TileSpec kTiles[16] = {
     {224, 180, 150, 15},   // 13 skin  （肉色）
     { 60, 110, 200, 20},   // 14 shirt （蓝）
     { 45,  55, 110, 20},   // 15 pants （深蓝）
+    { 88, 160,  70, 20},   // 16 TallGrass (绿)
+    {220,  40,  40, 10},   // 17 FlowerRed (红)
+    {220, 200,  40, 10}   // 18 FlowerYellow (黄)
 };
 
 // 生成 RGBA 像素数组，64x64
@@ -81,6 +84,28 @@ std::vector<uint8_t> GenerateAtlasPixels() {
                 }
 
                 int i = ((oy + y) * ATLAS_W + (ox + x)) * 4;
+
+                if (t >= 16) {
+                    // 默认全透明
+                    px[i + 0] = 0; px[i + 1] = 0; px[i + 2] = 0; px[i + 3] = 0;
+
+                    if (t == 16) { // 高草：随机几根草
+                        if (HashNoise(x, y, 42) % 3 == 0 && y > 4) {
+                            px[i + 0] = 88; px[i + 1] = 160; px[i + 2] = 70; px[i + 3] = 255;
+                        }
+                    } else if (t == 17 || t == 18) { // 花：茎 + 花瓣
+                        if (x >= 7 && x <= 8 && y >= 7 && y <= 15) { // 茎
+                            px[i + 0] = 42; px[i + 1] = 100; px[i + 2] = 45; px[i + 3] = 255;
+                        } else if (x >= 5 && x <= 10 && y >= 3 && y <= 8) { // 花瓣
+                            px[i + 0] = (t == 17) ? 220 : 220;
+                            px[i + 1] = (t == 17) ? 40  : 200;
+                            px[i + 2] = (t == 17) ? 40  : 40;
+                            px[i + 3] = 255;
+                        }
+                    }
+                    continue; // 跳过下面的默认不透明赋值
+                }
+
                 px[i + 0] = static_cast<uint8_t>(std::clamp(r, 0, 255));
                 px[i + 1] = static_cast<uint8_t>(std::clamp(g, 0, 255));
                 px[i + 2] = static_cast<uint8_t>(std::clamp(b, 0, 255));
@@ -95,14 +120,14 @@ std::vector<uint8_t> GenerateAtlasPixels() {
 // face: 0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z
 int TileForBlock(game::BlockType b, int face) {
     switch (b) {
-        case game::BlockType::Stone:      return 0;
+        case game::BlockType::Stone:        return 0;
         case game::BlockType::GrassBlock:
             if (face == 2) return 1;
             if (face == 3) return 3;
             return 2;
-        case game::BlockType::Dirt:       return 3;
-        case game::BlockType::Sand:       return 4;
-        case game::BlockType::Water:      return 5;
+        case game::BlockType::Dirt:         return 3;
+        case game::BlockType::Sand:         return 4;
+        case game::BlockType::Water:        return 5;
         case game::BlockType::Snow:
             // 顶=6（纯白）、底=3（土）、侧面=7
             if (face == 2) return 6;
@@ -111,12 +136,14 @@ int TileForBlock(game::BlockType b, int face) {
 
         case game::BlockType::Sandstone:
             return 8;
-        case game::BlockType::CoalOre:  return 9;
-        case game::BlockType::IronOre:  return 10;
+        case game::BlockType::CoalOre:      return 9;
+        case game::BlockType::IronOre:      return 10;
         case game::BlockType::Wood:
             return 11;
-        case game::BlockType::Leaves:
-            return 12;
+        case game::BlockType::Leaves:       return 12;
+        case game::BlockType::TallGrass:    return 16;
+        case game::BlockType::FlowerRed:    return 17;
+        case game::BlockType::FlowerYellow: return 18;
         default:                    return 0;
     }
 }
@@ -1324,9 +1351,11 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
         return ChunkGet(*n, nlx, ly, nlz);
     };
 
+    // ★ 计算 AO 专用（排除水、草、花，确保它们不投射环境光遮蔽）
     auto isSolidAt = [&](int lx, int ly, int lz) -> bool {
         BlockType b = getBlock(lx, ly, lz);
-        return b != BlockType::Air && b != BlockType::Water;
+        return b != BlockType::Air && b != BlockType::Water && b != BlockType::Void &&
+               b != BlockType::TallGrass && b != BlockType::FlowerRed && b != BlockType::FlowerYellow;
     };
 
     // 6 个面的顶点偏移
@@ -1355,17 +1384,65 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
         for (int ly = 0; ly < CHUNK_SIZE_Y; ++ly) {
             for (int lz = 0; lz < CHUNK_SIZE_Z; ++lz) {
                 BlockType type = ChunkGet(chunk, lx, ly, lz);
-                if (!IsSolid(type)) continue;
 
+                // 1. 跳过纯空气和虚空
+                if (type == BlockType::Air || type == BlockType::Void) continue;
+
+                // 2. 十字交叉网格（草丛/花）
+                if (type == BlockType::TallGrass || type == BlockType::FlowerRed || type == BlockType::FlowerYellow) {
+                    int tile = TileForBlock(type, 0);
+                    float u0 = (tile % ATLAS_COLS) * TILE_UV;
+                    float v0 = (tile / ATLAS_COLS) * TILE_UV;
+                    float u1 = u0 + TILE_UV;
+                    float v1 = v0 + TILE_UV;
+                    
+                    float x0 = baseX + lx + 0.15f;
+                    float x1 = baseX + lx + 0.85f;
+                    float z0 = baseZ + lz + 0.15f;
+                    float z1 = baseZ + lz + 0.85f;
+                    float y0 = (float)ly;
+                    float y1 = (float)ly + 1.0f;
+
+                    auto addQuad = [&](glm::vec3 p1, glm::vec3 p2, glm::vec3 p3, glm::vec3 p4) {
+                        uint32_t baseIndex = (uint32_t)vertices.size();
+                        Eng::client::Vertex v;
+                        v.ao = 1.0f; // 植物不吃 AO
+                        v.normal = {0, 1, 0};
+
+                        v.position = p1; v.uv = {u0, v1}; vertices.push_back(v);
+                        v.position = p2; v.uv = {u1, v1}; vertices.push_back(v);
+                        v.position = p3; v.uv = {u1, v0}; vertices.push_back(v);
+                        v.position = p4; v.uv = {u0, v0}; vertices.push_back(v);
+
+                        // 正面
+                        indices.push_back(baseIndex + 0); indices.push_back(baseIndex + 1); indices.push_back(baseIndex + 2);
+                        indices.push_back(baseIndex + 2); indices.push_back(baseIndex + 3); indices.push_back(baseIndex + 0);
+                        // 反面 (让背面也能看到)
+                        indices.push_back(baseIndex + 0); indices.push_back(baseIndex + 2); indices.push_back(baseIndex + 1);
+                        indices.push_back(baseIndex + 3); indices.push_back(baseIndex + 2); indices.push_back(baseIndex + 0);
+                    };
+
+                    // 平面 1
+                    addQuad({x0, y0, z0}, {x1, y0, z1}, {x1, y1, z1}, {x0, y1, z0});
+                    // 平面 2
+                    addQuad({x0, y0, z1}, {x1, y0, z0}, {x1, y1, z0}, {x0, y1, z1});
+
+                    continue; 
+                }
+
+                // 3. 处理实心方块和水
                 for (int f = 0; f < 6; ++f) {
                     int nx = lx + faceNormals[f][0];
                     int ny = ly + faceNormals[f][1];
                     int nz = lz + faceNormals[f][2];
 
                     BlockType neighbor = getBlock(nx, ny, nz);
+                    
+                    // 如果邻居是实心方块，遮挡面
                     if (IsSolid(neighbor)) continue;
+                    // 如果邻居同为水，不画内部面
+                    if (type == BlockType::Water && neighbor == BlockType::Water) continue;
 
-                    // 法线方向决定两个切向轴
                     int N_axis = (faceNormals[f][0] != 0) ? 0
                                : (faceNormals[f][1] != 0) ? 1 : 2;
                     int U_axis = (N_axis + 1) % 3;
@@ -1377,9 +1454,17 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
 
                     for (int v = 0; v < 4; ++v) {
                         Eng::client::Vertex vert;
+                        
+                        // 让水面稍微低一点（0.9 格高）
+                        float yOffset = (type == BlockType::Water && f == 2 && neighbor == BlockType::Air) ? 0.9f : 0.0f;
+                        float yPos = (float)ly + faceOffsets[f][v][1];
+                        if (type == BlockType::Water && faceOffsets[f][v][1] == 1) {
+                            yPos = (float)ly + yOffset;
+                        }
+
                         vert.position = {
                             baseX + lx + faceOffsets[f][v][0],
-                            (float)ly + faceOffsets[f][v][1],
+                            yPos,
                             baseZ + lz + faceOffsets[f][v][2]
                         };
                         vert.normal = {
@@ -1410,6 +1495,9 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
                         int sc = isSolidAt(lx + N.x + U.x + V.x, ly + N.y + U.y + V.y, lz + N.z + U.z + V.z) ? 1 : 0;
 
                         vert.ao = (s1 && s2) ? 0.4f : 1.0f - 0.2f * (s1 + s2 + sc);
+                        
+                        // 水强制不吃 AO
+                        if (type == BlockType::Water) vert.ao = 1.0f;
 
                         vertices.push_back(vert);
                     }

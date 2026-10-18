@@ -218,7 +218,7 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
     });
 
     m_running.store(true);
-    m_thread = std::thread([this, port]() { Run(); });
+    m_thread = std::thread([this]() { Run(); });
     return true;
 }
 

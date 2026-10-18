@@ -1,5 +1,5 @@
 CompileFlags:
-  CompilationDatabase: build
+  CompilationDatabase: build-clang
 
 Diagnostics:
   ClangTidy:

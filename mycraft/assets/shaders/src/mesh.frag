@@ -27,7 +27,14 @@ layout(set = 1, binding = 0) uniform sampler2D uDiffuse;  // VK: set 1, binding 
 #endif
 
 void main() {
-    vec3 texColor = texture(uDiffuse, uv).rgb;
+    vec4 texColor4 = texture(uDiffuse, uv);
+    
+    // 丢弃透明像素
+    if (texColor4.a < 0.1) {
+        discard;
+    }
+    
+    vec3 texColor = texColor4.rgb;
     vec3 norm = normalize(Normal);
 
     vec3 lightDirN = normalize(global.lightDir);

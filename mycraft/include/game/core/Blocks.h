@@ -13,19 +13,24 @@ enum BlockType : uint8_t {
     IronOre,        // ★ 铁矿
     Wood,           // ★ 木头
     Leaves,         // ★ 树叶
+    TallGrass,      // ★ 高草丛
+    FlowerRed,      // ★ 红花
+    FlowerYellow,   // ★ 黄花
     Void
 };
+
+inline bool IsSolid(BlockType t) {
+    // 草丛和花不是固体（允许玩家穿过，不遮挡相邻面）
+    return t != BlockType::Air && t != BlockType::Void && t != BlockType::Water &&
+           t != BlockType::TallGrass && t != BlockType::FlowerRed && t != BlockType::FlowerYellow;
+}
 
 struct Block {
     BlockType type;
 };
 
-inline bool IsSolid(BlockType t) {
-    return t != BlockType::Air && t != BlockType::Void;
-}
-
 // ==================== 组件类型 ====================
-enum class DataComponentType : uint16_t {
+enum class DataComponentType : std::uint16_t {
     MaxStackSize,   // int, 默认 64
     // 未来: Damage, MaxDamage, ToolType, AttackDamage, ...
 };

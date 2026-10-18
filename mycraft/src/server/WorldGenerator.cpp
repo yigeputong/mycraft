@@ -122,11 +122,6 @@ namespace {
     // ---- 大陆性阈值 ----
     constexpr float CONT_OCEAN_MAX = -0.3f;   // < -0.3 → 海洋
 
-    // ---- 洞穴 ----
-    constexpr float CAVE_SCALE       = 0.06f;   // 3D 噪声尺度
-    constexpr float CHEESE_THRESHOLD = 0.72f;   // 芝士洞穴阈值
-    constexpr float SPAGHETTI_WIDTH  = 0.08f;   // 意面洞穴宽度
-
     // ---- 矿脉 ----
     constexpr float ORE_SCALE = 0.14f;
 
@@ -438,6 +433,14 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
         }
     }
 
+    constexpr auto HashNoise = [](int x, int y, uint32_t seed) -> uint8_t {
+        uint32_t h = static_cast<uint32_t>(x) * 374761393u
+                + static_cast<uint32_t>(y) * 668265263u
+                + seed * 2246822519u;
+        h = (h ^ (h >> 13)) * 1274126177u;
+        return static_cast<uint8_t>((h ^ (h >> 16)) & 0xFF);
+    };
+
     // ---- 缓存每列 params（填充循环用）----
     static thread_local std::array<std::array<DensityParams, 16>, 16> params;
     for (int lx = 0; lx < 16; ++lx)
@@ -503,7 +506,8 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
                 BlockType type;
 
                 if (d > 0.0f) {
-                    if (IsCaveAt(sampleCave(lx, ly, lz), ly, surfaceY)) {   // ★ 改这里
+                    // --- 实心地形部分 ---
+                    if (IsCarvedByCave(wx, ly, wz, surfaceY)) {
                         type = BlockType::Air;
                     } else if (ly == surfaceY) {
                         type = ApplySurfaceRule(biome, ly, surfaceY, nearWater);
@@ -518,7 +522,25 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
                         type = OreForPosition(wx, ly, wz, type);
                     }
                 } else {
+                    // --- 空气/水部分 ---
                     type = (ly <= SEA_LEVEL) ? BlockType::Water : BlockType::Air;
+
+                    // ★ 新增：在地表上方一格生成植被
+                    if (ly == surfaceY + 1) {
+                        // 看看地表是不是草方块
+                        BlockType below = ChunkGet(chunk, lx, surfaceY, lz);
+                        if (below == BlockType::GrassBlock) {
+                            // 用坐标哈希决定生成什么（15% 概率草，3% 红花，3% 黄花）
+                            uint32_t r = static_cast<uint32_t>(wx * 73856093 ^ wz * 19349663) % 100;
+                            if (r < 10) {
+                                type = BlockType::TallGrass;
+                            } else if (r < 13) {
+                                type = BlockType::FlowerRed;
+                            } else if (r < 16) {
+                                type = BlockType::FlowerYellow;
+                            }
+                        }
+                    }
                 }
 
                 chunk.blocks[ChunkIndex(lx, ly, lz)] = type;
