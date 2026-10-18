@@ -1,7 +1,8 @@
 #include "core/Log.h"
 #include "core/MessageReader.h"
 #include "core/MessageWriter.h"
-#include "core/NetworkServer.h"
+#include "core/NetworkTransport.h"
+#include "core/MemoryTransport.h"
 #include "game/GameServer.h"
 #include "game/Protocol.h"
 #include "game/server/WorldGenerator.h"
@@ -67,7 +68,7 @@ void GameServer::SendChunkTo(int clientId, const Chunk& chunk) {
     w.Write<uint16_t>(CHUNK_SIZE_Y);
     w.WriteBytes(reinterpret_cast<const uint8_t*>(chunk.blocks.data()),
                  chunk.blocks.size() * sizeof(BlockType));
-    m_server.SendTo(clientId, w.GetBuffer());
+    m_server->SendTo(clientId, w.GetBuffer());
 }
 
 void GameServer::DrainChunkResults() {
@@ -108,7 +109,7 @@ void GameServer::DrainChunkResults() {
     }
 }
 
-bool GameServer::Start(uint16_t port, const std::string& saveDir) {
+bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory) {
     if (m_running.load()) return false;
 
     // ---- 存档 ----
@@ -144,78 +145,80 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir) {
         logInfo(m_logger, "[Server] Starting " << n << " chunk workers");
     }
 
-    m_running.store(true);
-    m_thread = std::thread([this, port]() {
-        // 服务端线程里初始化监听
-        if (!m_server.Listen(port)) {
-            logError(m_logger, "[Server] Listen failed");
-            m_running.store(false);
-            return;
+    if (useMemory) {
+        m_server = std::make_unique<Eng::MemoryServerTransport>();
+    } else {
+        m_server = std::make_unique<Eng::NetworkServerTransport>();
+    }
+    if (!m_server->Listen(port)) {
+        logError(m_logger, "[Server] Listen failed");
+        m_running.store(false);
+        return false;
+    }
+
+    m_server->SetConnectCallback([this](int id) {
+        ServerPlayer p;
+        p.id = (uint32_t)id;
+        m_players.push_back(p);
+
+        // 你的 ID
+        {
+            Eng::MessageWriter w;
+            w.Write(static_cast<uint8_t>(net::MessageType::PlayerId));
+            w.WriteU32BE((uint32_t)id);
+            m_server->SendTo(id, w.GetBuffer());
+        }
+        // seed
+        {
+            Eng::MessageWriter w;
+            w.Write(static_cast<uint8_t>(net::MessageType::ServerInfo));
+            w.WriteU32BE(m_worldSeed);
+            w.WriteVec3(m_spawnPos);
+            m_server->SendTo(id, w.GetBuffer());
         }
 
-        m_server.SetConnectCallback([this](int id) {
-            ServerPlayer p;
-            p.id = (uint32_t)id;
-            m_players.push_back(p);
+        // ★ 补发所有现有掉落物
+        for (auto& [eid, e] : m_entities) {
+            Eng::MessageWriter w;
+            w.Write(static_cast<uint8_t>(net::MessageType::EntitySpawn));
+            w.Write<uint32_t>(eid);
+            w.WriteVec3(e.position);
+            w.Write<uint16_t>((uint16_t)e.itemType);
+            m_server->SendTo(id, w.GetBuffer());
+        }
 
-            // 你的 ID
-            {
-                Eng::MessageWriter w;
-                w.Write(static_cast<uint8_t>(net::MessageType::PlayerId));
-                w.WriteU32BE((uint32_t)id);
-                m_server.SendTo(id, w.GetBuffer());
-            }
-            // seed
-            {
-                Eng::MessageWriter w;
-                w.Write(static_cast<uint8_t>(net::MessageType::ServerInfo));
-                w.WriteU32BE(m_worldSeed);
-                w.WriteVec3(m_spawnPos);
-                m_server.SendTo(id, w.GetBuffer());
-            }
-
-            // ★ 补发所有现有掉落物
-            for (auto& [eid, e] : m_entities) {
-                Eng::MessageWriter w;
-                w.Write(static_cast<uint8_t>(net::MessageType::EntitySpawn));
-                w.Write<uint32_t>(eid);
-                w.WriteVec3(e.position);
-                w.Write<uint16_t>((uint16_t)e.itemType);
-                m_server.SendTo(id, w.GetBuffer());
-            }
-
-            logInfo(m_logger, "[Server] Player " << id << " joined");
-        });
-
-        m_server.SetMessageCallback([this](int id, const std::vector<uint8_t>& data) {
-            HandleMessage(id, data);
-        });
-
-        m_server.SetDisconnectCallback([this](int id) {
-            for (auto& p : m_players) {
-                if (p.id == (uint32_t)id) {
-                    if (m_save && !p.name.empty()) {
-                        m_save->SavePlayer(p.name, p.position, p.yaw, p.pitch);
-                    }
-                    break;
-                }
-            }
-            m_players.erase(std::remove_if(m_players.begin(), m_players.end(),
-                [id](const ServerPlayer& p) { return p.id == (uint32_t)id; }), m_players.end());
-
-            // 该 client 的待发 chunk 请求
-            std::queue<PendingChunkRequest> keep;
-            while (!m_chunkQueue.empty()) {
-                if (m_chunkQueue.front().clientId != id) keep.push(m_chunkQueue.front());
-                m_chunkQueue.pop();
-            }
-            m_chunkQueue = std::move(keep);
-
-            logInfo(m_logger, "[Server] Player " << id << " left");
-        });
-
-        Run();
+        logInfo(m_logger, "[Server] Player " << id << " joined");
     });
+
+    m_server->SetMessageCallback([this](int id, const std::vector<uint8_t>& data) {
+        HandleMessage(id, data);
+    });
+
+    m_server->SetDisconnectCallback([this](int id) {
+        for (auto& p : m_players) {
+            if (p.id == (uint32_t)id) {
+                if (m_save && !p.name.empty()) {
+                    m_save->SavePlayer(p.name, p.position, p.yaw, p.pitch);
+                }
+                break;
+            }
+        }
+        m_players.erase(std::remove_if(m_players.begin(), m_players.end(),
+            [id](const ServerPlayer& p) { return p.id == (uint32_t)id; }), m_players.end());
+
+        // 该 client 的待发 chunk 请求
+        std::queue<PendingChunkRequest> keep;
+        while (!m_chunkQueue.empty()) {
+            if (m_chunkQueue.front().clientId != id) keep.push(m_chunkQueue.front());
+            m_chunkQueue.pop();
+        }
+        m_chunkQueue = std::move(keep);
+
+        logInfo(m_logger, "[Server] Player " << id << " left");
+    });
+
+    m_running.store(true);
+    m_thread = std::thread([this, port]() { Run(); });
     return true;
 }
 
@@ -228,8 +231,8 @@ void GameServer::Stop() {
         m_thread.join();
     }
 
-    // 3. 关闭网络层（确保你的 m_server.Shutdown() 在未初始化时调用也是安全的）
-    m_server.Shutdown();
+    // 3. 关闭网络层（确保你的 m_server->Shutdown() 在未初始化时调用也是安全的）
+    m_server->Shutdown();
 
     // 4. 保存所有玩家数据（去重，合并为一次循环）
     if (m_save) {
@@ -253,6 +256,13 @@ void GameServer::Stop() {
     logInfo(m_logger, "[Server] Stopped");
 }
 
+std::shared_ptr<Eng::MemoryPipe> GameServer::GetMemoryPipe() const {
+    if (auto* mem = dynamic_cast<Eng::MemoryServerTransport*>(m_server.get())) {
+        return mem->m_pipe;
+    }
+    return nullptr;
+}
+
 void GameServer::Run() {
     constexpr float TICK_INTERVAL = 1.0f / TPS;
     auto last = std::chrono::steady_clock::now();
@@ -263,8 +273,7 @@ void GameServer::Run() {
     StartWorkers(m_worldSeed);
 
     while (m_running.load()) {
-        m_server.PollAccept();
-        m_server.Update();
+        m_server->Update();
 
         auto now = std::chrono::steady_clock::now();
         float frameTime = std::chrono::duration<float>(now - last).count();
@@ -429,7 +438,7 @@ void GameServer::SpawnItemDrop(const glm::vec3& pos, BlockType type) {
     w.Write<uint32_t>(e.id);
     w.WriteVec3(e.position);                       // ★ e.pos → e.position
     w.Write<uint16_t>(static_cast<uint16_t>(type));
-    m_server.Broadcast(w.GetBuffer());
+    m_server->Broadcast(w.GetBuffer());
 }
 
 void GameServer::TickEntities(float dt) {
@@ -450,7 +459,7 @@ void GameServer::TickEntities(float dt) {
             w.Write(static_cast<uint8_t>(game::net::MessageType::EntityUpdate));
             w.Write<uint32_t>(id);
             w.WriteVec3(e.position);              // ★ e.pos → e.position
-            m_server.Broadcast(w.GetBuffer());
+            m_server->Broadcast(w.GetBuffer());
         }
 
         // 超时
@@ -460,7 +469,7 @@ void GameServer::TickEntities(float dt) {
             w.Write<uint32_t>(id);
             w.Write<uint8_t>(0);
             w.WriteU32BE(0);
-            m_server.Broadcast(w.GetBuffer());
+            m_server->Broadcast(w.GetBuffer());
             toRemove.push_back(id);
             continue;
         }
@@ -476,7 +485,7 @@ void GameServer::TickEntities(float dt) {
                     w.Write<uint32_t>(id);
                     w.Write<uint8_t>(1);                    // 1 = 被捡走
                     w.WriteU32BE(p.id);
-                    m_server.Broadcast(w.GetBuffer());      // ★ SendTo → Broadcast
+                    m_server->Broadcast(w.GetBuffer());      // ★ SendTo → Broadcast
                     toRemove.push_back(id);
                     break;
                 }
@@ -628,7 +637,7 @@ void GameServer::BroadcastWorldState() {
         w.Write(p.yaw);
         w.Write(p.pitch);
     }
-    m_server.Broadcast(w.GetBuffer());
+    m_server->Broadcast(w.GetBuffer());
 }
 
 void GameServer::BroadcastBlockChange(int bx, int by, int bz, BlockType type) {
@@ -638,7 +647,7 @@ void GameServer::BroadcastBlockChange(int bx, int by, int bz, BlockType type) {
     w.Write<int32_t>(by);
     w.Write<int32_t>(bz);
     w.Write<uint16_t>(static_cast<uint16_t>(type));
-    m_server.Broadcast(w.GetBuffer());
+    m_server->Broadcast(w.GetBuffer());
 }
 
 } // namespace game

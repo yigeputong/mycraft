@@ -1,5 +1,6 @@
 #pragma once
-#include "core/NetworkServer.h"
+#include "core/Transport.h"
+#include "core/MemoryTransport.h"
 #include "core/Log.h"
 #include "core/World.h"
 #include "game/server/WorldGenerator.h"
@@ -18,10 +19,10 @@ namespace game::server {
 
 class GameServer {
 public:
-    bool Start(uint16_t port, const std::string& saveDir);
+    bool Start(uint16_t port, const std::string& saveDir, bool useMemory = false);
     void Stop();
     bool IsRunning() const { return m_running.load(); }
-
+    std::shared_ptr<Eng::MemoryPipe> GetMemoryPipe() const;
 private:
     private:
     // ==================== 生命周期 ====================
@@ -30,8 +31,8 @@ private:
     std::atomic<bool>  m_running{false};
 
     // ==================== 网络 ====================
-    Eng::NetworkServer        m_server;
-    std::unique_ptr<Eng::Log> m_logger = std::make_unique<Eng::Log>();
+    std::unique_ptr<Eng::IServerTransport> m_server;
+    std::unique_ptr<Eng::Log>              m_logger = std::make_unique<Eng::Log>();
 
     // ==================== 玩家 ====================
     struct ServerPlayer {

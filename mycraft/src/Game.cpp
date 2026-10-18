@@ -3,6 +3,8 @@
 #include "Engine.h"
 #include "core/Log.h"
 #include "core/MessageWriter.h"
+#include "core/MemoryTransport.h"
+#include "core/NetworkTransport.h"
 #include "game/Protocol.h"
 #include "game/GameServer.h"
 #include "game/core/Blocks.h"   
@@ -138,33 +140,38 @@ namespace game {
 // OnStart 分阶段
 // ============================================================
 
-bool MyGame::StartLocalServer() {
+bool MyGame::StartLocalServer(bool useMemory, bool createClient) {
     if (m_server) return true;
-    m_server = std::make_unique<game::server::GameServer>();
-    if (!m_server->Start(25565, "./saves/world")) {
+
+    auto server = std::make_unique<game::server::GameServer>();
+    if (!server->Start(25565, "./saves/world", useMemory)) {
         logError(logger, "[Game] Failed to start local server");
-        m_server.reset();
         return false;
     }
-    logInfo(logger, "[Game] Local server started on port 25565 (save: ./saves/world)");
+
+    if (createClient) {
+        if (useMemory) {
+            m_client = std::make_unique<Eng::MemoryClientTransport>(server->GetMemoryPipe());
+            m_client->Connect("", 0);
+            logInfo(logger, "[Game] Started memory transport for single player");
+        } else {
+            m_client = std::make_unique<Eng::NetworkClientTransport>();
+            m_client->Connect("127.0.0.1", 25565);
+        }
+    }
+
+    m_server = std::move(server);
     return true;
 }
 
 bool MyGame::ConnectToServer(const std::string& host, uint16_t port) {
-    if (!m_client.Connect(host, port)) {
+    m_client = std::make_unique<Eng::NetworkClientTransport>();
+    if (!m_client->Connect(host, port)) {
         logError(logger, "[Game] Failed to connect to " << host << ":" << port);
+        m_client.reset();
         return false;
     }
     logInfo(logger, "[Game] Connected to " << host << ":" << port);
-
-    // ★ 发 ClientHello
-    Eng::MessageWriter w;
-    w.Write(static_cast<uint8_t>(game::net::MessageType::ClientHello));
-    uint8_t nlen = (uint8_t)std::min<size_t>(strlen(m_nameBuffer), 32);
-    w.Write<uint8_t>(nlen);
-    w.WriteBytes(reinterpret_cast<const uint8_t*>(m_nameBuffer), nlen);
-    m_client.Send(w.GetBuffer());
-
     return true;
 }
 
@@ -275,7 +282,8 @@ void MyGame::OnStart(Eng::Engine& engine) {
 
     // ============ Dedicated server 模式：无窗口，自动启服务端 ============
     if (engine.IsDedicatedServer()) {
-        if (!StartLocalServer()) {
+        // 走网络模式，且不创建本地客户端
+        if (!StartLocalServer(false, false)) {
             logError(logger, "[Game] Failed to start dedicated server");
             m_shouldQuit = true;
             return;
@@ -381,7 +389,7 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     if (GetInput(deltaTime)) return true;
 
     std::vector<uint8_t> data;
-    while (m_client.Receive(data)) {
+    while (m_client->Receive(data)) {
         HandleServerMessage(data);
     }
 
@@ -476,14 +484,12 @@ void MyGame::OnRender(Eng::Engine& engine) {
 
         // ---- 远景 LOD ----
         renderer->SetModelMatrix(glm::mat4(1.0f));
-        int drawn = 0, culled = 0;
         for (auto& [key, u] : m_lodUnits) {
             if (u.mesh == 0) continue;
-            if (!AabbInFrustum(u.aabbMin, u.aabbMax)) { ++culled; continue; }
+            if (!AabbInFrustum(u.aabbMin, u.aabbMax)) { continue; }
             Eng::client::Material lodMat;
             lodMat.diffuse = m_atlasTexture;
             renderer->DrawMesh(u.mesh, m_lodShader, lodMat);
-            ++drawn;
         }
 
         // ---- 其他玩家 ----
@@ -566,7 +572,7 @@ void MyGame::DrawMainMenu(Eng::Engine& /*engine*/) {
         ImGui::Spacing();
 
         if (ImGui::Button("Single Player", ImVec2(-1, 50))) {
-            if (StartLocalServer() && ConnectToServer("localhost", 25565)) {
+            if (StartLocalServer(true, true)) {
                 m_state = GameState::Playing;
                 m_statusText.clear();
             } else {
@@ -783,13 +789,13 @@ void MyGame::ReturnToMainMenu() {
     if (renderer) renderer->WaitIdle();
 
     // 1. 断网 / 停服务器
-    m_client.Disconnect();
+    if (m_client) m_client.reset(); // 安全 reset
     if (m_server) {
         m_server->Stop();
         m_server.reset();
     }
 
-    // 2. 先停 LOD worker（它有自己的 terrain，但得 join 完）
+    // 2. 先停 LOD worker
     StopLodWorker();
 
     // 3. 销毁 GPU 资源
@@ -813,6 +819,7 @@ void MyGame::ReturnToMainMenu() {
     m_otherPlayers.clear();
     m_myClientId = 0;
 
+    // --- LOD 状态清理 ---
     m_lodUnits.clear();
     m_lodPending.clear();
     {
@@ -823,6 +830,12 @@ void MyGame::ReturnToMainMenu() {
         std::lock_guard lk(m_lodTaskMutex);
         while (!m_lodTaskQueue.empty()) m_lodTaskQueue.pop();
     }
+    
+    // ★ 新增：重置 LOD 游标与请求队列
+    m_lodNeedQueue.clear();
+    m_lodNeedCursor = 0;
+    m_lastLodPcx = INT_MIN;
+    m_lastLodPcz = INT_MIN;
 
     // 4. 最后释放 terrain
     m_lodTerrain.reset();
@@ -845,8 +858,14 @@ void MyGame::ReturnToMainMenu() {
 }
 
 void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
-    m_client.Disconnect();
-    if (m_server) { m_server->Stop(); m_server.reset(); }
+    if (m_client) {
+        m_client->Disconnect();
+        m_client.reset();
+    }
+    if (m_server) { 
+        m_server->Stop(); 
+        m_server.reset(); 
+    }
 
     if (renderer) {
         StopLodWorker();                            // 先停
@@ -988,7 +1007,7 @@ bool MyGame::GetInput(float dt) {
     w.Write(static_cast<uint8_t>(input.place ? 1 : 0));
     w.Write<uint16_t>(input.placeBlock);
     w.Write(static_cast<uint8_t>(input.fly ? 1 : 0));
-    m_client.Send(w.GetBuffer());
+    m_client->Send(w.GetBuffer());
     // 本地预测
     // float speed = 5.0f * dt;
     // cameraPos += input.moveDir * speed;
@@ -1533,7 +1552,7 @@ void MyGame::UpdateChunkStreaming() {
         w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkRequest));
         w.Write<int32_t>(n.cx);
         w.Write<int32_t>(n.cz);
-        m_client.Send(w.GetBuffer());
+        m_client->Send(w.GetBuffer());
 
         m_pending.insert(ChunkKey(n.cx, n.cz));
     }

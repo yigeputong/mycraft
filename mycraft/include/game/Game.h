@@ -2,7 +2,7 @@
 
 #include "Engine.h"
 #include "Protocol.h"
-#include "core/NetworkChannel.h"
+#include "core/Transport.h"
 #include "game/GameServer.h"
 #include "game/server/WorldGenerator.h"
 #include <cstdint>
@@ -27,7 +27,7 @@ private:
     bool                       m_useVulkan = false;
 
     // OnStart 拆分
-    bool StartLocalServer();
+    bool StartLocalServer(bool useMemory = false, bool createClient = true);
     bool ConnectToServer(const std::string& host, uint16_t port);
     bool SetupWindow(Eng::Engine& engine);
     bool SetupRenderer(Eng::Engine& engine);
@@ -64,7 +64,7 @@ private:
     std::string m_statusText;        // 连接中 / 失败提示
 
     // ==================== 网络 ====================
-    Eng::NetworkChannel  m_client;
+    std::unique_ptr<Eng::IClientTransport> m_client;
     std::unique_ptr<game::server::GameServer> m_server = nullptr;
     uint32_t m_myClientId = 0;
     std::unordered_map<uint32_t, net::PlayerState> m_otherPlayers;

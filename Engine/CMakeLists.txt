@@ -20,6 +20,7 @@ add_sanitizer(engine-core)
 add_library(engine-net STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/NetworkChannel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/NetworkServer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/MemoryTransport.cpp
 )
 target_include_directories(engine-net PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
