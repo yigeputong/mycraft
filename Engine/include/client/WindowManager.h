@@ -40,8 +40,8 @@ public:
     // 轮询事件
     void PollEvents();
 
-    // 检查是否有任何窗口仍然打开
-    bool HasAnyWindow() const { return !m_windows.empty(); }
+    // 检查是否有任何窗口仍然打开（正在运行）
+    bool HasAnyWindow() const;
 
     // 更新所有窗口（交换缓冲区等）
     void Update();

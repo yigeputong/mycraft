@@ -867,23 +867,26 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
         m_server.reset(); 
     }
 
-    if (renderer) {
-        StopLodWorker();                            // 先停
+    // ★ 从 mainWin 重新获取 API，确保在 Window 存活时它才有效
+    auto* safeRenderer = mainWin ? mainWin->GetAPI() : nullptr;
+    if (safeRenderer) {
+        StopLodWorker();
         for (auto& [key, u] : m_lodUnits) {
-            if (u.mesh != 0) renderer->DestroyMesh(u.mesh);
+            if (u.mesh != 0) safeRenderer->DestroyMesh(u.mesh);
         }
-        m_lodUnits.clear();
-        m_lodPending.clear();
-        m_lodTerrain.reset();                       // 后释放
-
-        if (m_cubeShader) renderer->DestroyShader(m_cubeShader);
-        if (m_skyShader)  renderer->DestroyShader(m_skyShader);
-        if (m_lodShader)  renderer->DestroyShader(m_lodShader);
-        if (m_playerMesh != 0) { renderer->DestroyMesh(m_playerMesh); m_playerMesh = 0; }
-        renderer->ShutdownImGuiBackend();
+        if (m_cubeShader) safeRenderer->DestroyShader(m_cubeShader);
+        if (m_skyShader)  safeRenderer->DestroyShader(m_skyShader);
+        if (m_lodShader)  safeRenderer->DestroyShader(m_lodShader);
+        if (m_playerMesh != 0) { safeRenderer->DestroyMesh(m_playerMesh); m_playerMesh = 0; }
+        safeRenderer->ShutdownImGuiBackend();
     }
 
-    if (winMgr && m_win) winMgr->DestroyWindow(m_win);
+    // 清理缓存，避免野指针/二次释放
+    m_lodUnits.clear();
+    m_lodPending.clear();
+    m_lodTerrain.reset();
+    renderer = nullptr;
+    mainWin = nullptr; // 因为 WindowManager 可能已经销毁了它
 }
 
 bool MyGame::GetInput(float dt) {
@@ -1697,12 +1700,12 @@ void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
         using B = game::server::Biome;
         switch (bb) {
             case B::Ocean:    return 5;
-            case B::Beach:    return 4;
+            case B::Beach:
             case B::Desert:   return 4;
             case B::Snow:     return 6;
             case B::Mountain: return 0;
-            case B::Forest:   return 1;
-            case B::Plains:   return 1;
+            case B::Forest:
+            case B::Plains:
             default:          return 1;
         }
     };

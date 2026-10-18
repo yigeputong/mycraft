@@ -18,6 +18,7 @@ bool Engine::Init(const EngineConfig& config, IGame* game) {
     m_game.reset(game);
 
     EnableAnsiConsole();
+    SetConsoleUTF8Output();
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         logError(m_logger, "[Engine] SDL_Init failed: " << SDL_GetError());
@@ -76,7 +77,8 @@ void Engine::Run() {
 
         if (m_windowManager) {
             m_windowManager->PollEvents();
-            if (!m_windowManager->HasAnyWindow()) {
+            // 只有需要窗口的模式，才检查窗口是否全部关闭
+            if (NeedsWindow() && !m_windowManager->HasAnyWindow()) {
                 m_running = false;
                 break;
             }
@@ -86,7 +88,7 @@ void Engine::Run() {
             break;
         }
 
-        // ★ DedicatedServer 不渲染
+        // DedicatedServer 不渲染
         if (NeedsWindow()) {
             m_game->OnRender(*this);
         }
@@ -96,7 +98,9 @@ void Engine::Run() {
         }
     }
 
-    m_game->OnShutdown(*this);
+    if (m_game) {
+        m_game->OnShutdown(*this); // 此时 renderer 绝对存活
+    }
 }
 
 void Engine::Stop() {
@@ -104,7 +108,9 @@ void Engine::Stop() {
 }
 
 void Engine::Quit() {
-    m_windowManager.reset();
+    if (m_windowManager) {
+        m_windowManager.reset(); // 遍历 m_windows 并 DestroyWindow
+    }
     m_game.reset();
 
     // ★ 只有初始化过才 Quit

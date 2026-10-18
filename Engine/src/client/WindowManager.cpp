@@ -72,6 +72,15 @@ void WindowManager::PollEvents() {
     }
 }
 
+bool WindowManager::HasAnyWindow() const {
+    for (const auto& [id, window] : m_windows) {
+        if (window && window->GetRunning()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void WindowManager::DispatchEvent(const SDL_Event& event) {
     Input::Get().ProcessEvent(event);
     if (event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) {
@@ -135,16 +144,6 @@ void WindowManager::Update() {
         if (window->GetRunning()) {
             //window->SwapBuffers();
         }
-    }
-
-    std::vector<uint32_t> toRemove;
-    for (auto& [id, window] : m_windows) {
-        if (!window->GetRunning()) {
-            toRemove.push_back(id);
-        }
-    }
-    for (auto id : toRemove) {
-        DestroyWindow(id);
     }
 }
     

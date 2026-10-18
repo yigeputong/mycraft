@@ -91,7 +91,6 @@ private:
 
     bool m_running = false;
     float m_deltaTime = 0.0f;
-    uint64_t m_lastFrameTime = 0;
     std::string m_lastError;
     EngineConfig m_engConfig;
     AppConfig m_appConfig;

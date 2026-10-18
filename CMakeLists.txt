@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
+
 project(mycraft VERSION 0.0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -13,12 +14,20 @@ else()
 endif()
 
 # 输出目录统一
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}/Debug")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}/Debug")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release")
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}/Debug")
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG          "${CMAKE_BINARY_DIR}/Debug")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE        "${CMAKE_BINARY_DIR}/Release")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/Debug")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL     "${CMAKE_BINARY_DIR}/Release")
+
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG          "${CMAKE_BINARY_DIR}/Debug")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE        "${CMAKE_BINARY_DIR}/Release")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/Debug")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_MINSIZEREL     "${CMAKE_BINARY_DIR}/Release")
+
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG          "${CMAKE_BINARY_DIR}/Debug")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE        "${CMAKE_BINARY_DIR}/Release")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/Debug")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_MINSIZEREL     "${CMAKE_BINARY_DIR}/Release")
 
 # 依赖
 find_package(SDL3                  CONFIG REQUIRED)
@@ -44,6 +53,7 @@ if(NOT GLSLC_EXECUTABLE)
     message(FATAL_ERROR "glslc not found")
 endif()
 message(STATUS "glslc: ${GLSLC_EXECUTABLE}")
+
 function(add_glsl_shader TARGET NAME)
     set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/src)
     set(OUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/build/${NAME})
@@ -100,12 +110,51 @@ function(add_sanitizer TARGET)
         return()
     endif()
 
+        # ---- 针对 clang-cl 的特殊处理 ----
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND MSVC)
+        if (SANITIZER STREQUAL "address")
+            target_compile_options(${TARGET} PRIVATE -fsanitize=address -g)
+            
+            # 链接 ASan 运行时
+            target_link_options(${TARGET} PRIVATE /wholearchive:clang_rt.asan_dynamic_runtime_thunk-x86_64.lib)
+            target_link_libraries(${TARGET} PRIVATE clang_rt.asan_dynamic-x86_64.lib)
+            
+            # 自动寻找并复制 ASan DLL
+            get_target_property(TARGET_OUTPUT_DIR ${TARGET} RUNTIME_OUTPUT_DIRECTORY)
+            if (NOT TARGET_OUTPUT_DIR)
+                set(TARGET_OUTPUT_DIR "${CMAKE_BINARY_DIR}/Debug")
+            endif()
+
+            # 获取 clang 编译器的路径，以此去推断 LLVM 安装目录下的 dll 位置
+            get_filename_component(LLVM_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+            file(GLOB ASAN_DLL_PATH "${LLVM_BIN_DIR}/../lib/clang/*/lib/windows/clang_rt.asan_dynamic-x86_64.dll")
+            
+            if (ASAN_DLL_PATH)
+                list(GET ASAN_DLL_PATH 0 ASAN_DLL)
+                add_custom_command(TARGET ${TARGET} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${ASAN_DLL}"
+                        "$<TARGET_FILE_DIR:${TARGET}>/"
+                    COMMENT "Copying ASan runtime DLL for clang-cl"
+                )
+            else()
+                message(WARNING "Could not find clang_rt.asan_dynamic-x86_64.dll in LLVM directory!")
+            endif()
+        endif()
+        return()
+    endif()
+
+    # ---- MSVC 处理 ----
     if (MSVC)
-        if (SANITIZER STREQUAL "address" OR SANITIZER STREQUAL "address+undefined")
+        if (SANITIZER STREQUAL "address")
             target_compile_options(${TARGET} PRIVATE /fsanitize=address)
             target_link_options(${TARGET} PRIVATE /INCREMENTAL:NO)
         endif()
-    elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        return()
+    endif()
+
+    # ---- GCC/Clang (Linux) 处理 ----
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         if (SANITIZER STREQUAL "thread")
             target_compile_options(${TARGET} PRIVATE -fsanitize=thread -g -fno-omit-frame-pointer)
             target_link_options(${TARGET} PRIVATE -fsanitize=thread)

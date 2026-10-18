@@ -64,7 +64,7 @@ private:
     int m_windowedWidth = m_config.windowWidth;
     std::unique_ptr<IRenderAPI> m_renderapi;
 
-    bool m_running;
+    bool m_running = true;
 
     bool m_createSuccess = false;
 
