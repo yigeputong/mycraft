@@ -121,6 +121,7 @@ private:
         uint32_t      indexCount     = 0;
         VkBuffer      instanceBuffer = VK_NULL_HANDLE;
         VmaAllocation instanceAlloc  = VK_NULL_HANDLE;
+        uint32_t      instanceCapacity = 0;
     };
 
     struct ShaderInternal {

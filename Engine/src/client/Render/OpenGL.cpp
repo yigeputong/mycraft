@@ -91,6 +91,7 @@ void OpenGLAPI::Shutdown() {
         if (mesh.vao) glDeleteVertexArrays(1, &mesh.vao);
         if (mesh.vbo) glDeleteBuffers(1, &mesh.vbo);
         if (mesh.ebo) glDeleteBuffers(1, &mesh.ebo);
+        if (mesh.instanceVBO) glDeleteBuffers(1, &mesh.instanceVBO);
     }
     m_meshes.clear();
 
@@ -172,68 +173,68 @@ MeshHandle OpenGLAPI::CreateMeshInternal(const MeshData& data, bool instanced) {
     if (!m_initialized) return 0;
 
     MeshDataInternal internal;
-    glGenVertexArrays(1, &internal.vao);
-    glBindVertexArray(internal.vao);
 
-    // ============ 顶点 VBO ============
-    glGenBuffers(1, &internal.vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, internal.vbo);
-    glBufferData(GL_ARRAY_BUFFER,
-                 data.vertices.size() * sizeof(Vertex),
-                 data.vertices.data(),
-                 GL_STATIC_DRAW);
+    // ---- VAO ----
+    glCreateVertexArrays(1, &internal.vao);
 
-    // 顶点属性
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          (void*)offsetof(Vertex, position));
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          (void*)offsetof(Vertex, normal));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          (void*)offsetof(Vertex, uv));
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          (void*)offsetof(Vertex, ao));
-    glEnableVertexAttribArray(3);
+    // ---- 顶点 VBO（binding 0）----
+    glCreateBuffers(1, &internal.vbo);
+    glNamedBufferData(internal.vbo,
+                      data.vertices.size() * sizeof(Vertex),
+                      data.vertices.data(),
+                      GL_STATIC_DRAW);
+    glVertexArrayVertexBuffer(internal.vao, 0, internal.vbo, 0, sizeof(Vertex));
 
-    // ============ 实例 VBO（仅实例化时）============
-    internal.instanceVBO = 0;
-    if (instanced) {
-        glGenBuffers(1, &internal.instanceVBO);
-        glBindBuffer(GL_ARRAY_BUFFER, internal.instanceVBO);
-        glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+    glVertexArrayAttribFormat(internal.vao, 0, 3, GL_FLOAT, GL_FALSE, offsetof(Vertex, position));
+    glVertexArrayAttribBinding(internal.vao, 0, 0);
+    glEnableVertexArrayAttrib(internal.vao, 0);
 
-        for (int i = 0; i < 4; ++i) {
-            glEnableVertexAttribArray(3 + i);
-            glVertexAttribPointer(3 + i, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4),
-                                  (void*)(sizeof(glm::vec4) * i));
-            glVertexAttribDivisor(3 + i, 1);
-        }
+    glVertexArrayAttribFormat(internal.vao, 1, 3, GL_FLOAT, GL_FALSE, offsetof(Vertex, normal));
+    glVertexArrayAttribBinding(internal.vao, 1, 0);
+    glEnableVertexArrayAttrib(internal.vao, 1);
+
+    glVertexArrayAttribFormat(internal.vao, 2, 2, GL_FLOAT, GL_FALSE, offsetof(Vertex, uv));
+    glVertexArrayAttribBinding(internal.vao, 2, 0);
+    glEnableVertexArrayAttrib(internal.vao, 2);
+
+    glVertexArrayAttribFormat(internal.vao, 3, 1, GL_FLOAT, GL_FALSE, offsetof(Vertex, ao));
+    glVertexArrayAttribBinding(internal.vao, 3, 0);
+    glEnableVertexArrayAttrib(internal.vao, 3);
+
+    // ---- 实例 VBO（binding 1，始终创建，默认 identity）----
+    glCreateBuffers(1, &internal.instanceVBO);
+    glm::mat4 identity(1.0f);
+    glNamedBufferData(internal.instanceVBO, sizeof(glm::mat4), &identity, GL_DYNAMIC_DRAW);
+    glVertexArrayVertexBuffer(internal.vao, 1, internal.instanceVBO, 0, sizeof(glm::mat4));
+
+    for (int i = 0; i < 4; ++i) {
+        glVertexArrayAttribFormat(internal.vao, 4 + i, 4, GL_FLOAT, GL_FALSE,
+                                  sizeof(glm::vec4) * i);
+        glVertexArrayAttribBinding(internal.vao, 4 + i, 1);
+        glEnableVertexArrayAttrib(internal.vao, 4 + i);
     }
+    glVertexArrayBindingDivisor(internal.vao, 1, 1);
 
-    // ============ EBO ============
+    // ---- EBO ----
     if (!data.indices.empty()) {
-        glGenBuffers(1, &internal.ebo);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, internal.ebo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                     data.indices.size() * sizeof(uint32_t),
-                     data.indices.data(),
-                     GL_STATIC_DRAW);
+        glCreateBuffers(1, &internal.ebo);
+        glNamedBufferData(internal.ebo,
+                          data.indices.size() * sizeof(uint32_t),
+                          data.indices.data(),
+                          GL_STATIC_DRAW);
+        glVertexArrayElementBuffer(internal.vao, internal.ebo);
         internal.indexCount = data.indices.size();
-        internal.indexType = GL_UNSIGNED_INT;
+        internal.indexType  = GL_UNSIGNED_INT;
     } else {
-        internal.ebo = 0;
+        internal.ebo        = 0;
         internal.indexCount = data.vertices.size();
-        internal.indexType = GL_NONE;
+        internal.indexType  = GL_NONE;
     }
-
-    glBindVertexArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     MeshHandle handle = m_nextMeshHandle++;
     m_meshes[handle] = internal;
 
+    (void)instanced;
     return handle;
 }
 
@@ -521,7 +522,6 @@ ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath, const std::str
     ShaderHandle handle = m_nextShaderHandle++;
     ShaderDataInternal internal;
     internal.program = program;
-    internal.modelLoc = glGetUniformLocation(program, "uModel"); // 缓存
     m_shaders[handle] = internal;
     return handle;
 }
@@ -660,6 +660,7 @@ void OpenGLAPI::DestroyMesh(MeshHandle handle) {
     if (it->second.vao) glDeleteVertexArrays(1, &it->second.vao);
     if (it->second.vbo) glDeleteBuffers(1, &it->second.vbo);
     if (it->second.ebo) glDeleteBuffers(1, &it->second.ebo);
+    if (it->second.instanceVBO) glDeleteBuffers(1, &it->second.instanceVBO);
     m_meshes.erase(it);
 }
 
@@ -842,44 +843,35 @@ void OpenGLAPI::BeginFrame() {
 void OpenGLAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& material) {
     if (!m_initialized) return;
 
-    auto meshIt = m_meshes.find(mesh);
+    auto meshIt   = m_meshes.find(mesh);
     auto shaderIt = m_shaders.find(shader);
     if (meshIt == m_meshes.end() || shaderIt == m_shaders.end()) return;
 
-    const auto& meshData = meshIt->second;
+    auto& meshData = meshIt->second;
     GLuint program = shaderIt->second.program;
     if (program == 0) return;
 
     glUseProgram(program);
-
     UpdateMaterialUBO(material.shininess);
 
-    if (shaderIt->second.modelLoc != -1) {
-        glUniformMatrix4fv(shaderIt->second.modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
-    }
+    // ★ 用 m_modelMatrix 覆盖 instance buffer（单个实例）
+    glNamedBufferSubData(meshData.instanceVBO, 0, sizeof(glm::mat4), &m_modelMatrix);
 
-    // ============ 3. 绑定纹理 ============
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ResolveTexture(material.diffuse));
-
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, ResolveTexture(material.specular));
-
-    // ============ 4. 绘制 ============
 
     glBindVertexArray(meshData.vao);
     if (meshData.ebo != 0) {
         glDrawElements(GL_TRIANGLES,
                        static_cast<GLsizei>(meshData.indexCount),
-                       meshData.indexType,
-                       nullptr);
+                       meshData.indexType, nullptr);
     } else {
-        glDrawArrays(GL_TRIANGLES, 0,
-                     static_cast<GLsizei>(meshData.indexCount));
+        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(meshData.indexCount));
     }
     glBindVertexArray(0);
 
-    // ============ 5. 解绑纹理 ============
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, 0);
     glActiveTexture(GL_TEXTURE0);
@@ -889,7 +881,7 @@ void OpenGLAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
 void OpenGLAPI::DrawMeshInstanced(MeshHandle mesh, ShaderHandle shader, const Material& material, const std::vector<glm::mat4>& transforms) {
     if (transforms.empty()) return;
 
-    auto meshIt = m_meshes.find(mesh);
+    auto meshIt   = m_meshes.find(mesh);
     auto shaderIt = m_shaders.find(shader);
     if (meshIt == m_meshes.end() || shaderIt == m_shaders.end()) return;
 
@@ -898,107 +890,74 @@ void OpenGLAPI::DrawMeshInstanced(MeshHandle mesh, ShaderHandle shader, const Ma
     if (program == 0) return;
 
     glUseProgram(program);
+    UpdateMaterialUBO(material.shininess);
 
-    UpdateMaterialUBO(material.shininess); 
+    // ★ DSA：直接命名写入，不碰 GL_ARRAY_BUFFER 状态
+    glNamedBufferData(meshData.instanceVBO,
+                      transforms.size() * sizeof(glm::mat4),
+                      transforms.data(),
+                      GL_DYNAMIC_DRAW);
 
-    // ============ 2. 上传实例矩阵 ============
-    glBindBuffer(GL_ARRAY_BUFFER, meshData.instanceVBO);
-    glBufferData(GL_ARRAY_BUFFER,
-                 transforms.size() * sizeof(glm::mat4),
-                 transforms.data(),
-                 GL_DYNAMIC_DRAW);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);   // 解绑，避免影响其他状态
-
-    // ============ 3. 绑定纹理 ============
-    // 漫反射
     glActiveTexture(GL_TEXTURE0);
-    if (material.diffuse != 0) {
-        auto texIt = m_textures.find(material.diffuse);
-        if (texIt != m_textures.end() && texIt->second.textureID != 0) {
-            glBindTexture(GL_TEXTURE_2D, texIt->second.textureID);
-        } else {
-            glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
-        }
-    } else {
-        glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
-    }
-
-    // 镜面
+    glBindTexture(GL_TEXTURE_2D, ResolveTexture(material.diffuse));
     glActiveTexture(GL_TEXTURE1);
-    if (material.specular != 0) {
-        auto texIt = m_textures.find(material.specular);
-        if (texIt != m_textures.end() && texIt->second.textureID != 0) {
-            glBindTexture(GL_TEXTURE_2D, texIt->second.textureID);
-        } else {
-            glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
-        }
-    } else {
-        glBindTexture(GL_TEXTURE_2D, m_defaultTexture);
-    }
+    glBindTexture(GL_TEXTURE_2D, ResolveTexture(material.specular));
 
-    // ============ 4. 一次性绘制所有实例 ============
     glBindVertexArray(meshData.vao);
     if (meshData.ebo != 0) {
         glDrawElementsInstanced(GL_TRIANGLES,
                                 static_cast<GLsizei>(meshData.indexCount),
-                                meshData.indexType,
-                                nullptr,
+                                meshData.indexType, nullptr,
                                 static_cast<GLsizei>(transforms.size()));
     } else {
-        glDrawArraysInstanced(GL_TRIANGLES,
-                              0,
+        glDrawArraysInstanced(GL_TRIANGLES, 0,
                               static_cast<GLsizei>(meshData.indexCount),
                               static_cast<GLsizei>(transforms.size()));
     }
     glBindVertexArray(0);
 
-    // ============ 5. 解绑纹理 ============
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, 0);
     glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 void OpenGLAPI::DrawMeshBatch(const std::vector<MeshHandle>& meshes, ShaderHandle shader, const Material& material) {
     if (!m_initialized || meshes.empty()) return;
-    
+
     auto shaderIt = m_shaders.find(shader);
-    if (shaderIt == m_shaders.end()) return;
-    GLuint program = shaderIt->second.program;
-    if (program == 0) return;
+    if (shaderIt == m_shaders.end() || shaderIt->second.program == 0) return;
 
-    // 1. 只绑一次 Shader
-    glUseProgram(program);
-    
-    // 2. 只更新一次 Model 矩阵（通常是单位矩阵）
-    if (shaderIt->second.modelLoc != -1) {
-        glm::mat4 identity = glm::mat4(1.0f);
-        glUniformMatrix4fv(shaderIt->second.modelLoc, 1, GL_FALSE, glm::value_ptr(identity));
-    }
-
-    // 3. 只绑一次材质和纹理
+    glUseProgram(shaderIt->second.program);
     UpdateMaterialUBO(material.shininess);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ResolveTexture(material.diffuse));
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, ResolveTexture(material.specular));
 
-    // 4. 疯狂 DrawCall
+    const glm::mat4 identity(1.0f);
     for (MeshHandle mesh : meshes) {
         auto meshIt = m_meshes.find(mesh);
         if (meshIt == m_meshes.end()) continue;
-        
-        const auto& meshData = meshIt->second;
+
+        auto& meshData = meshIt->second;
+
+        // ★ 强制 identity，防止被先前的 DrawMesh 污染
+        glNamedBufferSubData(meshData.instanceVBO, 0, sizeof(glm::mat4), &identity);
+
         glBindVertexArray(meshData.vao);
         if (meshData.ebo != 0) {
-            glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(meshData.indexCount), meshData.indexType, nullptr);
+            glDrawElements(GL_TRIANGLES,
+                           static_cast<GLsizei>(meshData.indexCount),
+                           meshData.indexType, nullptr);
         } else {
             glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(meshData.indexCount));
         }
     }
 
-    // 5. 解绑
     glBindVertexArray(0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
 }

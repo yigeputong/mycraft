@@ -1010,6 +1010,32 @@ MeshHandle VulkanAPI::CreateMesh(const MeshData& data) {
         mi.indexCount = static_cast<uint32_t>(data.indices.size());
     }
 
+    // ---- instance buffer（identity，64 字节）----
+    {
+        VkDeviceSize size = sizeof(glm::mat4);
+        glm::mat4 identity(1.0f);
+
+        VkBufferCreateInfo bci{};
+        bci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size        = size;
+        bci.usage       = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO;
+        ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                   VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+        VmaAllocationInfo info{};
+        if (vmaCreateBuffer(m_allocator, &bci, &ai,
+                            &mi.instanceBuffer, &mi.instanceAlloc, &info) != VK_SUCCESS)
+            throw std::runtime_error("vmaCreateBuffer (instance) failed");
+
+        std::memcpy(info.pMappedData, &identity, size);
+        vmaFlushAllocation(m_allocator, mi.instanceAlloc, 0, VK_WHOLE_SIZE);
+        mi.instanceCapacity = 1;
+    }
+
     MeshHandle h = m_nextMesh++;
     m_meshes.emplace(h, mi);
     return h;
@@ -1023,6 +1049,8 @@ void VulkanAPI::DestroyMesh(MeshHandle h) {
         vmaDestroyBuffer(m_allocator, it->second.vertexBuffer, it->second.vertexAlloc);
     if (it->second.indexAlloc != VK_NULL_HANDLE)
         vmaDestroyBuffer(m_allocator, it->second.indexBuffer, it->second.indexAlloc);
+    if (it->second.instanceAlloc != VK_NULL_HANDLE)
+        vmaDestroyBuffer(m_allocator, it->second.instanceBuffer, it->second.instanceAlloc);
     m_meshes.erase(it);
 }
 
@@ -1054,28 +1082,38 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const 
     stages[1].module = *si.fragModule;
     stages[1].pName  = fragEntry;
 
-    // ==================== Vertex input ====================
-    VkVertexInputBindingDescription binding{};
-    binding.binding   = 0;
-    binding.stride    = sizeof(Vertex);
-    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        // ==================== Vertex input ====================
+    VkVertexInputBindingDescription bindings[2]{};
+    bindings[0].binding   = 0;
+    bindings[0].stride    = sizeof(Vertex);
+    bindings[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    bindings[1].binding   = 1;
+    bindings[1].stride    = sizeof(glm::mat4);
+    bindings[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
 
-    VkVertexInputAttributeDescription attrs[4]{};
+    VkVertexInputAttributeDescription attrs[8]{};
     attrs[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position) };
     attrs[1] = { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)   };
     attrs[2] = { 2, 0, VK_FORMAT_R32G32_SFLOAT,    offsetof(Vertex, uv)       };
     attrs[3] = { 3, 0, VK_FORMAT_R32_SFLOAT,       offsetof(Vertex, ao)       };
+    attrs[4] = { 4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0  };
+    attrs[5] = { 5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16 };
+    attrs[6] = { 6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32 };
+    attrs[7] = { 7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 48 };
 
     VkPipelineVertexInputStateCreateInfo vi{};
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vi.vertexBindingDescriptionCount   = 1;
-    vi.pVertexBindingDescriptions      = &binding;
     if (isSky) {
+        vi.vertexBindingDescriptionCount   = 1;
+        vi.pVertexBindingDescriptions      = &bindings[0];
         vi.vertexAttributeDescriptionCount = 1;
+        vi.pVertexAttributeDescriptions    = attrs;
     } else {
-        vi.vertexAttributeDescriptionCount = 4;
+        vi.vertexBindingDescriptionCount   = 2;
+        vi.pVertexBindingDescriptions      = bindings;
+        vi.vertexAttributeDescriptionCount = 8;
+        vi.pVertexAttributeDescriptions    = attrs;
     }
-    vi.pVertexAttributeDescriptions    = attrs;
 
     // ==================== Input assembly ====================
     VkPipelineInputAssemblyStateCreateInfo ia{};
@@ -1139,13 +1177,9 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const 
     blend.pAttachments    = &blendAtt;
 
     // ==================== Pipeline layout（vk:: 保留，逻辑较复杂） ====================
+    // ★ 已删除 pcRange：mesh.vert 改用 instance mat4 读 model，不再读 push constant
     std::array<vk::DescriptorSetLayout, 2> setLayouts = {
         *m_globalSetLayout, *m_textureSetLayout
-    };
-    vk::PushConstantRange pcRange{
-        .stageFlags = vk::ShaderStageFlagBits::eVertex,
-        .offset     = 0,
-        .size       = sizeof(glm::mat4)
     };
 
     vk::PipelineLayoutCreateInfo plci;
@@ -1159,8 +1193,8 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const 
         plci = {
             .setLayoutCount         = 2,
             .pSetLayouts            = setLayouts.data(),
-            .pushConstantRangeCount = 1,
-            .pPushConstantRanges    = &pcRange
+            .pushConstantRangeCount = 0,
+            .pPushConstantRanges    = nullptr
         };
     }
     si.layout = vk::raii::PipelineLayout(m_device, plci);
@@ -1248,6 +1282,15 @@ void VulkanAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
     if (texIt != m_textures.end()) texSet = *texIt->second.set;
     if (!texSet) return;
 
+    // ★ 把 m_modelMatrix 写进该 mesh 的 instance buffer（identity slot 覆盖）
+    //   shader 从 instance mat4 读 model，不再走 push constant
+    {
+        VmaAllocationInfo info{};
+        vmaGetAllocationInfo(m_allocator, mit->second.instanceAlloc, &info);
+        std::memcpy(info.pMappedData, &m_modelMatrix, sizeof(glm::mat4));
+        vmaFlushAllocation(m_allocator, mit->second.instanceAlloc, 0, sizeof(glm::mat4));
+    }
+
     auto& cmd = m_commandBuffers[m_frameIndex];
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *sit->second.pipeline);
 
@@ -1258,17 +1301,147 @@ void VulkanAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                             *sit->second.layout, 0, sets, {});
 
-    cmd.pushConstants<glm::mat4>(*sit->second.layout,
-        vk::ShaderStageFlagBits::eVertex, 0, m_modelMatrix);
-
-    cmd.bindVertexBuffers(0, vk::Buffer(mit->second.vertexBuffer), {0});
+    std::array<vk::Buffer, 2> vbs = {
+        vk::Buffer(mit->second.vertexBuffer),
+        vk::Buffer(mit->second.instanceBuffer)
+    };
+    std::array<vk::DeviceSize, 2> offsets = { 0, 0 };
+    cmd.bindVertexBuffers(0, vbs, offsets);
     cmd.bindIndexBuffer(vk::Buffer(mit->second.indexBuffer), 0, vk::IndexType::eUint32);
     cmd.drawIndexed(mit->second.indexCount, 1, 0, 0, 0);
 }
 
-void VulkanAPI::DrawMeshBatch(const std::vector<MeshHandle>& meshes, ShaderHandle shader, const Material& material) {
+void VulkanAPI::DrawMeshInstanced(MeshHandle mesh, ShaderHandle shader, const Material& mat, const std::vector<glm::mat4>& transforms) {
+    if (transforms.empty()) return;
+
+    auto mit = m_meshes.find(mesh);
+    auto sit = m_shaders.find(shader);
+    if (mit == m_meshes.end() || sit == m_shaders.end()) return;
+
+    ensureRenderPassActive();
+
+    auto& mi = mit->second;
+    const uint32_t count = static_cast<uint32_t>(transforms.size());
+
+    // ---- 容量不足则扩容（按 2 的幂增长，避免频繁重建）----
+    if (mi.instanceCapacity < count) {
+        if (mi.instanceBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(m_allocator, mi.instanceBuffer, mi.instanceAlloc);
+            mi.instanceBuffer = VK_NULL_HANDLE;
+            mi.instanceAlloc  = VK_NULL_HANDLE;
+        }
+        uint32_t newCap = 1;
+        while (newCap < count) newCap <<= 1;
+
+        VkDeviceSize size = newCap * sizeof(glm::mat4);
+        VkBufferCreateInfo bci{};
+        bci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size        = size;
+        bci.usage       = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO;
+        ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                   VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+        if (vmaCreateBuffer(m_allocator, &bci, &ai,
+                            &mi.instanceBuffer, &mi.instanceAlloc, nullptr) != VK_SUCCESS) {
+            logError(m_logger, "[Vulkan] DrawMeshInstanced: vmaCreateBuffer failed");
+            return;
+        }
+        mi.instanceCapacity = newCap;
+    }
+
+    // ---- 上传 transforms ----
+    VmaAllocationInfo info{};
+    vmaGetAllocationInfo(m_allocator, mi.instanceAlloc, &info);
+    std::memcpy(info.pMappedData, transforms.data(), count * sizeof(glm::mat4));
+    vmaFlushAllocation(m_allocator, mi.instanceAlloc, 0, count * sizeof(glm::mat4));
+
+    // ---- 纹理 set ----
+    TextureHandle texH = mat.diffuse;
+    if (texH == 0) texH = m_defaultTexture;
+
+    vk::DescriptorSet texSet = nullptr;
+    auto texIt = m_textures.find(texH);
+    if (texIt != m_textures.end()) texSet = *texIt->second.set;
+    if (!texSet) return;
+
+    // ---- 绑状态 + 绘制 ----
+    auto& cmd = m_commandBuffers[m_frameIndex];
+
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *sit->second.pipeline);
+
+    std::array<vk::DescriptorSet, 2> sets = {
+        *m_globalSets[m_frameIndex],
+        texSet
+    };
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                            *sit->second.layout, 0, sets, {});
+
+    std::array<vk::Buffer, 2> vbs = {
+        vk::Buffer(mi.vertexBuffer),
+        vk::Buffer(mi.instanceBuffer)
+    };
+    std::array<vk::DeviceSize, 2> offsets = { 0, 0 };
+    cmd.bindVertexBuffers(0, vbs, offsets);
+    cmd.bindIndexBuffer(vk::Buffer(mi.indexBuffer), 0, vk::IndexType::eUint32);
+    cmd.drawIndexed(mi.indexCount, count, 0, 0, 0);
+}
+
+void VulkanAPI::DrawMeshBatch(const std::vector<MeshHandle>& meshes,
+                              ShaderHandle shader,
+                              const Material& material) {
+    if (meshes.empty()) return;
+
+    auto sit = m_shaders.find(shader);
+    if (sit == m_shaders.end()) return;
+
+    ensureRenderPassActive();
+
+    TextureHandle texH = material.diffuse;
+    if (texH == 0) texH = m_defaultTexture;
+
+    vk::DescriptorSet texSet = nullptr;
+    auto texIt = m_textures.find(texH);
+    if (texIt != m_textures.end()) texSet = *texIt->second.set;
+    if (!texSet) return;
+
+    auto& cmd = m_commandBuffers[m_frameIndex];
+
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *sit->second.pipeline);
+
+    std::array<vk::DescriptorSet, 2> sets = {
+        *m_globalSets[m_frameIndex],
+        texSet
+    };
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                            *sit->second.layout, 0, sets, {});
+
     for (MeshHandle mesh : meshes) {
-        DrawMesh(mesh, shader, material);
+        auto mit = m_meshes.find(mesh);
+        if (mit == m_meshes.end()) continue;
+        if (mit->second.indexCount == 0) continue;
+        if (mit->second.instanceBuffer == VK_NULL_HANDLE) continue;
+
+        {
+            VmaAllocationInfo info{};
+            vmaGetAllocationInfo(m_allocator, mit->second.instanceAlloc, &info);
+            static const glm::mat4 kIdentity(1.0f);
+            std::memcpy(info.pMappedData, &kIdentity, sizeof(glm::mat4));
+            vmaFlushAllocation(m_allocator, mit->second.instanceAlloc, 0, sizeof(glm::mat4));
+        }
+
+        std::array<vk::Buffer, 2> vbs = {
+            vk::Buffer(mit->second.vertexBuffer),
+            vk::Buffer(mit->second.instanceBuffer)
+        };
+        std::array<vk::DeviceSize, 2> offsets = { 0, 0 };
+
+        cmd.bindVertexBuffers(0, vbs, offsets);
+        cmd.bindIndexBuffer(vk::Buffer(mit->second.indexBuffer), 0, vk::IndexType::eUint32);
+        cmd.drawIndexed(mit->second.indexCount, 1, 0, 0, 0);
     }
 }
 
@@ -1862,9 +2035,6 @@ void VulkanAPI::SetUniform(ShaderHandle, const std::string& name, float value) {
 MeshHandle VulkanAPI::CreateMeshInstance(const MeshData& data) { return CreateMesh(data); }
 
 Model VulkanAPI::LoadModel(const std::string&, bool) { return {}; }
-
-void VulkanAPI::DrawMeshInstanced(MeshHandle, ShaderHandle, const Material&,
-                                  const std::vector<glm::mat4>&) {}
 
 void VulkanAPI::SetUniform(ShaderHandle, const std::string&, const glm::mat4&) {}
 void VulkanAPI::SetUniform(ShaderHandle, const std::string&, const glm::vec3&) {}

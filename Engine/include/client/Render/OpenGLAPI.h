@@ -112,7 +112,6 @@ private:
 
     struct ShaderDataInternal {
         GLuint program = 0;
-        GLint modelLoc = 0;
     };
 
     struct FramebufferInternal {
