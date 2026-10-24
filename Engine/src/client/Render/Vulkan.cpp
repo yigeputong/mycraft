@@ -1266,6 +1266,12 @@ void VulkanAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
     cmd.drawIndexed(mit->second.indexCount, 1, 0, 0, 0);
 }
 
+void VulkanAPI::DrawMeshBatch(const std::vector<MeshHandle>& meshes, ShaderHandle shader, const Material& material) {
+    for (MeshHandle mesh : meshes) {
+        DrawMesh(mesh, shader, material);
+    }
+}
+
 // ============================================================
 // Swapchain 重建
 // ============================================================

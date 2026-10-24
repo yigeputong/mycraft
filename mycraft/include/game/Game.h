@@ -166,6 +166,9 @@ private:
     glm::vec3 m_lastCameraPos{0.0f};
     float     m_stationaryTime = 0.0f;
 
+    std::vector<Eng::client::MeshHandle> m_visibleChunkMeshes;
+std::vector<Eng::client::MeshHandle> m_visibleLodMeshes;
+
     // ==================== 相机 ====================
     glm::vec3 cameraPos{0.0f, 40.0f, 0.0f};
     glm::vec3 cameraFront{0.0f, 0.0f, -1.0f};

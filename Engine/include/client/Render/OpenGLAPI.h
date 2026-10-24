@@ -67,6 +67,7 @@ public:
                                    ShaderHandle shader,
                                    const Material& material,
                                    const std::vector<glm::mat4>& transforms) override;
+    void DrawMeshBatch(const std::vector<MeshHandle>& meshes, ShaderHandle shader, const Material& mat) override;
 
     void DrawSkybox(ShaderHandle shader) override;
     void DrawFullscreenQuad(TextureHandle textureID) override;
@@ -111,8 +112,7 @@ private:
 
     struct ShaderDataInternal {
         GLuint program = 0;
-        // 可选的 uniform 缓存（为了性能）
-        // std::unordered_map<std::string, GLint> uniformCache;
+        GLint modelLoc = 0;
     };
 
     struct FramebufferInternal {

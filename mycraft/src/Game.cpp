@@ -159,6 +159,68 @@ static const char* BlockName(game::BlockType t) {
     }
 }
 
+// ==========================================
+// UI 辅助函数
+// ==========================================
+// 绘制带黑色阴影的文字
+void DrawTextWithShadow(ImDrawList* dl, ImVec2 pos, ImU32 color, const char* text) {
+    dl->AddText(ImVec2(pos.x + 2, pos.y + 2), IM_COL32(30, 30, 30, 255), text); // 阴影
+    dl->AddText(pos, color, text);                                              // 正文
+}
+
+// 绘制 MC 风格的按钮
+bool DrawButton(const char* label, ImVec2 size) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // 使用 InvisibleButton 接管点击，不负责渲染
+    bool clicked = ImGui::InvisibleButton(label, size);
+    bool hovered = ImGui::IsItemHovered();
+
+    // 按钮背景色（悬停时变亮）
+    ImU32 bgColor = hovered ? IM_COL32(120, 120, 120, 255) : IM_COL32(100, 100, 100, 255);
+    dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bgColor);
+
+    // 画双层边框（黑底，悬停时内边框变白，平时是深灰）
+    dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(0, 0, 0, 255), 0.0f, 0, 2.0f);
+    ImU32 innerColor = hovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(80, 80, 80, 255);
+    dl->AddRect(ImVec2(pos.x + 1, pos.y + 1), ImVec2(pos.x + size.x - 1, pos.y + size.y - 1), innerColor, 0.0f, 0, 2.0f);
+
+    // 文字居中并带阴影
+    ImVec2 textSize = ImGui::CalcTextSize(label);
+    ImVec2 textPos = ImVec2(pos.x + (size.x - textSize.x) * 0.5f, pos.y + (size.y - textSize.y) * 0.5f);
+    DrawTextWithShadow(dl, textPos, IM_COL32(255, 255, 255, 255), label);
+
+    return clicked;
+}
+
+// 绘制旋转文字（用于 Splash Text）
+void DrawRotatedText(ImDrawList* dl, ImVec2 center, const char* text, float angleRad, ImU32 color) {
+    ImVec2 textSize = ImGui::CalcTextSize(text);
+    ImVec2 pos = ImVec2(center.x - textSize.x * 0.5f, center.y - textSize.y * 0.5f);
+    
+    // 记录当前的顶点索引
+    int vtxStart = dl->VtxBuffer.Size;
+    
+    // 先正常画一遍带阴影的字
+    dl->AddText(ImVec2(pos.x + 2, pos.y + 2), IM_COL32(30, 30, 30, 255), text);
+    dl->AddText(pos, color, text);
+    
+    int vtxEnd = dl->VtxBuffer.Size;
+
+    // 遍历这几个字的顶点，围绕中心点做旋转
+    float cosA = std::cos(angleRad);
+    float sinA = std::sin(angleRad);
+
+    for (int i = vtxStart; i < vtxEnd; ++i) {
+        ImDrawVert& v = dl->VtxBuffer[i];
+        float dx = v.pos.x - center.x;
+        float dy = v.pos.y - center.y;
+        v.pos.x = center.x + (dx * cosA - dy * sinA);
+        v.pos.y = center.y + (dx * sinA + dy * cosA);
+    }
+}
+
 } // namespace
 
 namespace game {
@@ -528,9 +590,6 @@ void MyGame::OnRender(Eng::Engine& engine) {
     }
     renderer->BeginFrame();
 
-    glm::mat4 vp = projection * view;
-    UpdateFrustum(vp);
-
     // ============ Pass 1: 场景 → FBO ============
     renderer->BindFramebuffer(fbo);
     renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -543,6 +602,8 @@ void MyGame::OnRender(Eng::Engine& engine) {
                                 mainWin->GetAspectRatio(), 
                                 engine.GetConfig().render.zNear, 
                                 engine.GetConfig().render.zFar);
+        glm::mat4 vp = projection * view;
+        UpdateFrustum(vp);
 
         renderer->SetViewMatrix(view);
         renderer->SetProjectionMatrix(projection);
@@ -552,20 +613,41 @@ void MyGame::OnRender(Eng::Engine& engine) {
         mat.diffuse = m_atlasTexture;
 
         renderer->SetUniform(m_cubeShader, "uAOStrength", engine.GetConfig().render.m_aoStrength);
+        // ---- 近景 chunk：视锥剔除 + 合批 ----
+        m_visibleChunkMeshes.clear();
+        m_visibleChunkMeshes.reserve(m_chunks.size());
         for (auto& [key, cc] : m_chunks) {
             if (cc.mesh == 0) continue;
-            renderer->SetModelMatrix(glm::mat4(1.0f));
-            renderer->DrawMesh(cc.mesh, m_cubeShader, mat);
+
+            const int cx = cc.chunk.chunk_x;
+            const int cz = cc.chunk.chunk_z;
+            const glm::vec3 mn(static_cast<float>(cx * CHUNK_SIZE_X), 0.0f,
+                               static_cast<float>(cz * CHUNK_SIZE_Z));
+            const glm::vec3 mx = mn + glm::vec3(static_cast<float>(CHUNK_SIZE_X),
+                                                static_cast<float>(CHUNK_SIZE_Y),
+                                                static_cast<float>(CHUNK_SIZE_Z));
+            if (!AabbInFrustum(mn, mx)) continue;
+
+            m_visibleChunkMeshes.push_back(cc.mesh);
+        }
+        if (!m_visibleChunkMeshes.empty()) {
+            // model 已经是 identity，batch 里会设一次
+            renderer->DrawMeshBatch(m_visibleChunkMeshes, m_cubeShader, mat);
         }
 
-        // ---- 远景 LOD ----
-        renderer->SetModelMatrix(glm::mat4(1.0f));
+        // ---- 远景 LOD：已有剔除，收集后合批 ----
+        Eng::client::Material lodMat;
+        lodMat.diffuse = m_atlasTexture;
+
+        m_visibleLodMeshes.clear();
+        m_visibleLodMeshes.reserve(m_lodUnits.size());
         for (auto& [key, u] : m_lodUnits) {
             if (u.mesh == 0) continue;
-            if (!AabbInFrustum(u.aabbMin, u.aabbMax)) { continue; }
-            Eng::client::Material lodMat;
-            lodMat.diffuse = m_atlasTexture;
-            renderer->DrawMesh(u.mesh, m_lodShader, lodMat);
+            if (!AabbInFrustum(u.aabbMin, u.aabbMax)) continue;
+            m_visibleLodMeshes.push_back(u.mesh);
+        }
+        if (!m_visibleLodMeshes.empty()) {
+            renderer->DrawMeshBatch(m_visibleLodMeshes, m_lodShader, lodMat);
         }
 
         // ---- 其他玩家 ----
@@ -622,68 +704,6 @@ void MyGame::OnRender(Eng::Engine& engine) {
         DrawUI(engine);
 
     renderer->EndFrame();
-}
-
-// ==========================================
-// UI 辅助函数
-// ==========================================
-// 绘制带黑色阴影的文字
-void DrawTextWithShadow(ImDrawList* dl, ImVec2 pos, ImU32 color, const char* text) {
-    dl->AddText(ImVec2(pos.x + 2, pos.y + 2), IM_COL32(30, 30, 30, 255), text); // 阴影
-    dl->AddText(pos, color, text);                                              // 正文
-}
-
-// 绘制 MC 风格的按钮
-bool DrawButton(const char* label, ImVec2 size) {
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    // 使用 InvisibleButton 接管点击，不负责渲染
-    bool clicked = ImGui::InvisibleButton(label, size);
-    bool hovered = ImGui::IsItemHovered();
-
-    // 按钮背景色（悬停时变亮）
-    ImU32 bgColor = hovered ? IM_COL32(120, 120, 120, 255) : IM_COL32(100, 100, 100, 255);
-    dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bgColor);
-
-    // 画双层边框（黑底，悬停时内边框变白，平时是深灰）
-    dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(0, 0, 0, 255), 0.0f, 0, 2.0f);
-    ImU32 innerColor = hovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(80, 80, 80, 255);
-    dl->AddRect(ImVec2(pos.x + 1, pos.y + 1), ImVec2(pos.x + size.x - 1, pos.y + size.y - 1), innerColor, 0.0f, 0, 2.0f);
-
-    // 文字居中并带阴影
-    ImVec2 textSize = ImGui::CalcTextSize(label);
-    ImVec2 textPos = ImVec2(pos.x + (size.x - textSize.x) * 0.5f, pos.y + (size.y - textSize.y) * 0.5f);
-    DrawTextWithShadow(dl, textPos, IM_COL32(255, 255, 255, 255), label);
-
-    return clicked;
-}
-
-// 绘制旋转文字（用于 Splash Text）
-void DrawRotatedText(ImDrawList* dl, ImVec2 center, const char* text, float angleRad, ImU32 color) {
-    ImVec2 textSize = ImGui::CalcTextSize(text);
-    ImVec2 pos = ImVec2(center.x - textSize.x * 0.5f, center.y - textSize.y * 0.5f);
-    
-    // 记录当前的顶点索引
-    int vtxStart = dl->VtxBuffer.Size;
-    
-    // 先正常画一遍带阴影的字
-    dl->AddText(ImVec2(pos.x + 2, pos.y + 2), IM_COL32(30, 30, 30, 255), text);
-    dl->AddText(pos, color, text);
-    
-    int vtxEnd = dl->VtxBuffer.Size;
-
-    // 遍历这几个字的顶点，围绕中心点做旋转
-    float cosA = std::cos(angleRad);
-    float sinA = std::sin(angleRad);
-
-    for (int i = vtxStart; i < vtxEnd; ++i) {
-        ImDrawVert& v = dl->VtxBuffer[i];
-        float dx = v.pos.x - center.x;
-        float dy = v.pos.y - center.y;
-        v.pos.x = center.x + (dx * cosA - dy * sinA);
-        v.pos.y = center.y + (dx * sinA + dy * cosA);
-    }
 }
 
 // ==========================================

@@ -521,6 +521,7 @@ ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath, const std::str
     ShaderHandle handle = m_nextShaderHandle++;
     ShaderDataInternal internal;
     internal.program = program;
+    internal.modelLoc = glGetUniformLocation(program, "uModel"); // 缓存
     m_shaders[handle] = internal;
     return handle;
 }
@@ -853,7 +854,9 @@ void OpenGLAPI::DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& m
 
     UpdateMaterialUBO(material.shininess);
 
-    SetUniform(shader, "uModel", m_modelMatrix);
+    if (shaderIt->second.modelLoc != -1) {
+        glUniformMatrix4fv(shaderIt->second.modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
+    }
 
     // ============ 3. 绑定纹理 ============
     glActiveTexture(GL_TEXTURE0);
@@ -953,6 +956,50 @@ void OpenGLAPI::DrawMeshInstanced(MeshHandle mesh, ShaderHandle shader, const Ma
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
     glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void OpenGLAPI::DrawMeshBatch(const std::vector<MeshHandle>& meshes, ShaderHandle shader, const Material& material) {
+    if (!m_initialized || meshes.empty()) return;
+    
+    auto shaderIt = m_shaders.find(shader);
+    if (shaderIt == m_shaders.end()) return;
+    GLuint program = shaderIt->second.program;
+    if (program == 0) return;
+
+    // 1. 只绑一次 Shader
+    glUseProgram(program);
+    
+    // 2. 只更新一次 Model 矩阵（通常是单位矩阵）
+    if (shaderIt->second.modelLoc != -1) {
+        glm::mat4 identity = glm::mat4(1.0f);
+        glUniformMatrix4fv(shaderIt->second.modelLoc, 1, GL_FALSE, glm::value_ptr(identity));
+    }
+
+    // 3. 只绑一次材质和纹理
+    UpdateMaterialUBO(material.shininess);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, ResolveTexture(material.diffuse));
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, ResolveTexture(material.specular));
+
+    // 4. 疯狂 DrawCall
+    for (MeshHandle mesh : meshes) {
+        auto meshIt = m_meshes.find(mesh);
+        if (meshIt == m_meshes.end()) continue;
+        
+        const auto& meshData = meshIt->second;
+        glBindVertexArray(meshData.vao);
+        if (meshData.ebo != 0) {
+            glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(meshData.indexCount), meshData.indexType, nullptr);
+        } else {
+            glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(meshData.indexCount));
+        }
+    }
+
+    // 5. 解绑
+    glBindVertexArray(0);
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 

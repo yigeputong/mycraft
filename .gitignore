@@ -7,3 +7,5 @@ dist/
 CMakeUserPresets.json
 
 **/imgui.ini
+
+contexts.md

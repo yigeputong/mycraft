@@ -153,6 +153,8 @@ public:
                                     ShaderHandle shader,
                                     const Material& material,
                                     const std::vector<glm::mat4>& transforms) = 0;
+    // 合批绘制：所有 mesh 共享同一个 shader 和材质
+    virtual void DrawMeshBatch(const std::vector<MeshHandle>& meshes, ShaderHandle shader, const Material& mat) = 0;
     virtual void EndFrame() = 0;
 
     // 特殊绘制（天空盒、UI等）

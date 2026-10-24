@@ -84,6 +84,7 @@ public:
     void DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& material) override;
     void DrawMeshInstanced(MeshHandle mesh, ShaderHandle shader, const Material& material,
                            const std::vector<glm::mat4>& transforms) override;
+    void DrawMeshBatch(const std::vector<MeshHandle>& meshes, ShaderHandle shader, const Material& mat) override;
     void DrawSkybox(ShaderHandle shader) override;
     void DrawFullscreenQuad(TextureHandle textureID) override;
 
