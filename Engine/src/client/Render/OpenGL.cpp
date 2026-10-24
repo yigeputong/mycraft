@@ -252,14 +252,12 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
         return 0;
     }
 
-    // 2. 检查尺寸是否有效
     if (surf->w <= 0 || surf->h <= 0) {
         logError(m_logger, "[Texture] Invalid surface size: " << surf->w << "x" << surf->h);
         SDL_DestroySurface(surf);
         return 0;
     }
 
-    // 3. 强制转换为 RGBA8888（保证兼容性）
     SDL_Surface* converted = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_RGBA32);
     if (!converted) {
         logError(m_logger, "[Texture] SDL_ConvertSurface failed: " << SDL_GetError());
@@ -269,7 +267,6 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
     SDL_DestroySurface(surf);
     surf = converted;
 
-    // 4. 获取像素格式细节
     const SDL_PixelFormatDetails* details = SDL_GetPixelFormatDetails(surf->format);
     if (!details) {
         logError(m_logger, "[Texture] Unknown pixel format: " << surf->format);
@@ -278,41 +275,30 @@ TextureHandle OpenGLAPI::CreateTexture(const std::string& path) {
     }
 
     int bpp = details->bytes_per_pixel;
+    GLenum internalFormat = (bpp == 4) ? GL_RGBA8 : GL_RGB8;
+    GLenum format = (bpp == 4) ? GL_RGBA : GL_RGB;
 
-    // 5. 确定 OpenGL 格式（统一 UNORM，和 atlas / 管线一致）
-    GLenum internalFormat = GL_RGBA8;
-    GLenum format = GL_RGBA;
-    if (bpp == 4) {
-        internalFormat = GL_RGBA8;
-        format = GL_RGBA;
-    } else if (bpp == 3) {
-        internalFormat = GL_RGB8;
-        format = GL_RGB;
-    } else {
-        logError(m_logger, "[Texture] Unsupported BPP: " << bpp);
-        SDL_DestroySurface(surf);
-        return 0;
-    }
-
-    // 6. 生成 OpenGL 纹理
+    // --- DSA 创建纹理 ---
     GLuint textureID;
-    glGenTextures(1, &textureID);
-    glBindTexture(GL_TEXTURE_2D, textureID);
+    glCreateTextures(GL_TEXTURE_2D, 1, &textureID);
+    
+    // 分配存储空间（1 级 mipmap）
+    glTextureStorage2D(textureID, 1, internalFormat, surf->w, surf->h);
+    // 直接上传像素数据
+    glTextureSubImage2D(textureID, 0, 0, 0, surf->w, surf->h, format, GL_UNSIGNED_BYTE, surf->pixels);
 
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    // 直接设置纹理参数
+    glTextureParameteri(textureID, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTextureParameteri(textureID, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTextureParameteri(textureID, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
+    glTextureParameteri(textureID, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, surf->w, surf->h, 0,
-                 format, GL_UNSIGNED_BYTE, surf->pixels);
-
-    glGenerateMipmap(GL_TEXTURE_2D);
+    // 生成 mipmap
+    glGenerateTextureMipmap(textureID);
 
     int w = surf->w, h = surf->h;
     SDL_DestroySurface(surf);
 
-    // 7. 保存并返回句柄
     TextureHandle handle = m_nextTextureHandle++;
     TextureDataInternal data;
     data.textureID = textureID;
@@ -691,65 +677,53 @@ void OpenGLAPI::DestroyShader(ShaderHandle handle) {
 }
 
 Framebuffer OpenGLAPI::CreateFramebuffer(int width, int height) {
-    // ---------- 全屏 quad 初始化（保持不变）----------
-    if (!m_fullscreenShader)
-    m_fullscreenShader = CreateShader(
-        "./assets/shaders/build/post/vert.gl.spv",
-        "./assets/shaders/build/post/frag.gl.spv");
-
-    if (m_fullscreenVAO == 0) {
-        static constexpr float vertices[] = {
-            -1.0f,  1.0f,   0.0f, 1.0f,
-            -1.0f, -1.0f,   0.0f, 0.0f,
-            1.0f, -1.0f,   1.0f, 0.0f,
-            -1.0f,  1.0f,   0.0f, 1.0f,
-            1.0f, -1.0f,   1.0f, 0.0f,
-            1.0f,  1.0f,   1.0f, 1.0f
-        };
-
-        glGenVertexArrays(1, &m_fullscreenVAO);
-        glGenBuffers(1, &m_fullscreenVBO);
-        glBindVertexArray(m_fullscreenVAO);
-        glBindBuffer(GL_ARRAY_BUFFER, m_fullscreenVBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)nullptr);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
-        glEnableVertexAttribArray(1);
-        glBindVertexArray(0);
+    if (!m_fullscreenShader) {
+        m_fullscreenShader = CreateShader("./assets/shaders/build/post/vert.gl.spv", "./assets/shaders/build/post/frag.gl.spv");
     }
 
-    // ---------- FBO + attachments ----------
-    GLuint fbo      = 0;
-    GLuint colorTex = 0;
-    GLuint depthBuf = 0;
+    // 全屏 quad 初始化（顺手也改成 DSA）
+    if (m_fullscreenVAO == 0) {
+        static constexpr float vertices[] = {
+            -1.0f,  1.0f,   0.0f, 1.0f,  -1.0f, -1.0f,   0.0f, 0.0f,
+             1.0f, -1.0f,   1.0f, 0.0f,  -1.0f,  1.0f,   0.0f, 1.0f,
+             1.0f, -1.0f,   1.0f, 0.0f,   1.0f,  1.0f,   1.0f, 1.0f
+        };
+        glCreateVertexArrays(1, &m_fullscreenVAO);
+        glCreateBuffers(1, &m_fullscreenVBO);
+        glNamedBufferData(m_fullscreenVBO, sizeof(vertices), vertices, GL_STATIC_DRAW);
+        
+        glVertexArrayVertexBuffer(m_fullscreenVAO, 0, m_fullscreenVBO, 0, 4 * sizeof(float));
+        
+        glVertexArrayAttribFormat(m_fullscreenVAO, 0, 2, GL_FLOAT, GL_FALSE, 0);
+        glVertexArrayAttribBinding(m_fullscreenVAO, 0, 0);
+        glEnableVertexArrayAttrib(m_fullscreenVAO, 0);
+        
+        glVertexArrayAttribFormat(m_fullscreenVAO, 1, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float));
+        glVertexArrayAttribBinding(m_fullscreenVAO, 1, 0);
+        glEnableVertexArrayAttrib(m_fullscreenVAO, 1);
+    }
 
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    GLuint fbo, colorTex, depthBuf;
+    glCreateFramebuffers(1, &fbo);
+    
+    // Color 纹理
+    glCreateTextures(GL_TEXTURE_2D, 1, &colorTex);
+    glTextureStorage2D(colorTex, 1, GL_RGBA8, width, height);
+    glTextureParameteri(colorTex, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTextureParameteri(colorTex, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTextureParameteri(colorTex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTextureParameteri(colorTex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    // Color texture
-    glGenTextures(1, &colorTex);
-    glBindTexture(GL_TEXTURE_2D, colorTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                            GL_TEXTURE_2D, colorTex, 0);
+    // 直接挂载到 FBO
+    glNamedFramebufferTexture(fbo, GL_COLOR_ATTACHMENT0, colorTex, 0);
 
-    // Depth
-    glGenRenderbuffers(1, &depthBuf);
-    glBindRenderbuffer(GL_RENDERBUFFER, depthBuf);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
-                               GL_RENDERBUFFER, depthBuf);
+    // Depth Renderbuffer
+    glCreateRenderbuffers(1, &depthBuf);
+    glNamedRenderbufferStorage(depthBuf, GL_DEPTH24_STENCIL8, width, height);
+    glNamedFramebufferRenderbuffer(fbo, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depthBuf);
 
-    // 检查
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    if (glCheckNamedFramebufferStatus(fbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         logError(m_logger, "[OpenGLAPI] Framebuffer creation failed!");
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glDeleteFramebuffers(1, &fbo);
         glDeleteTextures(1, &colorTex);
         glDeleteRenderbuffers(1, &depthBuf);
@@ -757,31 +731,18 @@ Framebuffer OpenGLAPI::CreateFramebuffer(int width, int height) {
     }
     logDebug(m_logger, "[RenderAPI] Framebuffer created: " << width << "x" << height);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glBindRenderbuffer(GL_RENDERBUFFER, 0);
-
-    // ---------- 存到内部表 ----------
     FramebufferHandle h = m_nextFramebufferHandle++;
-
     FramebufferInternal fbi;
-    fbi.fbo      = fbo;
-    fbi.colorTex = colorTex;
-    fbi.depthBuf = depthBuf;
-    fbi.width    = width;
-    fbi.height   = height;
+    fbi.fbo = fbo; fbi.colorTex = colorTex; fbi.depthBuf = depthBuf;
+    fbi.width = width; fbi.height = height;
     m_framebuffers[h] = fbi;
 
-    // 把 colorTex 也注册到 m_textures，这样 DrawFullscreenQuad 能直接用
     TextureHandle texHandle = m_nextTextureHandle++;
     m_textures[texHandle] = { colorTex, width, height, GL_RGBA };
     m_fbColorHandles[h] = texHandle;
 
-    // ---------- 返回 handle ----------
     Framebuffer fb;
-    fb.handle = h;
-    fb.width  = width;
-    fb.height = height;
+    fb.handle = h; fb.width = width; fb.height = height;
     return fb;
 }
 
@@ -1095,34 +1056,22 @@ GLuint OpenGLAPI::LinkProgram(GLuint vertexShader, GLuint fragmentShader) {
 }
 
 void OpenGLAPI::UpdateGlobalUBO() {
-    while (glGetError() != GL_NO_ERROR) {}
-
-    if (m_globalUBO == 0) {
-        logError(m_logger, "[OpenGLAPI] m_globalUBO == 0!");
-        return;
-    }
+    if (m_globalUBO == 0) return;
 
     Eng::client::GlobalUBOData data;
-    data.view           = m_viewMatrix;
-    data.projection     = m_projectionMatrix;
-    data.viewPos        = m_viewPos;
-    data.aoStrength     = m_aoStrength;       // 原 _pad0
-    data.lightDir       = glm::normalize(m_lightDir);
+    data.view = m_viewMatrix; 
+    data.projection = m_projectionMatrix;
+    data.viewPos = m_viewPos; 
+    data.aoStrength = m_aoStrength;
+    data.lightDir = glm::normalize(m_lightDir); 
     data.lightIntensity = m_lightIntensity;
-    data.lightColor     = m_lightColor;
-    data.timeOfDay      = m_timeOfDay;        // 原 _pad1
-    data.lightAmbient   = m_lightAmbient;
-    data._pad2          = 0.0f;
+    data.lightColor = m_lightColor; 
+    data.timeOfDay = m_timeOfDay;
+    data.lightAmbient = m_lightAmbient; 
+    data._pad2 = 0.0f;
 
-    glBindBuffer(GL_UNIFORM_BUFFER, m_globalUBO);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(data), &data);
-
-    GLenum err = glGetError();
-    if (err != GL_NO_ERROR) {
-        logError(m_logger, "[OpenGLAPI: UpdateGlobalUBO()] glBufferSubData error: " << err);
-    }
-
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    // DSA 直接更新
+    glNamedBufferSubData(m_globalUBO, 0, sizeof(data), &data);
 }
 
 void OpenGLAPI::UpdateMaterialUBO(float shininess) {
@@ -1130,9 +1079,8 @@ void OpenGLAPI::UpdateMaterialUBO(float shininess) {
     data.shininess = shininess;
     data._pad[0] = data._pad[1] = data._pad[2] = 0.0f;
 
-    glBindBuffer(GL_UNIFORM_BUFFER, m_materialUBO);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(data), &data);
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    // DSA 直接更新
+    glNamedBufferSubData(m_materialUBO, 0, sizeof(data), &data);
 }
 
 MeshHandle OpenGLAPI::GetSkyCubeMesh() {

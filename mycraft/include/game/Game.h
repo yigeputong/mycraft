@@ -27,7 +27,7 @@ public:
 
     void OnShutdown(Eng::Engine& engine) override;
 private:
-    Eng::client::RenderAPItype m_apiType   = Eng::client::RenderAPItype::VULKAN;
+    Eng::client::RenderAPItype m_apiType   = Eng::client::RenderAPItype::OPENGL;
     bool                       m_useVulkan = false;
 
     // OnStart 拆分
