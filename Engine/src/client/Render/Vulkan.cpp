@@ -1727,6 +1727,9 @@ TextureHandle VulkanAPI::GetFramebufferTexture(const Framebuffer& fb) const {
 }
 
 void VulkanAPI::DestroyFramebuffer(const Framebuffer& fb) {
+    if (m_device != nullptr) {
+        vkDeviceWaitIdle(*m_device); 
+    }
     if (m_pendingFramebuffer.handle == fb.handle) {
         m_pendingFramebuffer = {};
     }

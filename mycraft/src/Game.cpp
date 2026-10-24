@@ -229,6 +229,9 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
             case SDL_EVENT_WINDOW_RESTORED:
                 m_minimized = false;
                 break;
+            case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                m_shouldQuit = true;
+                break;
             default:
                 break;
         }
@@ -272,6 +275,38 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
         logError(logger, "[Game] ImGui backend init failed");
         return false;
     }
+    // 设置 ImGui 极简风格
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowRounding = 0.0f;     // 去掉窗口圆角
+    style.FrameRounding = 0.0f;      // 去掉按钮/输入框圆角
+    style.ScrollbarRounding = 0.0f;
+    style.WindowBorderSize = 0.0f;   // 去掉边框
+    style.FrameBorderSize = 0.0f;
+    style.ItemSpacing = ImVec2(10, 10);
+    
+    // 配色（深色 + 青色强调）
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_WindowBg]       = ImVec4(0.08f, 0.08f, 0.09f, 0.95f); // 深灰半透明
+    colors[ImGuiCol_ChildBg]        = ImVec4(0.12f, 0.12f, 0.13f, 0.60f); // 列表底色稍亮
+    colors[ImGuiCol_Text]           = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
+    colors[ImGuiCol_Button]         = ImVec4(0.20f, 0.20f, 0.22f, 1.00f);
+    colors[ImGuiCol_ButtonHovered]  = ImVec4(0.25f, 0.25f, 0.27f, 1.00f);
+    colors[ImGuiCol_ButtonActive]   = ImVec4(0.15f, 0.15f, 0.17f, 1.00f);
+    colors[ImGuiCol_CheckMark]      = ImVec4(0.20f, 0.80f, 0.80f, 1.00f); // 青色勾选
+    colors[ImGuiCol_SliderGrab]     = ImVec4(0.20f, 0.80f, 0.80f, 1.00f);
+    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.30f, 0.90f, 0.90f, 1.00f);
+    colors[ImGuiCol_Header]         = ImVec4(0.20f, 0.80f, 0.80f, 0.20f); // 选中项背景
+    colors[ImGuiCol_HeaderHovered]  = ImVec4(0.20f, 0.80f, 0.80f, 0.30f);
+
+    // 获取系统的 DPI 缩放比例
+    float dpiScale = SDL_GetWindowDisplayScale(mainWin->GetSDLWindow());
+    if (dpiScale <= 0.0f) dpiScale = 1.0f;
+    m_uiScale = dpiScale;
+
+    // 让 ImGui 全局缩放
+    style.ScaleAllSizes(m_uiScale); // 自动放大所有边距、圆角、滚动条宽度
+    ImGuiIO& io = ImGui::GetIO();
+    io.FontGlobalScale = m_uiScale; // 自动放大字体
 
     // 图集纹理
     auto pixels = GenerateAtlasPixels();
@@ -385,6 +420,20 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     float t = 1.0f - std::exp(-CORRECTION_RATE * deltaTime);
     cameraPos      += m_positionError * t;
     m_positionError *= (1.0f - t);
+
+    // 如果渲染距离变了，清空旧的缓存强制重新计算
+    static int s_lastRenderDistance = m_renderDistance;
+    if (m_renderDistance != s_lastRenderDistance) {
+        s_lastRenderDistance = m_renderDistance;
+        
+        // 强制让 LOD 和区块流式加载重新评估
+        m_lastLodPcx = INT_MIN;
+        m_lastLodPcz = INT_MIN;
+        m_lastPlayerChunkX = INT_MIN;
+        m_lastPlayerChunkZ = INT_MIN;
+        
+        // 如果你想立刻卸载超过新半径的区块，可以在这里触发 m_pending 的清理
+    }
 
     // 一天 5 分钟，24 小时 = 300 秒
     float hoursPerSec = 24.0f / kDayLengthSec;
@@ -575,65 +624,146 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->EndFrame();
 }
 
+// ==========================================
+// UI 辅助函数
+// ==========================================
+// 绘制带黑色阴影的文字
+void DrawTextWithShadow(ImDrawList* dl, ImVec2 pos, ImU32 color, const char* text) {
+    dl->AddText(ImVec2(pos.x + 2, pos.y + 2), IM_COL32(30, 30, 30, 255), text); // 阴影
+    dl->AddText(pos, color, text);                                              // 正文
+}
+
+// 绘制 MC 风格的按钮
+bool DrawButton(const char* label, ImVec2 size) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // 使用 InvisibleButton 接管点击，不负责渲染
+    bool clicked = ImGui::InvisibleButton(label, size);
+    bool hovered = ImGui::IsItemHovered();
+
+    // 按钮背景色（悬停时变亮）
+    ImU32 bgColor = hovered ? IM_COL32(120, 120, 120, 255) : IM_COL32(100, 100, 100, 255);
+    dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bgColor);
+
+    // 画双层边框（黑底，悬停时内边框变白，平时是深灰）
+    dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(0, 0, 0, 255), 0.0f, 0, 2.0f);
+    ImU32 innerColor = hovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(80, 80, 80, 255);
+    dl->AddRect(ImVec2(pos.x + 1, pos.y + 1), ImVec2(pos.x + size.x - 1, pos.y + size.y - 1), innerColor, 0.0f, 0, 2.0f);
+
+    // 文字居中并带阴影
+    ImVec2 textSize = ImGui::CalcTextSize(label);
+    ImVec2 textPos = ImVec2(pos.x + (size.x - textSize.x) * 0.5f, pos.y + (size.y - textSize.y) * 0.5f);
+    DrawTextWithShadow(dl, textPos, IM_COL32(255, 255, 255, 255), label);
+
+    return clicked;
+}
+
+// 绘制旋转文字（用于 Splash Text）
+void DrawRotatedText(ImDrawList* dl, ImVec2 center, const char* text, float angleRad, ImU32 color) {
+    ImVec2 textSize = ImGui::CalcTextSize(text);
+    ImVec2 pos = ImVec2(center.x - textSize.x * 0.5f, center.y - textSize.y * 0.5f);
+    
+    // 记录当前的顶点索引
+    int vtxStart = dl->VtxBuffer.Size;
+    
+    // 先正常画一遍带阴影的字
+    dl->AddText(ImVec2(pos.x + 2, pos.y + 2), IM_COL32(30, 30, 30, 255), text);
+    dl->AddText(pos, color, text);
+    
+    int vtxEnd = dl->VtxBuffer.Size;
+
+    // 遍历这几个字的顶点，围绕中心点做旋转
+    float cosA = std::cos(angleRad);
+    float sinA = std::sin(angleRad);
+
+    for (int i = vtxStart; i < vtxEnd; ++i) {
+        ImDrawVert& v = dl->VtxBuffer[i];
+        float dx = v.pos.x - center.x;
+        float dy = v.pos.y - center.y;
+        v.pos.x = center.x + (dx * cosA - dy * sinA);
+        v.pos.y = center.y + (dx * sinA + dy * cosA);
+    }
+}
+
+// ==========================================
+// 主菜单渲染
+// ==========================================
 void MyGame::DrawMainMenu(Eng::Engine& /*engine*/) {
     ImGuiIO& io = ImGui::GetIO();
+    
+    // ★ 修复：使用 BackgroundDrawList 防止遮挡弹窗
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    dl->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 160));
 
-    // ---- 主面板 ----
-    ImGui::SetNextWindowPos(
-        ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-        ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(400, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::Begin("##MainMenuRoot", nullptr, 
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | 
+        ImGuiWindowFlags_NoBackground);
 
-    if (ImGui::Begin("##MainMenu", nullptr,
-            ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoTitleBar)) {
-        ImGui::SetWindowFontScale(2.0f);
-        ImGui::TextUnformatted("Mycraft");
-        ImGui::SetWindowFontScale(1.4f);
-        ImGui::Separator();
-        ImGui::Spacing();
+    float menuWidth = 400.0f;
+    float buttonHeight = 40.0f;
+    float startX = (io.DisplaySize.x - menuWidth) * 0.5f;
+    float startY = io.DisplaySize.y * 0.3f;
 
-        ImGui::InputText("Name", m_nameBuffer, sizeof(m_nameBuffer));
-        ImGui::Spacing();
+    ImGui::SetWindowFontScale(3.0f);
+    const char* title = "MYCRAFT";
+    ImVec2 titleSize = ImGui::CalcTextSize(title);
+    ImVec2 titlePos = ImVec2((io.DisplaySize.x - titleSize.x * 3.0f) * 0.5f, startY - 120);
+    DrawTextWithShadow(ImGui::GetWindowDrawList(), titlePos, IM_COL32(200, 200, 200, 255), title);
+    ImGui::SetWindowFontScale(1.0f);
 
-        if (ImGui::Button("Single Player", ImVec2(-1, 50))) {
-            if (StartLocalServer(true, true)) {
-                m_state = GameState::Playing;
-                m_statusText.clear();
-            } else {
-                m_statusText = "Failed to start local server";
-            }
+    const char* splash = "Only in Mycraft!";
+    DrawRotatedText(ImGui::GetWindowDrawList(), ImVec2(startX + menuWidth - 50, startY - 80), splash, -0.3f, IM_COL32(255, 255, 0, 255));
+
+    ImGui::SetCursorScreenPos(ImVec2(startX, startY));
+    if (DrawButton("Single Player", ImVec2(menuWidth, buttonHeight))) {
+        if (StartLocalServer(true, true)) {
+            m_state = GameState::Playing;
+            m_statusText.clear();
+        } else {
+            m_statusText = "Failed to start local server";
         }
+    }
 
-        if (ImGui::Button("Multiplayer", ImVec2(-1, 50))) {
-            m_showMultiplayerDialog = true;
-        }
+    ImGui::SetCursorScreenPos(ImVec2(startX, startY + 50));
+    if (DrawButton("Multiplayer", ImVec2(menuWidth, buttonHeight))) {
+        m_showMultiplayerDialog = true;
+    }
 
-        ImGui::Spacing();
-        ImGui::Separator();
-        if (ImGui::Button("Quit", ImVec2(-1, 40))) {
-            m_shouldQuit = true;
-        }
+    ImGui::SetCursorScreenPos(ImVec2(startX, startY + 110));
+    if (DrawButton("Options...", ImVec2(menuWidth * 0.48f, buttonHeight))) {
+        m_menuOpen = true;
+    }
+    ImGui::SetCursorScreenPos(ImVec2(startX + menuWidth * 0.52f, startY + 110));
+    if (DrawButton("Quit Game", ImVec2(menuWidth * 0.48f, buttonHeight))) {
+        m_shouldQuit = true;
+    }
 
-        if (!m_statusText.empty()) {
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", m_statusText.c_str());
-        }
+    // 底部信息
+    ImGui::GetWindowDrawList()->AddText(ImVec2(10, io.DisplaySize.y - 30), IM_COL32(200, 200, 200, 255), "Mycraft v0.0.1");
+    const char* copyright = "Copyright Mycraft Team. Open Source Project.";
+    ImVec2 copySize = ImGui::CalcTextSize(copyright);
+    ImGui::GetWindowDrawList()->AddText(ImVec2(io.DisplaySize.x - copySize.x - 10, io.DisplaySize.y - 30), IM_COL32(200, 200, 200, 255), copyright);
+
+    if (!m_statusText.empty()) {
+        ImGui::SetCursorScreenPos(ImVec2(startX, startY + 170));
+        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", m_statusText.c_str());
     }
     ImGui::End();
 
     // ---- 多人连接对话框 ----
     if (m_showMultiplayerDialog) ImGui::OpenPopup("Connect to Server");
-
+    
+    // ★ 修复：强制弹窗居中
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(400, 0), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Connect to Server", nullptr,
-            ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginPopupModal("Connect to Server", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::InputText("Address", m_ipBuffer, sizeof(m_ipBuffer));
         ImGui::InputInt("Port", &m_portInput);
         ImGui::Spacing();
-
         if (ImGui::Button("Connect", ImVec2(120, 40))) {
             if (ConnectToServer(m_ipBuffer, (uint16_t)m_portInput)) {
                 m_state = GameState::Playing;
@@ -654,161 +784,336 @@ void MyGame::DrawMainMenu(Eng::Engine& /*engine*/) {
     }
 }
 
+void MyGame::DrawSettingsMenu(Eng::Engine& engine) {
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.09f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.12f, 0.14f, 0.85f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.20f, 0.22f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.25f, 0.28f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.15f, 0.17f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(0.20f, 0.80f, 0.80f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.20f, 0.80f, 0.80f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.30f, 0.90f, 0.90f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.20f, 0.80f, 0.80f, 0.20f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.20f, 0.80f, 0.80f, 0.30f));
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::Begin("##SettingsRoot", nullptr, 
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | 
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground);
+
+    // --- 顶部栏 ---
+    ImGui::SetCursorPos(ImVec2(20, 20));
+    ImGui::SetNextItemWidth(300);
+    static char searchBuf[128] = "";
+    ImGui::InputTextWithHint("##Search", "Search options...", searchBuf, sizeof(searchBuf));
+
+    ImGui::SameLine(io.DisplaySize.x - 50);
+    if (ImGui::Button("X", ImVec2(30, 30))) {
+        m_menuOpen = false;
+    }
+
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    float leftWidth = 250.0f;
+    float contentHeight = io.DisplaySize.y - 140.0f;
+
+    // ================= 左侧导航 =================
+    ImGui::BeginChild("##LeftPanel", ImVec2(leftWidth, contentHeight), true, ImGuiWindowFlags_NoScrollbar);
+    {
+        ImGui::Spacing();
+        if (m_settingsTab == 0) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 0.8f, 0.8f, 1.0f));
+        else ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+        if (ImGui::Selectable("    Video", m_settingsTab == 0)) m_settingsTab = 0;
+        ImGui::PopStyleColor();
+
+        if (m_settingsTab == 1) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 0.8f, 0.8f, 1.0f));
+        else ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+        if (ImGui::Selectable("    Audio", m_settingsTab == 1)) m_settingsTab = 1;
+        ImGui::PopStyleColor();
+
+        if (m_settingsTab == 2) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 0.8f, 0.8f, 1.0f));
+        else ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+        if (ImGui::Selectable("    Controls", m_settingsTab == 2)) m_settingsTab = 2;
+        ImGui::PopStyleColor();
+    }
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+
+    // ================= 右侧面板 =================
+    ImGui::BeginChild("##RightPanel", ImVec2(0, contentHeight), true, ImGuiWindowFlags_NoScrollbar);
+    {
+        auto& wcfg = mainWin->GetConfigs();
+        auto& rcfg = engine.GetConfig().render;
+
+        if (m_settingsTab == 0) {
+            ImGui::Spacing();
+            ImGui::Text("Render Distance"); ImGui::SameLine(leftWidth * 1.2f);
+            ImGui::SetNextItemWidth(150);
+            ImGui::SliderInt("##rd", &m_renderDistance, 2, 32, "%d chunks");
+
+            ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+
+            ImGui::Text("Fullscreen Mode"); ImGui::SameLine(leftWidth * 1.2f);
+            bool fs = wcfg.fullscreen;
+            if (ImGui::Checkbox("##fs", &fs)) {
+                wcfg.fullscreen = fs;
+                mainWin->SetFullscreen(fs);
+                renderer->WaitIdle();
+                fbo = renderer->CreateFramebuffer(
+                    mainWin->GetConfigs().windowPixelWidth,
+                    mainWin->GetConfigs().windowPixelHeight);
+            }
+
+            ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+
+            ImGui::Text("Vertical Sync"); ImGui::SameLine(leftWidth * 1.2f);
+            if (ImGui::Checkbox("##vsync", &wcfg.vsync)) {
+                m_applyPending = true;
+            }
+
+            ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+
+            ImGui::Text("Ambient Occlusion"); ImGui::SameLine(leftWidth * 1.2f);
+            bool ao = rcfg.m_aoStrength > 0.5f;
+            if (ImGui::Checkbox("##ao", &ao)) {
+                rcfg.m_aoStrength = ao ? 1.0f : 0.0f;
+            }
+
+            ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+
+            ImGui::Text("Field of View"); ImGui::SameLine(leftWidth * 1.2f);
+            ImGui::SetNextItemWidth(150);
+            ImGui::SliderFloat("##fov", &rcfg.fov, 30.0f, 120.0f, "%.0f");
+
+        } else if (m_settingsTab == 1) {
+            ImGui::Spacing();
+            ImGui::TextDisabled("Audio settings coming soon...");
+        } else if (m_settingsTab == 2) {
+            ImGui::Spacing();
+            ImGui::TextDisabled("Controls settings coming soon...");
+        }
+    }
+    ImGui::EndChild();
+
+    // ================= 底部按钮区域 =================
+    float bottomY = io.DisplaySize.y - 60.0f;
+
+    // 左下角：自适应宽度的按钮
+    ImGui::SetCursorPos(ImVec2(20.0f, bottomY));
+    
+    const char* leftBtnText = (m_state == GameState::Playing) ? "Save & Quit to Title" : "Back to Menu";
+    float leftBtnWidth = ImGui::CalcTextSize(leftBtnText).x + 40.0f;
+    if (leftBtnWidth < 150.0f) leftBtnWidth = 150.0f; 
+
+    if (ImGui::Button(leftBtnText, ImVec2(leftBtnWidth, 40))) {
+        if (m_state == GameState::Playing) {
+            m_returnToMenuPending = true;
+        } else {
+            m_menuOpen = false;
+        }
+    }
+
+    // 右下角：Apply / Done (动态宽度 + 整体右对齐)
+    const char* btnApplyText = "Apply";
+    const char* btnDoneText = "Done";
+    
+    // 计算宽度：文字长度 + 40像素内边距，并设置100的最小宽度
+    float applyWidth = ImGui::CalcTextSize(btnApplyText).x + 40.0f;
+    float doneWidth  = ImGui::CalcTextSize(btnDoneText).x + 40.0f;
+    if (applyWidth < 100.0f) applyWidth = 100.0f;
+    if (doneWidth < 100.0f)  doneWidth = 100.0f;
+
+    float btnSpacing = ImGui::GetStyle().ItemSpacing.x;
+    float totalRightWidth = applyWidth + btnSpacing + doneWidth;
+
+    // 从屏幕最右侧（减去20像素边距）向左推，算出起始X
+    float rightStartX = io.DisplaySize.x - 20.0f - totalRightWidth;
+    
+    ImGui::SetCursorPos(ImVec2(rightStartX, bottomY));
+    if (ImGui::Button(btnApplyText, ImVec2(applyWidth, 40))) {
+        m_applyPending = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(btnDoneText, ImVec2(doneWidth, 40))) {
+        m_applyPending = true;
+        m_menuOpen = false;
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(5);
+    ImGui::PopStyleColor(11);
+}
+
 void MyGame::DrawUI(Eng::Engine& engine) {
     renderer->ImGuiNewFrame();
     ImGui::NewFrame();
 
-    if (m_state == GameState::MainMenu) {
-        DrawMainMenu(engine);
-    } else {    
-        // 准心
-        if (!m_menuOpen) {
-            ImGuiIO& io = ImGui::GetIO();
-            ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-            ImDrawList* dl = ImGui::GetForegroundDrawList();   // ★ 前景层，画在所有窗口之上
+    // 全局暗色遮罩：只在主菜单或打开设置菜单时出现
+    if (m_menuOpen || m_state == GameState::MainMenu) {
+        ImDrawList* bgDrawList = ImGui::GetBackgroundDrawList();
+        bgDrawList->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize, IM_COL32(10, 10, 10, 160));
+    }
 
-            constexpr float LEN    = 8.0f;   // 每条臂的长度
-            constexpr float THICK  = 2.0f;   // 线宽
-            constexpr float GAP    = 2.0f;   // 中心留空
-            ImU32 color = IM_COL32(255, 255, 255, 200);
+    // 1. 非菜单状态：渲染游戏 HUD 或 主菜单
+    if (!m_menuOpen) {
+        if (m_state == GameState::MainMenu) {
+            DrawMainMenu(engine);
+        } else if (m_state == GameState::Playing) {
+            ImGuiIO& io = ImGui::GetIO(); // ★ 统一获取一次，下面所有的块都能用
+            
+            // ---- 准心 ----
+            {
+                ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+                ImDrawList* dl = ImGui::GetForegroundDrawList();
 
-            dl->AddLine(ImVec2(center.x - GAP - LEN, center.y),
-                        ImVec2(center.x - GAP,       center.y), color, THICK);
-            dl->AddLine(ImVec2(center.x + GAP,       center.y),
-                        ImVec2(center.x + GAP + LEN, center.y), color, THICK);
-            dl->AddLine(ImVec2(center.x, center.y - GAP - LEN),
-                        ImVec2(center.x, center.y - GAP),       color, THICK);
-            dl->AddLine(ImVec2(center.x, center.y + GAP),
-                        ImVec2(center.x, center.y + GAP + LEN), color, THICK);
-        }
+                constexpr float LEN    = 8.0f;
+                constexpr float THICK  = 2.0f;
+                constexpr float GAP    = 2.0f;
+                ImU32 color = IM_COL32(255, 255, 255, 200);
 
-        // 物品栏
-        if (!m_menuOpen) {
-            ImGuiIO& io = ImGui::GetIO();
-            constexpr float SLOT = 50.0f;
-            constexpr float GAP  = 4.0f;
-            float totalW = kHotbarSize * SLOT + (kHotbarSize - 1) * GAP;
-            float startX = (io.DisplaySize.x - totalW) * 0.5f;
-            float y      = io.DisplaySize.y - SLOT - 20.0f;
+                dl->AddLine(ImVec2(center.x - GAP - LEN, center.y), ImVec2(center.x - GAP, center.y), color, THICK);
+                dl->AddLine(ImVec2(center.x + GAP, center.y), ImVec2(center.x + GAP + LEN, center.y), color, THICK);
+                dl->AddLine(ImVec2(center.x, center.y - GAP - LEN), ImVec2(center.x, center.y - GAP), color, THICK);
+                dl->AddLine(ImVec2(center.x, center.y + GAP), ImVec2(center.x, center.y + GAP + LEN), color, THICK);
+            }
 
-            ImDrawList* dl = ImGui::GetForegroundDrawList();
-            for (int i = 0; i < kHotbarSize; ++i) {
-                float x = startX + i * (SLOT + GAP);
-                ImVec2 p0(x, y), p1(x + SLOT, y + SLOT);
+            // ---- 物品栏 ----
+            {
+                constexpr float SLOT = 50.0f;
+                constexpr float GAP  = 4.0f;
+                float totalW = kHotbarSize * SLOT + (kHotbarSize - 1) * GAP;
+                float startX = (io.DisplaySize.x - totalW) * 0.5f;
+                float y      = io.DisplaySize.y - SLOT - 20.0f;
 
-                ImU32 bg = (i == m_hotbarIndex) ? IM_COL32(255, 255, 255, 200)
-                                                : IM_COL32(0, 0, 0, 120);
-                dl->AddRectFilled(p0, p1, bg);
-                dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 255), 0, 0, 2.0f);
+                ImDrawList* dl = ImGui::GetForegroundDrawList();
+                for (int i = 0; i < kHotbarSize; ++i) {
+                    float x = startX + i * (SLOT + GAP);
+                    ImVec2 p0(x, y), p1(x + SLOT, y + SLOT);
 
-                const auto& slot = m_hotbar[i];
-                if (slot.isEmpty()) continue;
+                    ImU32 bg = (i == m_hotbarIndex) ? IM_COL32(255, 255, 255, 200) : IM_COL32(0, 0, 0, 120);
+                    dl->AddRectFilled(p0, p1, bg);
+                    dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 255), 0, 0, 2.0f);
 
-                // 方块名
-                dl->AddText(ImVec2(x + 4, y + SLOT - 18),
-                            IM_COL32(255, 255, 255, 255),
-                            BlockName(slot.type));
+                    const auto& slot = m_hotbar[i];
+                    if (slot.isEmpty()) continue;
 
-                // 数量（右下角）
-                if (slot.count > 1) {
-                    char cnt[8];
-                    std::snprintf(cnt, sizeof(cnt), "%d", slot.count);
-                    dl->AddText(ImVec2(x + SLOT - 20, y + 4),
-                                IM_COL32(255, 255, 255, 255), cnt);
+                    dl->AddText(ImVec2(x + 4, y + SLOT - 18), IM_COL32(255, 255, 255, 255), BlockName(slot.type));
+
+                    if (slot.count > 1) {
+                        char cnt[8];
+                        std::snprintf(cnt, sizeof(cnt), "%d", slot.count);
+                        dl->AddText(ImVec2(x + SLOT - 20, y + 4), IM_COL32(255, 255, 255, 255), cnt);
+                    }
                 }
             }
-        }
 
-        // 调试面板
-        if (m_showDebug) {
-            ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowBgAlpha(0.5f);
-            if (ImGui::Begin("Debug",  nullptr, 
-                            ImGuiWindowFlags_AlwaysAutoResize |
-                            ImGuiWindowFlags_NoNav |
-                            ImGuiWindowFlags_NoInputs |
-                            ImGuiWindowFlags_NoMove)) {
-                ImGui::SetWindowFontScale(1.5f);
-                ImGui::Text("%.0f FPS  |  Frame: %.2f ms (avg %.2f, peak %.2f)",
-                            m_fpsDisplay,
-                            m_frameMsDisplay, m_frameMsAvgDisp, m_frameMsPeakDisp);
-                ImGui::Text("Server tick: %.2f ms (avg %.2f, peak %.2f)",
-                            m_serverTickMs, m_serverTickAvg, m_serverTickMax);
-                ImGui::Text("Pos: %.2f, %.2f, %.2f", cameraPos.x, cameraPos.y, cameraPos.z);
-                ImGui::Text("Yaw/Pitch: %.1f / %.1f", yaw, pitch);
-                ImGui::Separator();
-                ImGui::Text("Chunks loaded: %zu", m_chunks.size());
-                ImGui::Text("Chunks: %zu | pending: %zu", m_chunks.size(), m_pending.size());
-                ImGui::Text("Render R: %d", m_renderDistance);
-                ImGui::Text("Player ID: %d", m_myClientId);
+            // ---- 调试面板 ----
+            if (m_showDebug) {
+                ImDrawList* dl = ImGui::GetForegroundDrawList();
+                
+                // 辅助函数：左侧对齐，带单行暗底
+                auto DrawLineBgLeft = [&](float x, float y, ImU32 color, const char* fmt, ...) {
+                    char buf[512];
+                    va_list args; va_start(args, fmt);
+                    vsnprintf(buf, sizeof(buf), fmt, args);
+                    va_end(args);
+
+                    ImVec2 textSize = ImGui::CalcTextSize(buf);
+                    float padX = 4.0f;
+                    float padY = 1.0f;
+
+                    // 1. 画黑色半透明背景
+                    dl->AddRectFilled(ImVec2(x - padX, y - padY), 
+                                      ImVec2(x + textSize.x + padX, y + textSize.y + padY), 
+                                      IM_COL32(0, 0, 0, 130));
+                    // 2. 画文字
+                    dl->AddText(ImVec2(x, y), color, buf);
+                };
+
+                // 辅助函数：右侧对齐，带单行暗底
+                auto DrawLineBgRight = [&](float rightX, float y, ImU32 color, const char* fmt, ...) {
+                    char buf[512];
+                    va_list args; va_start(args, fmt);
+                    vsnprintf(buf, sizeof(buf), fmt, args);
+                    va_end(args);
+
+                    ImVec2 textSize = ImGui::CalcTextSize(buf);
+                    float x = rightX - textSize.x;
+                    float padX = 4.0f;
+                    float padY = 1.0f;
+
+                    // 1. 画黑色半透明背景
+                    dl->AddRectFilled(ImVec2(x - padX, y - padY), 
+                                      ImVec2(rightX + padX, y + textSize.y + padY), 
+                                      IM_COL32(0, 0, 0, 130));
+                    // 2. 画文字
+                    dl->AddText(ImVec2(x, y), color, buf);
+                };
+
+                float y = 10.0f;
+                // 稍微拉开一点行距，防止上下两行的黑底黏在一起变成一大坨
+                float lineHeight = ImGui::GetTextLineHeight() + 4.0f; 
+                ImU32 white = IM_COL32(255, 255, 255, 255);
+                ImU32 green = IM_COL32(85, 255, 85, 255);
+
+                // ================= 左侧信息 =================
+                float leftX = 14.0f; // 稍微留出点左边界
+                
+                DrawLineBgLeft(leftX, y, green, "Mycraft v0.0.1"); y += lineHeight;
+                DrawLineBgLeft(leftX, y, white, "%.0f fps | Frame: %.2f ms", m_fpsDisplay, m_frameMsDisplay); y += lineHeight;
+                DrawLineBgLeft(leftX, y, white, "Server tick: %.2f ms", m_serverTickMs); y += lineHeight;
+                
+                y += lineHeight * 0.5f; // 组与组之间额外空半行
+
+                DrawLineBgLeft(leftX, y, white, "XYZ: %.3f / %.3f / %.3f", cameraPos.x, cameraPos.y, cameraPos.z); y += lineHeight;
+                DrawLineBgLeft(leftX, y, white, "Yaw/Pitch: %.1f / %.1f", yaw, pitch); y += lineHeight;
+                
+                int pcx = static_cast<int>(std::floor(cameraPos.x)) >> 4;
+                int pcz = static_cast<int>(std::floor(cameraPos.z)) >> 4;
+                DrawLineBgLeft(leftX, y, white, "Chunk: %d %d", pcx, pcz); y += lineHeight;
+                
+                y += lineHeight * 0.5f;
+
+                DrawLineBgLeft(leftX, y, white, "Chunks loaded: %zu", m_chunks.size()); y += lineHeight;
+                DrawLineBgLeft(leftX, y, white, "Pending: %zu", m_pending.size()); y += lineHeight;
+                DrawLineBgLeft(leftX, y, white, "Render Distance: %d chunks", m_renderDistance); y += lineHeight;
+                DrawLineBgLeft(leftX, y, white, "Player ID: %d", m_myClientId); y += lineHeight;
+                
+                y += lineHeight * 0.5f;
+
                 int hh = (int)m_timeOfDay;
                 int mm = (int)((m_timeOfDay - hh) * 60);
-                ImGui::Text("Time: %02d:%02d", hh, mm);
-                ImGui::Separator();
-                ImGui::Text("Backend: %s", m_deviceInfo.backend.c_str());
-                ImGui::Text("GPU: %s", m_deviceInfo.deviceName.c_str());
-                ImGui::Text("Vendor: %s", m_deviceInfo.vendor.c_str());
-                ImGui::Text("API: %s", m_deviceInfo.apiVersion.c_str());
-                ImGui::Text("Driver: %s", m_deviceInfo.driverVersion.c_str());
-                ImGui::Text("Shader lang: %s", m_deviceInfo.shadingLanguage.c_str());
+                DrawLineBgLeft(leftX, y, white, "Time: %02d:%02d", hh, mm);
+
+                // ================= 右侧信息 =================
+                float rightX = io.DisplaySize.x - 14.0f; // 距离右边缘 14 像素
+                y = 10.0f;
+
+                DrawLineBgRight(rightX, y, white, "Backend: %s", m_deviceInfo.backend.c_str()); y += lineHeight;
+                DrawLineBgRight(rightX, y, white, "GPU: %s", m_deviceInfo.deviceName.c_str()); y += lineHeight;
+                DrawLineBgRight(rightX, y, white, "Vendor: %s", m_deviceInfo.vendor.c_str()); y += lineHeight;
+                DrawLineBgRight(rightX, y, white, "API: %s", m_deviceInfo.apiVersion.c_str()); y += lineHeight;
+                DrawLineBgRight(rightX, y, white, "Driver: %s", m_deviceInfo.driverVersion.c_str()); y += lineHeight;
+                DrawLineBgRight(rightX, y, white, "Shader: %s", m_deviceInfo.shadingLanguage.c_str());
             }
-            ImGui::End();
         }
+    }
 
-        // ============ 主菜单 ============
-        if (m_menuOpen) {
-            ImGuiIO& io2 = ImGui::GetIO();
-            ImGui::SetNextWindowPos(
-                ImVec2(io2.DisplaySize.x * 0.5f, io2.DisplaySize.y * 0.5f),
-                ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));   // 居中，只第一次
-            ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_Always);
-
-            if (ImGui::Begin("Menu", nullptr,
-                    ImGuiWindowFlags_NoCollapse |
-                    ImGuiWindowFlags_NoResize |
-                    ImGuiWindowFlags_NoMove)) {
-                ImGui::SetWindowFontScale(1.5f);
-
-                if (ImGui::Button("Resume", ImVec2(-1, 44))) {
-                    m_menuOpen = false;
-                }
-
-                ImGui::Separator();
-
-                // ---- 窗口 ----
-                auto& wcfg = mainWin->GetConfigs();
-                if (ImGui::Checkbox("VSync", &wcfg.vsync)) {
-                    m_applyPending = true;
-                }
-
-                bool fs = wcfg.fullscreen;
-                if (ImGui::Checkbox("Fullscreen", &fs)) {
-                    wcfg.fullscreen = fs;
-                    mainWin->SetFullscreen(fs);
-                    fbo = renderer->CreateFramebuffer(
-                        mainWin->GetConfigs().windowPixelWidth,
-                        mainWin->GetConfigs().windowPixelHeight);
-                }
-
-                bool ao = engine.GetConfig().render.m_aoStrength > 0.5f;
-                if (ImGui::Checkbox("AO", &ao)) {
-                    engine.GetConfig().render.m_aoStrength = ao ? 1.0f : 0.0f;
-                }
-
-                // ---- 相机 ----
-                ImGui::SliderFloat("FOV", &engine.GetConfig().render.fov, 30.0f, 120.0f, "%.0f");
-
-                ImGui::Separator();
-
-                if (ImGui::Button("Apply", ImVec2(-1, 36))) {
-                    m_applyPending = true;
-                }
-                if (ImGui::Button("Quit", ImVec2(-1, 44))) {
-                    m_returnToMenuPending = true;
-                }
-            }
-            ImGui::End();
-        }
+    // 2. 菜单打开状态：独占全屏设置界面
+    if (m_menuOpen) {
+        DrawSettingsMenu(engine);
     }
 }
 

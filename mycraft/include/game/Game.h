@@ -10,6 +10,10 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
 
 namespace game {
 
@@ -85,7 +89,7 @@ private:
     std::unordered_map<uint64_t, ClientChunk> m_chunks;
     std::unordered_set<uint64_t>              m_pending;
     std::queue<PendingMesh>                   m_meshQueue;
-    static constexpr int m_renderDistance = 16;
+    int m_renderDistance = 16;
     int m_lastPlayerChunkX  = INT_MIN;
     int m_lastPlayerChunkZ  = INT_MIN;
     static constexpr int kRequestsPerTick = 1;
@@ -222,6 +226,7 @@ private:
     struct Settings {
         float speed       = 3.0f;
     } s;
+    int m_settingsTab = 0; // 0: Video, 1: Audio, 2: Controls
 
     // ==================== 状态标志 ====================
     bool m_shouldQuit = false;
@@ -235,6 +240,7 @@ private:
     bool m_applyPending = false;
     bool m_returnToMenuPending = false;
     bool m_relativeMode = true;   // 当前输入模式（true = 捕获鼠标）
+    float m_uiScale = 1.0f;
 
     // ==================== 指标 ====================
     float m_lastFrameMs = 0.0f;
@@ -271,6 +277,7 @@ private:
     // 方法
     void DrawMainMenu(Eng::Engine& engine);
     void DrawUI(Eng::Engine& engine);
+    void DrawSettingsMenu(Eng::Engine& engine);
     void ReturnToMainMenu();
 
     bool keyEvents(const SDL_Event& event);
