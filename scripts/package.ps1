@@ -7,7 +7,7 @@
 $ErrorActionPreference = "Stop"
 
 # ---- 配置 ----
-$Version   = "0.0.1"
+$Version   = "0.1.0"
 $Name      = "mycraft-v$Version-win64"
 $ProjectRoot = Resolve-Path "$PSScriptRoot\.."
 $SourceDir = Join-Path $ProjectRoot "build-release\Release"
@@ -49,28 +49,30 @@ v$Version ($(Get-Date -Format "yyyy-MM-dd"))
 ----------------------------------------
 
 引擎
-- IRenderAPI 抽象，OpenGL / Vulkan 双后端
-- Vulkan 动态渲染 + FBO 后处理
-- 一份 GLSL 源，两个编译目标（VK / GL）
-- 网络层（NetworkServer / NetworkClient / MessageReader / MessageWriter）
-- Perlin 噪声（2D / 3D / Fractal 叠加）
-- ImGui 集成（两后端）
+- 构建系统支持 MSVC / Clang-cl (Windows) 与 GCC / Clang (Linux) 多平台编译
+- 接入 ASan / UBSan / TSan 内存与线程检查，修复引擎关闭时序导致的 UAF
+- 多级远景 LOD 系统（视锥剔除、垂直侧壁、移动感知调度）
+- 抽象 IClientTransport，单人模式接入零延迟内存通信，支持网络热切换
+- 服务端多线程 Chunk 生成（告别区块加载卡顿）
+- 网络层扩展：玩家名字同步、掉落物多端同步
 
 世界生成
-- 3D 密度地形（样条 + Domain warp + 三线性插值）
-- 生物群系：海洋 / 沙滩 / 沙漠 / 雪原 / 山地 / 森林 / 平原
-- 树木生成
-- 矿脉生成（煤 / 铁）
-- 区块流式加载（R=16）
+- 洞穴生成（3D 噪声网格化优化）
+- 草丛与花朵（十字交叉网格渲染 + 透明像素裁剪）
+- 树木生成（保持原有多群系树木）
+- 区块流式加载优化与动态视距调整
 
 玩法
-- 服务端权威玩家位置 + 客户端本地预测
-- 玩家物理：重力 / AABB 碰撞 / 跳跃 / 飞行模式（F）
-- 掉落物：Q 丢弃 / 自动捡拾 / 弹跳动画
-- 方块交互：射线检测 + 挖 / 放
-- 主菜单 / 单人 / 多人模式
-- 独立服务端 exe（mycraft-server）
-- F3 调试面板 / ESC 暂停菜单 / 准心 / hotbar
+- 世界持久化存档（方块改动 changes.json + 玩家独立位置存储）
+- 其他玩家方块人模型渲染
+- 掉落物：Q 丢弃 / 自动捡拾 / 弹跳动画 / 多人同步
+- 服务端权威物理 / 飞行模式（F） / 快速挖掘与放置
+
+UI 与交互
+- 重构主菜单：MC 风格自绘直角按钮、阴影文字、动态倾斜标语
+- 现代化设置界面：深色极简风 + 青色高亮，左侧导航 + 右侧选项
+- 重构 F3 极客调试面板：单行自适应暗底、左右分栏、抗高亮背景
+- 优化退出逻辑：游戏中点 X 自动触发保存
 "@
 Set-Content -Path (Join-Path $StageDir "CHANGELOG.txt") -Value $changelog -Encoding UTF8
 
