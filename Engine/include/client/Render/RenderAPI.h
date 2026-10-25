@@ -20,6 +20,11 @@ using TextureHandle = uint32_t;
 using ShaderHandle = uint32_t;
 using FramebufferHandle = uint32_t;
 
+struct BackendAvailability {
+    bool available = false;
+    std::string reason;
+};
+
 struct Vertex {
     glm::vec3 position;
     glm::vec3 normal;

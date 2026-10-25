@@ -81,6 +81,7 @@ public:
     [[nodiscard]] DeviceInfo GetDeviceInfo() const override;
     void ApplySettings(const WindowConfig& win, const RenderConfig& render) override;
     void WaitIdle() override;
+    static Eng::client::BackendAvailability Probe();
 
     static constexpr int api_major = 4;
     static constexpr int api_minor = 6;

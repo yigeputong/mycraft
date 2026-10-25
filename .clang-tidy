@@ -43,6 +43,6 @@ CheckOptions:
     value: ''
 
 WarningsAsErrors: ''
-HeaderFilterRegex: '(Engine|mycraft)/(include|src)/.*'
+HeaderFilterRegex: '.*(Engine|mycraft)[\\/](include|src)[\\/].*'
 ExcludeHeaderFilterRegex: 'imgui|vcpkg_installed|vk_mem_alloc|volk|glad|SDL|glm|vulkan|assimp|stb'
 FormatStyle: file

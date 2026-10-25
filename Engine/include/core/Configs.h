@@ -6,14 +6,15 @@ namespace Eng {
     namespace client {
 
         enum class RenderAPItype {
+            AUTO,
             OPENGL,
-            VULKAN,
-            DIRECTX12,
-            METAL
+            VULKAN
+            //DIRECTX12   可能会做
+            //METAL
         };
 
         struct WindowConfig {
-            RenderAPItype apitype = RenderAPItype::OPENGL;
+            RenderAPItype apitype = RenderAPItype::AUTO;
             std::string   title   = "Engine Window";
 
             int  windowWidth      = 800;

@@ -97,6 +97,10 @@ public:
     void ApplySettings(const WindowConfig& win, const RenderConfig& render) override;
     void WaitIdle() override;
     void logValidation(VkDebugUtilsMessageSeverityFlagBitsEXT severity, const char* message);
+    static Eng::client::BackendAvailability Probe();
+
+    static constexpr int api_major = 1;
+    static constexpr int api_minor = 4;
 
 private:
     // ==================== 常量 ====================

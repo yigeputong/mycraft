@@ -16,6 +16,7 @@
 #include <assimp/postprocess.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_opengl3.h>
+#include <glad/glad.h>
 
 #define CHECK_GL(tag) do { \
     GLenum e; \
@@ -1188,6 +1189,53 @@ void OpenGLAPI::ApplySettings(const WindowConfig& win, const RenderConfig& rende
 
 void OpenGLAPI::WaitIdle() {
     glFinish();
+}
+
+Eng::client::BackendAvailability OpenGLAPI::Probe() {
+    Eng::client::BackendAvailability r;
+
+    // ★ 使用类常量
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, OpenGLAPI::api_major);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, OpenGLAPI::api_minor);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+
+    SDL_Window* w = SDL_CreateWindow("probe", 1, 1, SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL);
+    if (!w) {
+        r.reason = std::format("Failed to create GL window: {}", SDL_GetError());
+        return r;
+    }
+
+    SDL_GLContext ctx = SDL_GL_CreateContext(w);
+    if (!ctx) {
+        SDL_DestroyWindow(w);
+        // ★ 动态生成版本号
+        r.reason = std::format("Failed to create GL {}.{} context: {}", 
+            OpenGLAPI::api_major, OpenGLAPI::api_minor, SDL_GetError());
+        return r;
+    }
+
+    SDL_GL_MakeCurrent(w, ctx);
+    int ver = gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress);
+    
+    if (ver == 0) {
+        r.reason = "Failed to load OpenGL function pointers";
+    } else {
+        GLint major = 0, minor = 0;
+        glGetIntegerv(GL_MAJOR_VERSION, &major);
+        glGetIntegerv(GL_MINOR_VERSION, &minor);
+
+        if (major < OpenGLAPI::api_major || 
+           (major == OpenGLAPI::api_major && minor < OpenGLAPI::api_minor)) {
+            r.reason = std::format("OpenGL {}.{} found, need {}.{}", 
+                major, minor, OpenGLAPI::api_major, OpenGLAPI::api_minor);
+        } else {
+            r.available = true;
+        }
+    }
+
+    SDL_GL_DestroyContext(ctx);
+    SDL_DestroyWindow(w);
+    return r;
 }
     
 } // namespace Eng

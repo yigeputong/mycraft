@@ -12,7 +12,12 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include <SDL3/SDL_timer.h>
+#include <SDL3/SDL_messagebox.h>
 #include <algorithm>
+#include <nlohmann/json.hpp>
+#include <fstream>
+
+using json = nlohmann::json;
 
 namespace {
 
@@ -59,6 +64,26 @@ const TileSpec kTiles[19] = {
 std::vector<uint8_t> GenerateAtlasPixels() {
     std::vector<uint8_t> px(static_cast<size_t>(ATLAS_W) * ATLAS_H * 4, 0);
 
+    // 用字符串画出 16x16 的图案 (0=透明, 1=茎, 2=花瓣)
+    static const char* flowerPattern[16] = {
+        "................",
+        "................",
+        "................",
+        ".....222222.....",
+        "....22222222....",
+        "....22222222....",
+        "....22222222....",
+        ".....222222.....",
+        "......11........",
+        "......11........",
+        "......11........",
+        "......11........",
+        "......11........",
+        "......11........",
+        "......11........",
+        "......11........",
+    };
+
     for (int t = 0; t < static_cast<int>(sizeof(kTiles) / sizeof(TileSpec)); ++t) {
         int col = t % ATLAS_COLS;
         int row = t / ATLAS_COLS;
@@ -73,7 +98,7 @@ std::vector<uint8_t> GenerateAtlasPixels() {
                 int g = kTiles[t].g + n;
                 int b = kTiles[t].b + n;
 
-                if (t == 2 || t == 7) {   // ★ 草侧面 / 雪侧面
+                if (t == 2 || t == 7) {   // 草侧面 / 雪侧面
                     bool top = (y < 4) || (y == 4 && ((x + HashNoise(x, 0, 99)) % 3 != 0));
                     if (!top) { r = 110 + n; g = 75 + n; b = 50 + n; }   // 下半土色
                 }
@@ -85,26 +110,37 @@ std::vector<uint8_t> GenerateAtlasPixels() {
 
                 int i = ((oy + y) * ATLAS_W + (ox + x)) * 4;
 
+                // ================= 处理透明植物 =================
                 if (t >= 16) {
-                    // 默认全透明
-                    px[i + 0] = 0; px[i + 1] = 0; px[i + 2] = 0; px[i + 3] = 0;
+                    px[i + 0] = 0; px[i + 1] = 0; px[i + 2] = 0; px[i + 3] = 0; // 默认透明
 
-                    if (t == 16) { // 高草：随机几根草
-                        if (HashNoise(x, y, 42) % 3 == 0 && y > 4) {
-                            px[i + 0] = 88; px[i + 1] = 160; px[i + 2] = 70; px[i + 3] = 255;
+                    if (t == 16) { 
+                        // 从底部开始长，保证根部连着地，越往上越稀疏且带点弯曲
+                        if (y >= 4) {
+                            // 用 x 和 (15-y) 作为噪声，生成类似植物生长的弯曲感
+                            bool isBlade = (HashNoise(x * 3, 15 - y, 42) % 4 == 0);
+                            // 强制在底部生成几根主根
+                            if (y > 12 && (x == 4 || x == 7 || x == 11)) isBlade = true;
+
+                            if (isBlade) {
+                                px[i + 0] = 88; px[i + 1] = 160; px[i + 2] = 70; px[i + 3] = 255;
+                            }
                         }
-                    } else if (t == 17 || t == 18) { // 花：茎 + 花瓣
-                        if (x >= 7 && x <= 8 && y >= 7 && y <= 15) { // 茎
+                    } else if (t == 17 || t == 18) { 
+                        // 使用上面定义的字符画图案
+                        char p = flowerPattern[y][x];
+                        if (p == '1') { // 茎
                             px[i + 0] = 42; px[i + 1] = 100; px[i + 2] = 45; px[i + 3] = 255;
-                        } else if (x >= 5 && x <= 10 && y >= 3 && y <= 8) { // 花瓣
-                            px[i + 0] = (t == 17) ? 220 : 220;
-                            px[i + 1] = (t == 17) ? 40  : 200;
-                            px[i + 2] = (t == 17) ? 40  : 40;
+                        } else if (p == '2') { // 花瓣
+                            px[i + 0] = 220; 
+                            px[i + 1] = (t == 17) ? 40 : 200; 
+                            px[i + 2] = 40; 
                             px[i + 3] = 255;
                         }
                     }
                     continue; // 跳过下面的默认不透明赋值
                 }
+                // =================================================
 
                 px[i + 0] = static_cast<uint8_t>(std::clamp(r, 0, 255));
                 px[i + 1] = static_cast<uint8_t>(std::clamp(g, 0, 255));
@@ -228,6 +264,44 @@ namespace game {
 // ============================================================
 // OnStart 分阶段
 // ============================================================
+void MyGame::LoadSettings(Eng::Engine& engine) {
+    std::ifstream f("settings.json");
+    if (!f.is_open()) return;
+    try {
+        json j;
+        f >> j;
+        auto& wcfg = engine.GetConfig().window;
+        
+        // ★ 改这里
+        if (j.contains("apitype")) {
+            int v = j["apitype"];
+            if (v >= 0 && v <= 2) {
+                wcfg.apitype = static_cast<Eng::client::RenderAPItype>(v);
+            }
+        }
+        
+        auto& rcfg = engine.GetConfig().render;
+        if (j.contains("renderDistance")) m_renderDistance = j["renderDistance"];
+        if (j.contains("fov")) rcfg.fov = j["fov"];
+        if (j.contains("aoStrength")) rcfg.m_aoStrength = j["aoStrength"];
+    } catch (const std::exception& e) {
+        logWarning(logger, "[Game] Failed to parse settings.json: " << e.what());
+    }
+}
+
+void MyGame::SaveSettings(Eng::Engine& engine) {
+    json j;
+    // ★ 改这里：使用 window.apitype
+    j["apitype"] = static_cast<int>(engine.GetConfig().window.apitype);
+    
+    auto& rcfg = engine.GetConfig().render;
+    j["renderDistance"] = m_renderDistance;
+    j["fov"] = rcfg.fov;
+    j["aoStrength"] = rcfg.m_aoStrength;
+    
+    std::ofstream f("settings.json");
+    if (f.is_open()) f << j.dump(4);
+}
 
 bool MyGame::StartLocalServer(bool useMemory, bool createClient) {
     if (m_server) return true;
@@ -265,14 +339,15 @@ bool MyGame::ConnectToServer(const std::string& host, uint16_t port) {
 }
 
 bool MyGame::SetupWindow(Eng::Engine& engine) {
-    Eng::client::WindowConfig windowConfig = {
-        .apitype      = m_apiType,
+        Eng::client::WindowConfig windowConfig = {
+        .apitype      = engine.GetConfig().window.apitype,
         .title        = "Mycraft v" MYCRAFT_VERSION,
         .windowWidth  = 1280,
         .windowHeight = 720
     };
 
     winMgr = engine.GetWindowManager();
+    // 注意：如果底层探测失败，CreateWindow 会 throw，异常会被 OnStart 的 catch 接住
     m_win  = winMgr->CreateWindow(windowConfig);
     mainWin = winMgr->GetWindow(m_win);
     if (!mainWin) return false;
@@ -404,9 +479,8 @@ Eng::client::ShaderHandle MyGame::CreateShaderByName(const std::string& name, bo
 void MyGame::OnStart(Eng::Engine& engine) {
     if (!logger) logger = std::make_unique<Eng::Log>();
 
-    // ============ Dedicated server 模式：无窗口，自动启服务端 ============
+    // ============ Dedicated server 模式 ============
     if (engine.IsDedicatedServer()) {
-        // 走网络模式，且不创建本地客户端
         if (!StartLocalServer(false, false)) {
             logError(logger, "[Game] Failed to start dedicated server");
             m_shouldQuit = true;
@@ -416,8 +490,29 @@ void MyGame::OnStart(Eng::Engine& engine) {
         return;
     }
 
-    // ============ 交互模式：建窗口/渲染器，进主菜单 ============
-    if (!SetupWindow(engine))   return;
+    // ============ 交互模式 ============
+    
+    // 1. 读取持久化配置 (包含图形API偏好)
+    LoadSettings(engine);
+
+    // 2. 建窗口和初始化渲染器 (完全交给引擎内部去探测和降级)
+    try {
+        // SetupWindow 内部如果探测失败且无降级空间，会抛出异常
+        if (!SetupWindow(engine))   return;
+        
+        // 检查引擎是否发生了降级（从 Window 里读原因）
+        if (!mainWin->GetFallbackReason().empty()) {
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, 
+                "图形 API 降级", mainWin->GetFallbackReason().c_str(), nullptr);
+        }
+    } catch (const std::exception& e) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, 
+            "无法启动渲染器", e.what(), nullptr);
+        m_shouldQuit = true;
+        return;
+    }
+
+    // 3. 初始化渲染器
     if (!SetupRenderer(engine)) return;
     SetupShaders();
 
@@ -917,6 +1012,39 @@ void MyGame::DrawSettingsMenu(Eng::Engine& engine) {
             ImGui::SetNextItemWidth(150);
             ImGui::SliderFloat("##fov", &rcfg.fov, 30.0f, 120.0f, "%.0f");
 
+            ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+
+            // ================= 图形 API 设置 =================
+            const char* apiDesc = "选择渲染使用的图形API。除非有特殊需求需要更改，否则请维持此设置为默认不变！";
+            ImVec4 descColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f); 
+
+            // ★ 改为 wcfg.apitype 和 RenderAPItype
+            if (wcfg.apitype == Eng::client::RenderAPItype::VULKAN) {
+                apiDesc = "实验性设置。在部分系统上使用可能会降低性能或导致不稳定。";
+                descColor = ImVec4(1.0f, 0.6f, 0.2f, 1.0f); // 橙色警示
+            }
+
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextColored(descColor, "%s", apiDesc);
+            ImGui::PopTextWrapPos();
+            ImGui::Spacing();
+
+            ImGui::Text("图形 API"); 
+            ImGui::SameLine(leftWidth * 1.2f);
+            ImGui::SetNextItemWidth(200.0f);
+            
+            int currentApi = static_cast<int>(wcfg.apitype);
+            const char* apiItems[] = { "默认", "优先使用 OpenGL", "优先使用 Vulkan" };
+            if (ImGui::Combo("##api", &currentApi, apiItems, IM_ARRAYSIZE(apiItems))) {
+                wcfg.apitype = static_cast<Eng::client::RenderAPItype>(currentApi);
+                m_apiChanged = true; // 记录修改
+            }
+
+            if (m_apiChanged) {
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "需要重启游戏以应用新的图形 API！");
+            }
+            // =======================================================
+
         } else if (m_settingsTab == 1) {
             ImGui::Spacing();
             ImGui::TextDisabled("Audio settings coming soon...");
@@ -949,7 +1077,6 @@ void MyGame::DrawSettingsMenu(Eng::Engine& engine) {
     const char* btnApplyText = "Apply";
     const char* btnDoneText = "Done";
     
-    // 计算宽度：文字长度 + 40像素内边距，并设置100的最小宽度
     float applyWidth = ImGui::CalcTextSize(btnApplyText).x + 40.0f;
     float doneWidth  = ImGui::CalcTextSize(btnDoneText).x + 40.0f;
     if (applyWidth < 100.0f) applyWidth = 100.0f;
@@ -958,17 +1085,18 @@ void MyGame::DrawSettingsMenu(Eng::Engine& engine) {
     float btnSpacing = ImGui::GetStyle().ItemSpacing.x;
     float totalRightWidth = applyWidth + btnSpacing + doneWidth;
 
-    // 从屏幕最右侧（减去20像素边距）向左推，算出起始X
     float rightStartX = io.DisplaySize.x - 20.0f - totalRightWidth;
     
     ImGui::SetCursorPos(ImVec2(rightStartX, bottomY));
     if (ImGui::Button(btnApplyText, ImVec2(applyWidth, 40))) {
         m_applyPending = true;
+        SaveSettings(engine);
     }
     ImGui::SameLine();
     if (ImGui::Button(btnDoneText, ImVec2(doneWidth, 40))) {
         m_applyPending = true;
         m_menuOpen = false;
+        SaveSettings(engine);
     }
 
     ImGui::End();
@@ -1640,13 +1768,16 @@ Eng::client::MeshHandle MyGame::BuildItemCubeMesh(BlockType type) {
 Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
     std::vector<Eng::client::Vertex> vertices;
     std::vector<uint32_t> indices;
+    
+    // 预估大小，避免多次扩容内存 (假设平均一个区块 2000 个面)
+    vertices.reserve(static_cast<size_t>(2000) * 4);
+    indices.reserve(static_cast<size_t>(2000) * 6);
 
     const int cx = chunk.chunk_x;
     const int cz = chunk.chunk_z;
     const int baseX = cx * CHUNK_SIZE_X;
     const int baseZ = cz * CHUNK_SIZE_Z;
 
-    // 拿 4 个邻居（可能为 null——还没收到）
     auto findChunk = [this](int ccx, int ccz) -> const Chunk* {
         auto it = m_chunks.find(ChunkKey(ccx, ccz));
         if (it == m_chunks.end()) return nullptr;
@@ -1657,45 +1788,34 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
     const Chunk* nZm = findChunk(cx, cz - 1);
     const Chunk* nZp = findChunk(cx, cz + 1);
 
-    // 跨区块取方块，接受 lx/lz ∈ [-1, 16]
     auto getBlock = [&](int lx, int ly, int lz) -> BlockType {
         if (ly < 0 || ly >= CHUNK_SIZE_Y) return BlockType::Air;
         if (lx >= 0 && lx < CHUNK_SIZE_X && lz >= 0 && lz < CHUNK_SIZE_Z)
             return ChunkGet(chunk, lx, ly, lz);
-
         const Chunk* n = nullptr;
         int nlx = lx, nlz = lz;
         if      (lx < 0)                  { n = nXm; nlx = lx + CHUNK_SIZE_X; }
         else if (lx >= CHUNK_SIZE_X)      { n = nXp; nlx = lx - CHUNK_SIZE_X; }
         else if (lz < 0)                  { n = nZm; nlz = lz + CHUNK_SIZE_Z; }
         else if (lz >= CHUNK_SIZE_Z)      { n = nZp; nlz = lz - CHUNK_SIZE_Z; }
-
-        if (!n) return BlockType::Air;   // 邻居没到，当空气（多画一个面）
-        if (nlx < 0 || nlx >= CHUNK_SIZE_X) return BlockType::Air;  // 对角线情况
+        if (!n) return BlockType::Air;
+        if (nlx < 0 || nlx >= CHUNK_SIZE_X) return BlockType::Air;
         if (nlz < 0 || nlz >= CHUNK_SIZE_Z) return BlockType::Air;
         return ChunkGet(*n, nlx, ly, nlz);
     };
 
-    // ★ 计算 AO 专用（排除水、草、花，确保它们不投射环境光遮蔽）
     auto isSolidAt = [&](int lx, int ly, int lz) -> bool {
         BlockType b = getBlock(lx, ly, lz);
         return b != BlockType::Air && b != BlockType::Water && b != BlockType::Void &&
                b != BlockType::TallGrass && b != BlockType::FlowerRed && b != BlockType::FlowerYellow;
     };
 
-    // 6 个面的顶点偏移
     static constexpr int faceOffsets[6][4][3] = {
-        // +X
         {{1,0,0},{1,1,0},{1,1,1},{1,0,1}},
-        // -X
         {{0,0,1},{0,1,1},{0,1,0},{0,0,0}},
-        // +Y
         {{0,1,1},{1,1,1},{1,1,0},{0,1,0}},
-        // -Y
         {{0,0,0},{1,0,0},{1,0,1},{0,0,1}},
-        // +Z
         {{1,0,1},{1,1,1},{0,1,1},{0,0,1}},
-        // -Z
         {{0,0,0},{0,1,0},{1,1,0},{1,0,0}},
     };
     static constexpr int faceNormals[6][3] = {
@@ -1710,17 +1830,14 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
             for (int lz = 0; lz < CHUNK_SIZE_Z; ++lz) {
                 BlockType type = ChunkGet(chunk, lx, ly, lz);
 
-                // 1. 跳过纯空气和虚空
                 if (type == BlockType::Air || type == BlockType::Void) continue;
 
-                // 2. 十字交叉网格（草丛/花）
                 if (type == BlockType::TallGrass || type == BlockType::FlowerRed || type == BlockType::FlowerYellow) {
                     int tile = TileForBlock(type, 0);
                     float u0 = (tile % ATLAS_COLS) * TILE_UV;
-                    float v0 = (tile / ATLAS_COLS) * TILE_UV;
+                    float v0 = (tile / static_cast<float>(ATLAS_COLS)) * TILE_UV;
                     float u1 = u0 + TILE_UV;
                     float v1 = v0 + TILE_UV;
-                    
                     float x0 = baseX + lx + 0.15f;
                     float x1 = baseX + lx + 0.85f;
                     float z0 = baseZ + lz + 0.15f;
@@ -1731,31 +1848,22 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
                     auto addQuad = [&](glm::vec3 p1, glm::vec3 p2, glm::vec3 p3, glm::vec3 p4) {
                         uint32_t baseIndex = (uint32_t)vertices.size();
                         Eng::client::Vertex v;
-                        v.ao = 1.0f; // 植物不吃 AO
+                        v.ao = 1.0f;
                         v.normal = {0, 1, 0};
-
                         v.position = p1; v.uv = {u0, v1}; vertices.push_back(v);
                         v.position = p2; v.uv = {u1, v1}; vertices.push_back(v);
                         v.position = p3; v.uv = {u1, v0}; vertices.push_back(v);
                         v.position = p4; v.uv = {u0, v0}; vertices.push_back(v);
-
-                        // 正面
                         indices.push_back(baseIndex + 0); indices.push_back(baseIndex + 1); indices.push_back(baseIndex + 2);
                         indices.push_back(baseIndex + 2); indices.push_back(baseIndex + 3); indices.push_back(baseIndex + 0);
-                        // 反面 (让背面也能看到)
                         indices.push_back(baseIndex + 0); indices.push_back(baseIndex + 2); indices.push_back(baseIndex + 1);
                         indices.push_back(baseIndex + 3); indices.push_back(baseIndex + 2); indices.push_back(baseIndex + 0);
                     };
-
-                    // 平面 1
                     addQuad({x0, y0, z0}, {x1, y0, z1}, {x1, y1, z1}, {x0, y1, z0});
-                    // 平面 2
                     addQuad({x0, y0, z1}, {x1, y0, z0}, {x1, y1, z0}, {x0, y1, z1});
-
                     continue; 
                 }
 
-                // 3. 处理实心方块和水
                 for (int f = 0; f < 6; ++f) {
                     int nx = lx + faceNormals[f][0];
                     int ny = ly + faceNormals[f][1];
@@ -1763,13 +1871,10 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
 
                     BlockType neighbor = getBlock(nx, ny, nz);
                     
-                    // 如果邻居是实心方块，遮挡面
                     if (IsSolid(neighbor)) continue;
-                    // 如果邻居同为水，不画内部面
                     if (type == BlockType::Water && neighbor == BlockType::Water) continue;
 
-                    int N_axis = (faceNormals[f][0] != 0) ? 0
-                               : (faceNormals[f][1] != 0) ? 1 : 2;
+                    int N_axis = (faceNormals[f][0] != 0) ? 0 : (faceNormals[f][1] != 0) ? 1 : 2;
                     int U_axis = (N_axis + 1) % 3;
                     int V_axis = (N_axis + 2) % 3;
 
@@ -1780,11 +1885,10 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
                     for (int v = 0; v < 4; ++v) {
                         Eng::client::Vertex vert;
                         
-                        // 让水面稍微低一点（0.9 格高）
-                        float yOffset = (type == BlockType::Water && f == 2 && neighbor == BlockType::Air) ? 0.9f : 0.0f;
+                        // 如果是水，且当前顶点是顶面顶点 (y偏移为1)，则高度设为 0.9
                         float yPos = (float)ly + faceOffsets[f][v][1];
                         if (type == BlockType::Water && faceOffsets[f][v][1] == 1) {
-                            yPos = (float)ly + yOffset;
+                            yPos = (float)ly + 0.9f; 
                         }
 
                         vert.position = {
@@ -1819,9 +1923,7 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
                         int s2 = isSolidAt(lx + N.x + V.x, ly + N.y + V.y, lz + N.z + V.z) ? 1 : 0;
                         int sc = isSolidAt(lx + N.x + U.x + V.x, ly + N.y + U.y + V.y, lz + N.z + U.z + V.z) ? 1 : 0;
 
-                        vert.ao = (s1 && s2) ? 0.4f : 1.0f - 0.2f * (s1 + s2 + sc);
-                        
-                        // 水强制不吃 AO
+                        vert.ao = (s1 && s2) ? 0.4f : 1.0f - 0.2f * static_cast<float>(s1 + s2 + sc);
                         if (type == BlockType::Water) vert.ao = 1.0f;
 
                         vertices.push_back(vert);
@@ -1838,7 +1940,6 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
         }
     }
 
-    // 上传到 GPU
     if (vertices.empty()) return 0;
 
     Eng::client::MeshData data;
@@ -1846,7 +1947,6 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
     data.indices = indices;
 
     auto handle = renderer->CreateMesh(data);
-
     return handle;
 }
 
@@ -2104,8 +2204,8 @@ void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
     const int baseZ = ucz * unitSize;
 
     outV.clear(); outI.clear();
-    outV.reserve(N * N * 12);
-    outI.reserve(N * N * 18);
+    outV.reserve(static_cast<size_t>(N) * N * 16);
+    outI.reserve(static_cast<size_t>(N) * N * 24);
     outMin = glm::vec3(1e30f);
     outMax = glm::vec3(-1e30f);
 
@@ -2155,7 +2255,7 @@ void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
             float ySelf = cellY(i, j);
             int   tile  = cellTile(i, j);
             float u = ((tile % ATLAS_COLS) + 0.5f) * TILE_UV;
-            float v = ((tile / ATLAS_COLS) + 0.5f) * TILE_UV;
+            float v = ((tile / static_cast<float>(ATLAS_COLS)) + 0.5f) * TILE_UV;
 
             float x0 = (float)(baseX + i * sampleStep);
             float x1 = (float)(baseX + (i + 1) * sampleStep);
@@ -2179,7 +2279,7 @@ void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                 if (ySelf > yNb + 0.01f) {
                     int nt = cellTile(i + 1, j);
                     float nu = ((nt % ATLAS_COLS) + 0.5f) * TILE_UV;
-                    float nv = ((nt / ATLAS_COLS) + 0.5f) * TILE_UV;
+                    float nv = ((nt / static_cast<float>(ATLAS_COLS)) + 0.5f) * TILE_UV;
                     uint32_t base = (uint32_t)outV.size();
                     pushV({x1, yNb,   z0}, {1,0,0}, {nu,nv});
                     pushV({x1, ySelf, z0}, {1,0,0}, {nu,nv});
@@ -2196,7 +2296,7 @@ void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                 if (ySelf > yNb + 0.01f) {
                     int nt = cellTile(i, j + 1);
                     float nu = ((nt % ATLAS_COLS) + 0.5f) * TILE_UV;
-                    float nv = ((nt / ATLAS_COLS) + 0.5f) * TILE_UV;
+                    float nv = ((nt / static_cast<float>(ATLAS_COLS)) + 0.5f) * TILE_UV;
                     uint32_t base = (uint32_t)outV.size();
                     pushV({x0, yNb,   z1}, {0,0,1}, {nu,nv});
                     pushV({x1, yNb,   z1}, {0,0,1}, {nu,nv});
@@ -2226,8 +2326,8 @@ void MyGame::BuildLod1FromChunks(const LodKey& key) {
 
     std::vector<Eng::client::Vertex> outV;
     std::vector<uint32_t> outI;
-    outV.reserve(CELLS * CELLS * 12);
-    outI.reserve(CELLS * CELLS * 18);
+    outV.reserve(static_cast<size_t>(CELLS) * CELLS * 12);
+    outI.reserve(static_cast<size_t>(CELLS) * CELLS * 18);
     glm::vec3 aabbMin(1e30f), aabbMax(-1e30f);
 
     auto blockToTile = [](uint8_t b) -> int {
@@ -2296,7 +2396,7 @@ void MyGame::BuildLod1FromChunks(const LodKey& key) {
 
     auto tileUV = [&](int t, float& u, float& v) {
         u = ((t % ATLAS_COLS) + 0.5f) * TILE_UV;
-        v = ((t / ATLAS_COLS) + 0.5f) * TILE_UV;
+        v = ((t / static_cast<float>(ATLAS_COLS)) + 0.5f) * TILE_UV;
     };
 
     for (int j = 0; j < CELLS; ++j) {

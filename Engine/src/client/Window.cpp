@@ -3,9 +3,7 @@
 #include "client/Render/VulkanAPI.h"
 #include <SDL3/SDL_video.h>
 #include <glad/glad.h>
-#include <fstream>
 #include <iostream>
-#include <vector>
 
 namespace Eng::client {
 
@@ -61,13 +59,53 @@ void Window::SetFullscreen(bool enabled) {
 }
 
 bool Window::CreateWindow() {
-    switch(m_config.apitype) {
+    // ★ 1. 处理 AUTO 和降级逻辑
+    if (m_config.apitype == RenderAPItype::AUTO) {
+        auto vk = VulkanAPI::Probe();
+        if (vk.available) {
+            m_config.apitype = RenderAPItype::VULKAN;
+        } else {
+            auto gl = OpenGLAPI::Probe();
+            if (gl.available) {
+                m_config.apitype = RenderAPItype::OPENGL;
+                // 记录降级原因，供 MyGame 读取并弹窗
+                m_fallbackReason = "Vulkan 不可用，已自动降级到 OpenGL。\n原因: " + vk.reason;
+            } else {
+                // 既然 Probe 的 reason 里已经包含了 (4.5 / 1.4) 等信息，直接拼接即可
+                throw std::runtime_error(std::format(
+                    "硬件不支持任何可用的图形 API。\nVulkan: {}\nOpenGL: {}", 
+                    vk.reason, gl.reason));
+            }
+        }
+    } else if (m_config.apitype == RenderAPItype::VULKAN) {
+        auto vk = VulkanAPI::Probe();
+        if (!vk.available) {
+            auto gl = OpenGLAPI::Probe();
+            if (gl.available) {
+                m_config.apitype = RenderAPItype::OPENGL;
+                m_fallbackReason = "Vulkan 不可用，已自动降级到 OpenGL。\n原因: " + vk.reason;
+            } else {
+                throw std::runtime_error(std::format(
+                    "强制使用 Vulkan 失败，且 OpenGL 不可用。\nVulkan: {}\nOpenGL: {}", 
+                    vk.reason, gl.reason));
+            }
+        }
+    } else if (m_config.apitype == RenderAPItype::OPENGL) {
+        auto gl = OpenGLAPI::Probe();
+        if (!gl.available) {
+            throw std::runtime_error(std::format(
+                "强制使用 OpenGL 失败。\n原因: {}", gl.reason));
+        }
+    }
+
+    // ★ 2. 根据决定好的 API 创建窗口
+    switch (m_config.apitype) {
     case RenderAPItype::OPENGL:
         return CreateOpenGLWindow();
     case RenderAPItype::VULKAN:
         return CreateVulkanWindow();
     default:
-        return CreateOpenGLWindow();
+        return false;
     }
 }
 

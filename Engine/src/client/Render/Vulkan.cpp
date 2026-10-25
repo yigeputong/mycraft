@@ -4,6 +4,7 @@
 #include "core/Log.h"
 
 #include <SDL3/SDL_vulkan.h>
+#include <SDL3/SDL_loadso.h>
 #include <SDL3_image/SDL_image.h>
 
 #include <glm/glm.hpp>
@@ -93,7 +94,7 @@ void VulkanAPI::createInstance() {
         .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
         .pEngineName        = "MycraftEngine",
         .engineVersion      = VK_MAKE_VERSION(1, 0, 0),
-        .apiVersion         = vk::ApiVersion14
+        .apiVersion         = vk::makeApiVersion(0, api_major, api_minor, 0)
     };
 
     Uint32 extCount = 0;
@@ -2270,6 +2271,43 @@ void VulkanAPI::WaitIdle() {
         m_device.waitIdle();     // vk::raii::Device 写法
         // 裸 VkDevice 用：vkDeviceWaitIdle(m_device);
     }
+}
+
+Eng::client::BackendAvailability VulkanAPI::Probe() {
+    Eng::client::BackendAvailability r;
+
+    const char* dllName = "vulkan-1.dll";
+#ifdef __linux__
+    dllName = "libvulkan.so.1";
+#elif defined(__APPLE__)
+    dllName = "libvulkan.dylib";
+#endif
+
+    SDL_SharedObject* hMod = SDL_LoadObject(dllName);
+    if (!hMod) {
+        r.reason = std::format("Vulkan Runtime not installed ({} not found)", dllName);
+        return r;
+    }
+
+    auto pfnEnum = (PFN_vkEnumerateInstanceVersion)SDL_LoadFunction(hMod, "vkEnumerateInstanceVersion");
+    uint32_t apiVer = VK_API_VERSION_1_0;
+    if (pfnEnum) pfnEnum(&apiVer);
+    
+    SDL_UnloadObject(hMod);
+
+    uint32_t requiredMajor = VulkanAPI::api_major;
+    uint32_t requiredMinor = VulkanAPI::api_minor;
+    uint32_t requiredVersion = VK_MAKE_API_VERSION(0, requiredMajor, requiredMinor, 0);
+
+    if (apiVer < requiredVersion) {
+        r.reason = std::format("Vulkan Runtime too old ({}.{}.{}), need {}.{}",
+            VK_VERSION_MAJOR(apiVer), VK_VERSION_MINOR(apiVer), VK_VERSION_PATCH(apiVer),
+            requiredMajor, requiredMinor);
+        return r;
+    }
+
+    r.available = true;
+    return r;
 }
 
 }

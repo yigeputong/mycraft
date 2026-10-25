@@ -43,6 +43,7 @@ public:
     SDL_Window* GetSDLWindow() const { return m_window; }
     SDL_GLContext GetGLContext() const { return m_glContext; }
     IRenderAPI* GetAPI() const { return m_renderapi.get(); }
+    std::string GetFallbackReason() const { return m_fallbackReason; }
     
     // 事件回调
     std::function<void(const SDL_Event&)> onEvent;
@@ -67,6 +68,8 @@ private:
     bool m_running = true;
 
     bool m_createSuccess = false;
+
+    std::string m_fallbackReason;
 
     bool CreateWindow();
     bool CreateOpenGLWindow();
