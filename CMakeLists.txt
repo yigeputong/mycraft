@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(mycraft VERSION 0.1.0 LANGUAGES CXX)
+project(mycraft VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,21 +13,10 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic -Wshadow)
 endif()
 
-# 输出目录统一
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG          "${CMAKE_BINARY_DIR}/Debug")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE        "${CMAKE_BINARY_DIR}/Release")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/Debug")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL     "${CMAKE_BINARY_DIR}/Release")
-
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG          "${CMAKE_BINARY_DIR}/Debug")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE        "${CMAKE_BINARY_DIR}/Release")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/Debug")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_MINSIZEREL     "${CMAKE_BINARY_DIR}/Release")
-
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG          "${CMAKE_BINARY_DIR}/Debug")
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE        "${CMAKE_BINARY_DIR}/Release")
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/Debug")
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_MINSIZEREL     "${CMAKE_BINARY_DIR}/Release")
+# 输出目录统一（使用 $<CONFIG> 自动适配 Debug/Release 等，支持 Ninja Multi-Config）
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
 
 # 依赖
 find_package(SDL3                  CONFIG REQUIRED)
@@ -110,21 +99,16 @@ function(add_sanitizer TARGET)
         return()
     endif()
 
-        # ---- 针对 clang-cl 的特殊处理 ----
+    # ---- 针对 clang-cl 的特殊处理 ----
     if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND MSVC)
         if (SANITIZER STREQUAL "address")
-            target_compile_options(${TARGET} PRIVATE -fsanitize=address -g)
+            # 加上 /Oy- 防止优化掉栈帧指针，保证 ASan 回溯准确
+            target_compile_options(${TARGET} PRIVATE -fsanitize=address -g /Oy-)
             
             # 链接 ASan 运行时
             target_link_options(${TARGET} PRIVATE /wholearchive:clang_rt.asan_dynamic_runtime_thunk-x86_64.lib)
             target_link_libraries(${TARGET} PRIVATE clang_rt.asan_dynamic-x86_64.lib)
             
-            # 自动寻找并复制 ASan DLL
-            get_target_property(TARGET_OUTPUT_DIR ${TARGET} RUNTIME_OUTPUT_DIRECTORY)
-            if (NOT TARGET_OUTPUT_DIR)
-                set(TARGET_OUTPUT_DIR "${CMAKE_BINARY_DIR}/Debug")
-            endif()
-
             # 获取 clang 编译器的路径，以此去推断 LLVM 安装目录下的 dll 位置
             get_filename_component(LLVM_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
             file(GLOB ASAN_DLL_PATH "${LLVM_BIN_DIR}/../lib/clang/*/lib/windows/clang_rt.asan_dynamic-x86_64.dll")
@@ -147,7 +131,8 @@ function(add_sanitizer TARGET)
     # ---- MSVC 处理 ----
     if (MSVC)
         if (SANITIZER STREQUAL "address")
-            target_compile_options(${TARGET} PRIVATE /fsanitize=address)
+            # /Oy- 防止优化掉栈帧
+            target_compile_options(${TARGET} PRIVATE /fsanitize=address /Oy-)
             target_link_options(${TARGET} PRIVATE /INCREMENTAL:NO)
         endif()
         return()

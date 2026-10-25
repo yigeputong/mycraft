@@ -1,105 +1,164 @@
 {
-  "version": 6,
-  "configurePresets": [
-    {
-      "name": "vcpkg-base",
-      "hidden": true,
-      "generator": "Ninja",
-      "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets"
-      }
-    },
-    {
-      "name": "windows-debug",
-      "displayName": "Windows Debug (MSVC)",
-      "inherits": "vcpkg-base",
-      "binaryDir": "${sourceDir}/build",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
-    },
-    {
-      "name": "windows-asan",
-      "displayName": "Windows ASan (MSVC)",
-      "inherits": "vcpkg-base",
-      "binaryDir": "${sourceDir}/build-asan",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "SANITIZER": "address"
-      }
-    },
-    {
-      "name": "windows-clang",
-      "displayName": "Windows Clang",
-      "inherits": "vcpkg-base",
-      "binaryDir": "${sourceDir}/build-clang",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_C_COMPILER": "clang-cl",
-        "CMAKE_CXX_COMPILER": "clang-cl"
-      }
-    },
-    {
-      "name": "windows-clang-asan",
-      "displayName": "Windows Clang ASan",
-      "inherits": "vcpkg-base",
-      "binaryDir": "${sourceDir}/build-clang-asan",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "CMAKE_C_COMPILER": "clang-cl",
-        "CMAKE_CXX_COMPILER": "clang-cl",
-        "SANITIZER": "address",
-        "CMAKE_C_FLAGS_RELWITHDEBINFO": "/Zi /Ob0 /Od /MD",
-        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "/Zi /Ob0 /Od /MD"
-      }
-    },
-    {
-      "name": "linux-debug",
-      "displayName": "Linux Debug (GCC)",
-      "inherits": "vcpkg-base",
-      "binaryDir": "${sourceDir}/build",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/build-asan/vcpkg_installed"
-      }
-    },
-    {
-      "name": "linux-asan-ubsan",
-      "displayName": "Linux ASan + UBSan (GCC)",
-      "inherits": "vcpkg-base",
-      "binaryDir": "${sourceDir}/build-asan",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "SANITIZER": "address+undefined"
-      }
-    },
-    {
-      "name": "linux-tsan",
-      "displayName": "Linux TSan (GCC)",
-      "inherits": "vcpkg-base",
-      "binaryDir": "${sourceDir}/build-tsan",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "SANITIZER": "thread"
-      }
-    },
-    {
-      "name": "linux-clang",
-      "displayName": "Linux Clang",
-      "inherits": "vcpkg-base",
-      "binaryDir": "${sourceDir}/build-clang",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_C_COMPILER": "clang",
-        "CMAKE_CXX_COMPILER": "clang++"
-      }
-    }
-  ]
+    "version": 6,
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "generator": "Ninja Multi-Config",
+            "cacheVariables": {
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+                "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets"
+            }
+        },
+        {
+            "name": "windows-base",
+            "hidden": true,
+            "inherits": "base",
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+        },
+        {
+            "name": "linux-base",
+            "hidden": true,
+            "inherits": "base",
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+        },
+        {
+            "name": "windows-msvc",
+            "displayName": "Windows MSVC",
+            "inherits": "windows-base",
+            "binaryDir": "${sourceDir}/build/windows-msvc"
+        },
+        {
+            "name": "windows-msvc-asan",
+            "displayName": "Windows MSVC ASan",
+            "inherits": "windows-base",
+            "binaryDir": "${sourceDir}/build/windows-msvc-asan",
+            "cacheVariables": {
+                "SANITIZER": "address"
+            }
+        },
+        {
+            "name": "windows-clang",
+            "displayName": "Windows Clang",
+            "inherits": "windows-base",
+            "binaryDir": "${sourceDir}/build/windows-clang",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang-cl",
+                "CMAKE_CXX_COMPILER": "clang-cl"
+            }
+        },
+        {
+            "name": "windows-clang-asan",
+            "displayName": "Windows Clang ASan",
+            "inherits": "windows-base",
+            "binaryDir": "${sourceDir}/build/windows-clang-asan",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang-cl",
+                "CMAKE_CXX_COMPILER": "clang-cl",
+                "SANITIZER": "address"
+            }
+        },
+        {
+            "name": "linux-gcc",
+            "displayName": "Linux GCC",
+            "inherits": "linux-base",
+            "binaryDir": "${sourceDir}/build/linux-gcc"
+        },
+        {
+            "name": "linux-gcc-asan",
+            "displayName": "Linux GCC ASan + UBSan",
+            "inherits": "linux-base",
+            "binaryDir": "${sourceDir}/build/linux-gcc-asan",
+            "cacheVariables": {
+                "SANITIZER": "address+undefined"
+            }
+        },
+        {
+            "name": "linux-gcc-tsan",
+            "displayName": "Linux GCC TSan",
+            "inherits": "linux-base",
+            "binaryDir": "${sourceDir}/build/linux-gcc-tsan",
+            "cacheVariables": {
+                "SANITIZER": "thread"
+            }
+        },
+        {
+            "name": "linux-clang",
+            "displayName": "Linux Clang",
+            "inherits": "linux-base",
+            "binaryDir": "${sourceDir}/build/linux-clang",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "windows-msvc-debug",
+            "displayName": "Windows MSVC Debug",
+            "configurePreset": "windows-msvc",
+            "configuration": "Debug"
+        },
+        {
+            "name": "windows-msvc-release",
+            "displayName": "Windows MSVC Release",
+            "configurePreset": "windows-msvc",
+            "configuration": "Release"
+        },
+        {
+            "name": "windows-msvc-asan-relwithdebinfo",
+            "displayName": "Windows MSVC ASan (RelWithDebInfo)",
+            "configurePreset": "windows-msvc-asan",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "windows-clang-debug",
+            "displayName": "Windows Clang Debug",
+            "configurePreset": "windows-clang",
+            "configuration": "Debug"
+        },
+        {
+            "name": "windows-clang-release",
+            "displayName": "Windows Clang Release",
+            "configurePreset": "windows-clang",
+            "configuration": "Release"
+        },
+        {
+            "name": "windows-clang-asan-relwithdebinfo",
+            "displayName": "Windows Clang ASan (RelWithDebInfo)",
+            "configurePreset": "windows-clang-asan",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "linux-gcc-debug",
+            "displayName": "Linux GCC Debug",
+            "configurePreset": "linux-gcc",
+            "configuration": "Debug"
+        },
+        {
+            "name": "linux-gcc-release",
+            "displayName": "Linux GCC Release",
+            "configurePreset": "linux-gcc",
+            "configuration": "Release"
+        },
+        {
+            "name": "linux-gcc-asan-relwithdebinfo",
+            "displayName": "Linux GCC ASan (RelWithDebInfo)",
+            "configurePreset": "linux-gcc-asan",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "linux-gcc-tsan-debug",
+            "displayName": "Linux GCC TSan Debug",
+            "configurePreset": "linux-gcc-tsan",
+            "configuration": "Debug"
+        },
+        {
+            "name": "linux-clang-debug",
+            "displayName": "Linux Clang Debug",
+            "configurePreset": "linux-clang",
+            "configuration": "Debug"
+        }
+    ]
 }
