@@ -774,7 +774,6 @@ void VulkanAPI::BeginFrame() {
     auto fenceRes = m_device.waitForFences(*m_inFlightFences[m_frameIndex], vk::True, UINT64_MAX);
     if (fenceRes != vk::Result::eSuccess) throw std::runtime_error("waitForFences failed");
 
-    // ★ 循环代替递归 —— 处理连续 out-of-date
     bool acquired = false;
     while (!acquired) {
         try {
@@ -1043,15 +1042,22 @@ MeshHandle VulkanAPI::CreateMesh(const MeshData& data) {
 }
 
 void VulkanAPI::DestroyMesh(MeshHandle h) {
-    vkDeviceWaitIdle(*m_device);
     auto it = m_meshes.find(h);
     if (it == m_meshes.end()) return;
-    if (it->second.vertexAlloc != VK_NULL_HANDLE)
+
+    // 必须在销毁前等待 GPU 彻底空闲，否则 Validation 会报 UAF
+    vkDeviceWaitIdle(*m_device);
+
+    if (it->second.vertexAlloc != VK_NULL_HANDLE) {
         vmaDestroyBuffer(m_allocator, it->second.vertexBuffer, it->second.vertexAlloc);
-    if (it->second.indexAlloc != VK_NULL_HANDLE)
+    }
+    if (it->second.indexAlloc != VK_NULL_HANDLE) {
         vmaDestroyBuffer(m_allocator, it->second.indexBuffer, it->second.indexAlloc);
-    if (it->second.instanceAlloc != VK_NULL_HANDLE)
+    }
+    if (it->second.instanceAlloc != VK_NULL_HANDLE) {
         vmaDestroyBuffer(m_allocator, it->second.instanceBuffer, it->second.instanceAlloc);
+    }
+
     m_meshes.erase(it);
 }
 

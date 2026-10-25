@@ -516,6 +516,8 @@ void MyGame::OnStart(Eng::Engine& engine) {
     if (!SetupRenderer(engine)) return;
     SetupShaders();
 
+    StartMeshWorker();
+
     m_state = GameState::MainMenu;
 }
 
@@ -661,16 +663,7 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     UpdateChunkStreaming();
     UpdateLodStreaming();
     DrainLodResults();
-
-    if (!m_meshQueue.empty()) {
-        auto pm = m_meshQueue.front();
-        m_meshQueue.pop();
-
-        auto it = m_chunks.find(pm.chunkKey);
-        if (it != m_chunks.end() && it->second.mesh == 0) {
-            it->second.mesh = BuildChunkMesh(pm.chunk);
-        }
-    }
+    DrainMeshResults();
 
     return false;
 }
@@ -759,29 +752,38 @@ void MyGame::OnRender(Eng::Engine& engine) {
             renderer->DrawMesh(m_playerMesh, m_cubeShader, playerMat);
         }
 
-        // ---- 实体 ---- 
+        // ---- 实体（掉落物） ---- 
         Eng::client::Material itemMat;
         itemMat.diffuse = m_atlasTexture;
 
-        // ---- 所有人保持 Q 弹!!! ----
-        constexpr float BOUNCE_FREQ = 1.0f / 0.4f;   // 每 0.4 秒一次
+        // Q 弹动画计算
+        constexpr float BOUNCE_FREQ = 1.0f / 0.4f;
         constexpr float BOUNCE_AMP  = 0.45f;
         constexpr float XZ_RATIO    = 0.8f;
-
         float t = m_animTime * BOUNCE_FREQ * 6.2831853f;
-
         float sY  = 1.0f + BOUNCE_AMP * std::sin(t);
         float sXZ = 1.0f - BOUNCE_AMP * XZ_RATIO * std::sin(t);
+
+        // 按类型分组：unordered_map<BlockType, std::vector<glm::mat4>>
+        std::unordered_map<BlockType, std::vector<glm::mat4>> itemTransforms;
+        itemTransforms.reserve(m_itemEntities.size());
 
         for (auto& [id, e] : m_itemEntities) {
             glm::mat4 model = glm::mat4(1.0f);
             model = glm::translate(model, e.renderPos);
-            model = model * glm::rotate(glm::mat4(1.0f), m_animTime * 2.0f, glm::vec3(0, 1, 0));   // 见下方注意
+            model = model * glm::rotate(glm::mat4(1.0f), m_animTime * 2.0f, glm::vec3(0, 1, 0));
             model = glm::scale(model, glm::vec3(sXZ * 0.3f, sY * 0.3f, sXZ * 0.3f));
 
-            renderer->SetModelMatrix(model);
-            auto mesh = GetOrCreateItemMesh(e.itemType);
-            renderer->DrawMesh(mesh, m_cubeShader, itemMat);
+            itemTransforms[e.itemType].push_back(model);
+        }
+
+        // 按类型进行实例化绘制
+        for (auto& [type, transforms] : itemTransforms) {
+            if (transforms.empty()) continue;
+            auto mesh = GetOrCreateItemMesh(type);
+            if (mesh != 0) {
+                renderer->DrawMeshInstanced(mesh, m_cubeShader, itemMat, transforms);
+            }
         }
 
         renderer->SetUniform(m_skyShader, "uTimeOfDay", m_timeOfDay);
@@ -1275,7 +1277,8 @@ void MyGame::ReturnToMainMenu() {
         m_server.reset();
     }
 
-    // 2. 先停 LOD worker
+    // 2. 先停 worker
+    StopMeshWorker();
     StopLodWorker();
 
     // 3. 销毁 GPU 资源
@@ -1350,6 +1353,7 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
     // ★ 从 mainWin 重新获取 API，确保在 Window 存活时它才有效
     auto* safeRenderer = mainWin ? mainWin->GetAPI() : nullptr;
     if (safeRenderer) {
+        StopMeshWorker();
         StopLodWorker();
         for (auto& [key, u] : m_lodUnits) {
             if (u.mesh != 0) safeRenderer->DestroyMesh(u.mesh);
@@ -1583,10 +1587,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
                 }
             }
 
-            PendingMesh pm;
-            pm.chunkKey = key;
-            pm.chunk = m_chunks[key].chunk;
-            m_meshQueue.push(pm);
+            QueueChunkMeshTask(key, m_chunks[key].chunk);
 
             m_pending.erase(ChunkKey(cx, cz));
             break;
@@ -1605,19 +1606,13 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
 
             ChunkSet(it->second.chunk, lx, by, lz, t);
 
-            // 重建 mesh
-            if (it->second.mesh != 0) {
-                renderer->DestroyMesh(it->second.mesh);
-            }
-            it->second.mesh = BuildChunkMesh(it->second.chunk);
+            QueueChunkMeshTask(ChunkKey(cx, cz), it->second.chunk);
 
-            // 如果改的是边界方块，邻居区块的 mesh 也得重建
             if (lx == 0 || lx == 15 || lz == 0 || lz == 15) {
                 auto rebuild = [&](int ncx, int ncz) {
                     auto nit = m_chunks.find(ChunkKey(ncx, ncz));
                     if (nit == m_chunks.end()) return;
-                    if (nit->second.mesh != 0) renderer->DestroyMesh(nit->second.mesh);
-                    nit->second.mesh = BuildChunkMesh(nit->second.chunk);
+                    QueueChunkMeshTask(ChunkKey(ncx, ncz), nit->second.chunk);
                 };
                 if (lx == 0)  rebuild(cx - 1, cz);
                 if (lx == 15) rebuild(cx + 1, cz);
@@ -1648,7 +1643,6 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
 
             auto it = m_itemEntities.find(id);
             if (it != m_itemEntities.end()) {
-                // ★ 关键：起点 = 当前渲染位置（不是上次目标位置）
                 it->second.prevPos   = it->second.renderPos;
                 it->second.targetPos = pos;
                 it->second.interpT   = 0.0f;   // 从 0 开始插值
@@ -1765,28 +1759,24 @@ Eng::client::MeshHandle MyGame::BuildItemCubeMesh(BlockType type) {
     return renderer->CreateMesh(data);
 }
 
-Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
-    std::vector<Eng::client::Vertex> vertices;
-    std::vector<uint32_t> indices;
-    
-    // 预估大小，避免多次扩容内存 (假设平均一个区块 2000 个面)
-    vertices.reserve(static_cast<size_t>(2000) * 4);
-    indices.reserve(static_cast<size_t>(2000) * 6);
+void MyGame::BuildChunkMeshData(const MeshTask& task, MeshResult& result) {
+    result.vertices.clear();
+    result.indices.clear();
+    // 预估大小，避免多次扩容内存
+    result.vertices.reserve(static_cast<size_t>(2000) * 4);
+    result.indices.reserve(static_cast<size_t>(2000) * 6);
 
+    const Chunk& chunk = task.chunk;
     const int cx = chunk.chunk_x;
     const int cz = chunk.chunk_z;
     const int baseX = cx * CHUNK_SIZE_X;
     const int baseZ = cz * CHUNK_SIZE_Z;
 
-    auto findChunk = [this](int ccx, int ccz) -> const Chunk* {
-        auto it = m_chunks.find(ChunkKey(ccx, ccz));
-        if (it == m_chunks.end()) return nullptr;
-        return &it->second.chunk;
-    };
-    const Chunk* nXm = findChunk(cx - 1, cz);
-    const Chunk* nXp = findChunk(cx + 1, cz);
-    const Chunk* nZm = findChunk(cx, cz - 1);
-    const Chunk* nZp = findChunk(cx, cz + 1);
+    // 从 task 中拿邻居指针，没有则是 nullptr
+    const Chunk* nXm = task.hasN[0] ? &task.nXm : nullptr;
+    const Chunk* nXp = task.hasN[1] ? &task.nXp : nullptr;
+    const Chunk* nZm = task.hasN[2] ? &task.nZm : nullptr;
+    const Chunk* nZp = task.hasN[3] ? &task.nZp : nullptr;
 
     auto getBlock = [&](int lx, int ly, int lz) -> BlockType {
         if (ly < 0 || ly >= CHUNK_SIZE_Y) return BlockType::Air;
@@ -1832,6 +1822,7 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
 
                 if (type == BlockType::Air || type == BlockType::Void) continue;
 
+                // 十字交叉植物
                 if (type == BlockType::TallGrass || type == BlockType::FlowerRed || type == BlockType::FlowerYellow) {
                     int tile = TileForBlock(type, 0);
                     float u0 = (tile % ATLAS_COLS) * TILE_UV;
@@ -1846,24 +1837,25 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
                     float y1 = (float)ly + 1.0f;
 
                     auto addQuad = [&](glm::vec3 p1, glm::vec3 p2, glm::vec3 p3, glm::vec3 p4) {
-                        uint32_t baseIndex = (uint32_t)vertices.size();
+                        uint32_t baseIndex = (uint32_t)result.vertices.size();
                         Eng::client::Vertex v;
                         v.ao = 1.0f;
                         v.normal = {0, 1, 0};
-                        v.position = p1; v.uv = {u0, v1}; vertices.push_back(v);
-                        v.position = p2; v.uv = {u1, v1}; vertices.push_back(v);
-                        v.position = p3; v.uv = {u1, v0}; vertices.push_back(v);
-                        v.position = p4; v.uv = {u0, v0}; vertices.push_back(v);
-                        indices.push_back(baseIndex + 0); indices.push_back(baseIndex + 1); indices.push_back(baseIndex + 2);
-                        indices.push_back(baseIndex + 2); indices.push_back(baseIndex + 3); indices.push_back(baseIndex + 0);
-                        indices.push_back(baseIndex + 0); indices.push_back(baseIndex + 2); indices.push_back(baseIndex + 1);
-                        indices.push_back(baseIndex + 3); indices.push_back(baseIndex + 2); indices.push_back(baseIndex + 0);
+                        v.position = p1; v.uv = {u0, v1}; result.vertices.push_back(v);
+                        v.position = p2; v.uv = {u1, v1}; result.vertices.push_back(v);
+                        v.position = p3; v.uv = {u1, v0}; result.vertices.push_back(v);
+                        v.position = p4; v.uv = {u0, v0}; result.vertices.push_back(v);
+                        result.indices.push_back(baseIndex + 0); result.indices.push_back(baseIndex + 1); result.indices.push_back(baseIndex + 2);
+                        result.indices.push_back(baseIndex + 2); result.indices.push_back(baseIndex + 3); result.indices.push_back(baseIndex + 0);
+                        result.indices.push_back(baseIndex + 0); result.indices.push_back(baseIndex + 2); result.indices.push_back(baseIndex + 1);
+                        result.indices.push_back(baseIndex + 3); result.indices.push_back(baseIndex + 2); result.indices.push_back(baseIndex + 0);
                     };
                     addQuad({x0, y0, z0}, {x1, y0, z1}, {x1, y1, z1}, {x0, y1, z0});
                     addQuad({x0, y0, z1}, {x1, y0, z0}, {x1, y1, z0}, {x0, y1, z1});
                     continue; 
                 }
 
+                // 6 个面
                 for (int f = 0; f < 6; ++f) {
                     int nx = lx + faceNormals[f][0];
                     int ny = ly + faceNormals[f][1];
@@ -1880,12 +1872,12 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
 
                     glm::ivec3 N(faceNormals[f][0], faceNormals[f][1], faceNormals[f][2]);
 
-                    uint32_t baseIndex = (uint32_t)vertices.size();
+                    uint32_t baseIndex = (uint32_t)result.vertices.size();
 
                     for (int v = 0; v < 4; ++v) {
                         Eng::client::Vertex vert;
                         
-                        // 如果是水，且当前顶点是顶面顶点 (y偏移为1)，则高度设为 0.9
+                        // 水面高度 0.9f
                         float yPos = (float)ly + faceOffsets[f][v][1];
                         if (type == BlockType::Water && faceOffsets[f][v][1] == 1) {
                             yPos = (float)ly + 0.9f; 
@@ -1926,28 +1918,19 @@ Eng::client::MeshHandle MyGame::BuildChunkMesh(const Chunk& chunk) {
                         vert.ao = (s1 && s2) ? 0.4f : 1.0f - 0.2f * static_cast<float>(s1 + s2 + sc);
                         if (type == BlockType::Water) vert.ao = 1.0f;
 
-                        vertices.push_back(vert);
+                        result.vertices.push_back(vert);
                     }
 
-                    indices.push_back(baseIndex + 0);
-                    indices.push_back(baseIndex + 1);
-                    indices.push_back(baseIndex + 2);
-                    indices.push_back(baseIndex + 2);
-                    indices.push_back(baseIndex + 3);
-                    indices.push_back(baseIndex + 0);
+                    result.indices.push_back(baseIndex + 0);
+                    result.indices.push_back(baseIndex + 1);
+                    result.indices.push_back(baseIndex + 2);
+                    result.indices.push_back(baseIndex + 2);
+                    result.indices.push_back(baseIndex + 3);
+                    result.indices.push_back(baseIndex + 0);
                 }
             }
         }
     }
-
-    if (vertices.empty()) return 0;
-
-    Eng::client::MeshData data;
-    data.vertices = vertices;
-    data.indices = indices;
-
-    auto handle = renderer->CreateMesh(data);
-    return handle;
 }
 
 Eng::client::MeshHandle MyGame::BuildPlayerMesh() {
@@ -2126,6 +2109,127 @@ void MyGame::AddToInventory(BlockType type, int count) {
     }
 
     // 3. 背包满 → 丢弃（暂时）
+}
+
+// Mesh worker
+void MyGame::StartMeshWorker() {
+    unsigned hw = std::thread::hardware_concurrency();
+    // Mesh 构建比较耗 CPU，分配多一点线程
+    unsigned n  = std::clamp(hw > 2 ? hw - 2 : 2u, 2u, 8u); 
+
+    m_meshWorkerStop = false;
+    for (unsigned i = 0; i < n; ++i) {
+        m_meshWorkers.emplace_back([this] { MeshWorkerLoop(); });
+    }
+    logInfo(logger, "[MeshWorker] Started " << n << " workers");
+}
+
+void MyGame::StopMeshWorker() {
+    if (m_meshWorkers.empty()) return;
+
+    {
+        std::lock_guard lk(m_meshTaskMutex);
+        m_meshWorkerStop = true;
+        while (!m_meshTaskQueue.empty()) m_meshTaskQueue.pop();
+    }
+    m_meshTaskCv.notify_all();
+    for (auto& t : m_meshWorkers) {
+        if (t.joinable()) t.join();
+    }
+    m_meshWorkers.clear();
+}
+
+void MyGame::MeshWorkerLoop() {
+    while (true) {
+        MeshTask task;
+        {
+            std::unique_lock lk(m_meshTaskMutex);
+            m_meshTaskCv.wait(lk, [this] {
+                return m_meshWorkerStop.load() || !m_meshTaskQueue.empty();
+            });
+            if (m_meshWorkerStop.load()) return;
+            task = std::move(m_meshTaskQueue.front());
+            m_meshTaskQueue.pop();
+        }
+
+        MeshResult result;
+        result.chunkKey = task.chunkKey;
+        // 纯数据构建，不涉及 GPU
+        BuildChunkMeshData(task, result);
+
+        {
+            std::lock_guard lk(m_meshResultMutex);
+            m_meshResultQueue.push(std::move(result));
+        }
+    }
+}
+
+// 主线程收结果：限流，防止 Vulkan 一帧上传太多显存卡死
+void MyGame::DrainMeshResults() {
+    constexpr int K = 4; 
+    int done = 0;
+    for (;;) {
+        MeshResult r;
+        {
+            std::lock_guard lk(m_meshResultMutex);
+            if (m_meshResultQueue.empty() || done >= K) break;
+            r = std::move(m_meshResultQueue.front());
+            m_meshResultQueue.pop();
+        }
+
+        auto it = m_chunks.find(r.chunkKey);
+        if (it != m_chunks.end()) {
+            // 先建新的，再删旧的
+            if (r.vertices.empty()) {
+                if (it->second.mesh != 0) {
+                    renderer->DestroyMesh(it->second.mesh);
+                    it->second.mesh = 0;
+                }
+            } else {
+                Eng::client::MeshData data;
+                data.vertices = std::move(r.vertices);
+                data.indices  = std::move(r.indices);
+                
+                auto newMesh = renderer->CreateMesh(data);
+                
+                if (it->second.mesh != 0) {
+                    renderer->DestroyMesh(it->second.mesh);
+                }
+                it->second.mesh = newMesh; // 替换
+            }
+        }
+        ++done;
+    }
+}
+
+void MyGame::QueueChunkMeshTask(uint64_t key, const Chunk& chunk) {
+    MeshTask task;
+    task.chunkKey = key;
+    task.chunk = chunk; // 拷贝当前块
+
+    int cx = chunk.chunk_x;
+    int cz = chunk.chunk_z;
+
+    auto fetchNeighbor = [&](int ncx, int ncz, Chunk& outChunk, bool& has) {
+        auto it = m_chunks.find(ChunkKey(ncx, ncz));
+        if (it != m_chunks.end()) {
+            outChunk = it->second.chunk; // 拷贝邻居
+            has = true;
+        } else {
+            has = false;
+        }
+    };
+
+    fetchNeighbor(cx - 1, cz, task.nXm, task.hasN[0]);
+    fetchNeighbor(cx + 1, cz, task.nXp, task.hasN[1]);
+    fetchNeighbor(cx, cz - 1, task.nZm, task.hasN[2]);
+    fetchNeighbor(cx, cz + 1, task.nZp, task.hasN[3]);
+
+    {
+        std::lock_guard lk(m_meshTaskMutex);
+        m_meshTaskQueue.push(std::move(task));
+    }
+    m_meshTaskCv.notify_one();
 }
 
 // ============================================================

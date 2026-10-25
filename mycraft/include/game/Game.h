@@ -95,6 +95,40 @@ private:
     static constexpr float kDayLengthSec = 300.0f;
     float m_animTime = 0.0f;
 
+    // ==================== 多线程 Chunk Mesh 构建 ====================
+    struct MeshTask {
+        uint64_t chunkKey;
+        Chunk chunk;
+        Chunk nXm, nXp, nZm, nZp;
+        bool hasN[4] = {false, false, false, false}; // 0: X-, 1: X+, 2: Z-, 3: Z+
+    };
+
+    struct MeshResult {
+        uint64_t chunkKey;
+        std::vector<Eng::client::Vertex> vertices;
+        std::vector<uint32_t>            indices;
+    };
+
+    std::vector<std::thread>      m_meshWorkers;
+    std::mutex                    m_meshTaskMutex;
+    std::condition_variable       m_meshTaskCv;
+    std::queue<MeshTask>          m_meshTaskQueue;
+    std::atomic<bool>             m_meshWorkerStop{false};
+
+    std::mutex                    m_meshResultMutex;
+    std::queue<MeshResult>        m_meshResultQueue;
+
+    void StartMeshWorker();
+    void StopMeshWorker();
+    void MeshWorkerLoop();
+    void DrainMeshResults();
+
+    // 将构建函数改为静态纯函数，不依赖 this
+    static void BuildChunkMeshData(const MeshTask& task, MeshResult& result);
+    
+    // 辅助函数：在主线程安全地提取 MeshTask 并推入队列
+    void QueueChunkMeshTask(uint64_t key, const Chunk& chunk);
+
     // ==================== LOD 系统 ====================
     std::unique_ptr<game::server::TerrainGenerator> m_lodTerrain;
     struct LodKey {
