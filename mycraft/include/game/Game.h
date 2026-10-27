@@ -5,6 +5,7 @@
 #include "core/Transport.h"
 #include "game/GameServer.h"
 #include "game/client/MeshManager.h"
+#include "game/client/ClientWorld.h"
 #include "game/server/WorldGenerator.h"
 #include <cstdint>
 #include <memory>
@@ -21,16 +22,13 @@ namespace game {
 class MyGame : public Eng::IGame {
 public:
     void OnStart(Eng::Engine& engine) override;
-
     bool OnUpdate(Eng::Engine& engine, float deltaTime) override;
-
     void OnRender(Eng::Engine& engine) override;
-
     void OnShutdown(Eng::Engine& engine) override;
 
 private:
     // ==================== 引擎资源与状态 ====================
-    bool m_useVulkan = false; // 从 renderer->GetDeviceInfo() 反推，用于加载 shader
+    bool m_useVulkan = false;
 
     // ==================== 初始化流程 ====================
     bool StartLocalServer(bool useMemory = false, bool createClient = true);
@@ -48,9 +46,9 @@ private:
 
     Eng::client::ShaderHandle   m_cubeShader;
     Eng::client::TextureHandle  m_atlasTexture;
-    Eng::client::ShaderHandle   m_fbShader;
     Eng::client::Framebuffer    fbo;
     Eng::client::ShaderHandle   m_skyShader;
+    Eng::client::ShaderHandle   m_lodShader;
     Eng::client::DeviceInfo     m_deviceInfo;
 
     enum class GameState : std::uint8_t {
@@ -72,33 +70,17 @@ private:
     uint32_t m_myClientId = 0;
     std::unordered_map<uint32_t, net::PlayerState> m_otherPlayers;
 
-    // ==================== 世界 ====================
-    struct ClientChunk {
-        Chunk chunk;
-        Eng::client::MeshHandle mesh = 0;
-        std::array<int16_t, 256> heights{};
-        std::array<uint8_t, 256> topBlock{};
-    };
-    struct PendingMesh {
-        uint64_t chunkKey;
-        Chunk    chunk;
-    };
-    std::unordered_map<uint64_t, ClientChunk> m_chunks;
-    std::unordered_set<uint64_t>              m_pending;
-    std::queue<PendingMesh>                   m_meshQueue;
-    
+    // ==================== 世界管理 ====================
+    game::client::ClientWorld m_world; // ★ 替换掉 m_chunks, m_pending 等
     int m_renderDistance = 16;
-    int m_lastPlayerChunkX  = INT_MIN;
-    int m_lastPlayerChunkZ  = INT_MIN;
-    static constexpr int kRequestsPerTick = 1;
 
     float m_timeOfDay = 8.0f;
     static constexpr float kDayLengthSec = 300.0f;
     float m_animTime = 0.0f;
 
-    // ==================== 多线程 Chunk Mesh 构建 ====================
+    // ==================== 多线程 Mesh ====================
     client::MeshManager m_meshManager;
-    void QueueChunkMeshTask(uint64_t key, const Chunk& chunk); // 保留这个，但内部调 Submit
+    void QueueChunkMeshTask(uint64_t key, const Chunk& chunk);
     void DrainMeshResults();
 
     // ==================== LOD 系统 ====================
@@ -126,7 +108,6 @@ private:
     };
     std::unordered_map<LodKey, LodUnit, LodKeyHash> m_lodUnits;
     std::unordered_set<LodKey, LodKeyHash>          m_lodPending;
-    Eng::client::ShaderHandle m_lodShader;
 
     struct LodTask   { int8_t level; int32_t cx, cz; };
     struct LodResult {
@@ -168,11 +149,10 @@ private:
     glm::vec3 m_lastCameraPos{0.0f};
     float     m_stationaryTime = 0.0f;
 
-    // 合批绘制缓存
+    // ==================== 相机与物理 ====================
     std::vector<Eng::client::MeshHandle> m_visibleChunkMeshes;
     std::vector<Eng::client::MeshHandle> m_visibleLodMeshes;
 
-    // ==================== 相机与物理 ====================
     glm::vec3 cameraPos{0.0f, 40.0f, 0.0f};
     glm::vec3 cameraFront{0.0f, 0.0f, -1.0f};
     glm::vec3 cameraUp{0.0f, 1.0f, 0.0f};
@@ -189,13 +169,10 @@ private:
     bool m_showDebug = true;
 #endif
 
-    struct Frustum {
-        glm::vec4 planes[6];
-    };
-    Frustum m_frustum;
-
+    game::client::Frustum m_frustum; // 使用 ClientWorld.h 中定义的 Frustum
     void  UpdateFrustum(const glm::mat4& vp);
     bool  AabbInFrustum(const glm::vec3& mn, const glm::vec3& mx) const;
+
     char m_nameBuffer[32] = "player";
 
     // ==================== 渲染实体 ====================
@@ -232,7 +209,7 @@ private:
 
     // 背包与 UI 状态
     bool m_inventoryOpen = false;
-    std::array<ItemStack, 27> m_inventory{}; // 3x9 的主背包
+    std::array<ItemStack, 27> m_inventory{};
 
     // ==================== 状态与 UI 标志 ====================
     bool m_shouldQuit = false;
@@ -242,7 +219,7 @@ private:
     bool m_returnToMenuPending = false;
     bool m_relativeMode = true;
     float m_uiScale = 1.0f;
-    int m_settingsTab = 0; // 0: Video, 1: Audio, 2: Controls
+    int m_settingsTab = 0;
 
     // ==================== 性能指标 ====================
     float m_lastFrameMs = 0.0f;
@@ -273,7 +250,7 @@ private:
 
     // ==================== 配置持久化 ====================
     static constexpr const char* SETTINGS_FILE = "settings.json";
-    bool m_apiChanged = false; // 标记设置界面的 API 是否被修改，用于提示重启
+    bool m_apiChanged = false;
     
     void LoadSettings(Eng::Engine& engine);
     void SaveSettings(Eng::Engine& engine);
@@ -294,12 +271,10 @@ private:
 
     void HandleServerMessage(const std::vector<uint8_t>& data);
     bool GetInput(float dt);
-    Eng::client::MeshHandle BuildChunkMesh(const Chunk& chunk);
-    void UpdateChunkStreaming();
 
     BlockType GetBlockAt(int wx, int wy, int wz) const;
-    bool AABBCollides(const glm::vec3& pos) const;
     bool IsSolidAt(int wx, int wy, int wz) const;
+    bool AABBCollides(const glm::vec3& pos) const;
 };
 
 }

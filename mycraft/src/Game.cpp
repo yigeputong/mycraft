@@ -589,10 +589,6 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         // 强制让 LOD 和区块流式加载重新评估
         m_lastLodPcx = INT_MIN;
         m_lastLodPcz = INT_MIN;
-        m_lastPlayerChunkX = INT_MIN;
-        m_lastPlayerChunkZ = INT_MIN;
-        
-        // 如果你想立刻卸载超过新半径的区块，可以在这里触发 m_pending 的清理
     }
 
     // 一天 5 分钟，24 小时 = 300 秒
@@ -661,7 +657,25 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         ++it;
     }
 
-    UpdateChunkStreaming();
+    m_world.UpdateStreaming(cameraPos, m_renderDistance, 
+        [this](int cx, int cz) { 
+            Eng::MessageWriter w;
+            w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkRequest));
+            w.Write<int32_t>(cx);
+            w.Write<int32_t>(cz);
+            m_client->Send(w.GetBuffer());
+        },
+        [this](Eng::client::MeshHandle mesh) { 
+            renderer->DestroyMesh(mesh);
+        }
+    );
+
+    auto dirtyKeys = m_world.FetchDirtyChunks(2);
+    for (uint64_t key : dirtyKeys) {
+        auto* cc = m_world.GetChunk(key);
+        if (cc) QueueChunkMeshTask(key, cc->chunk);
+    }
+
     UpdateLodStreaming();
     DrainLodResults();
     DrainMeshResults();
@@ -702,25 +716,10 @@ void MyGame::OnRender(Eng::Engine& engine) {
         mat.diffuse = m_atlasTexture;
 
         renderer->SetUniform(m_cubeShader, "uAOStrength", engine.GetConfig().render.m_aoStrength);
+        
         // ---- 近景 chunk：视锥剔除 + 合批 ----
-        m_visibleChunkMeshes.clear();
-        m_visibleChunkMeshes.reserve(m_chunks.size());
-        for (auto& [key, cc] : m_chunks) {
-            if (cc.mesh == 0) continue;
-
-            const int cx = cc.chunk.chunk_x;
-            const int cz = cc.chunk.chunk_z;
-            const glm::vec3 mn(static_cast<float>(cx * CHUNK_SIZE_X), 0.0f,
-                               static_cast<float>(cz * CHUNK_SIZE_Z));
-            const glm::vec3 mx = mn + glm::vec3(static_cast<float>(CHUNK_SIZE_X),
-                                                static_cast<float>(CHUNK_SIZE_Y),
-                                                static_cast<float>(CHUNK_SIZE_Z));
-            if (!AabbInFrustum(mn, mx)) continue;
-
-            m_visibleChunkMeshes.push_back(cc.mesh);
-        }
+        m_world.CollectVisibleMeshes(m_frustum, m_visibleChunkMeshes); // ★ 直接调
         if (!m_visibleChunkMeshes.empty()) {
-            // model 已经是 identity，batch 里会设一次
             renderer->DrawMeshBatch(m_visibleChunkMeshes, m_cubeShader, mat);
         }
 
@@ -1237,8 +1236,8 @@ void MyGame::DrawUI(Eng::Engine& engine) {
                 
                 y += lineHeight * 0.5f;
 
-                DrawLineBgLeft(leftX, y, white, "Chunks loaded: %zu", m_chunks.size()); y += lineHeight;
-                DrawLineBgLeft(leftX, y, white, "Pending: %zu", m_pending.size()); y += lineHeight;
+                DrawLineBgLeft(leftX, y, white, "Chunks loaded: %zu", m_world.GetChunks().size()); y += lineHeight;
+                DrawLineBgLeft(leftX, y, white, "Pending: %zu", m_world.GetPendingSize()); y += lineHeight;
                 DrawLineBgLeft(leftX, y, white, "Render Distance: %d chunks", m_renderDistance); y += lineHeight;
                 DrawLineBgLeft(leftX, y, white, "Player ID: %d", m_myClientId); y += lineHeight;
                 
@@ -1280,10 +1279,11 @@ void MyGame::ReturnToMainMenu() {
 
     // 2. 先停 worker
     StopLodWorker();
+    m_meshManager.Stop();
 
     // 3. 销毁 GPU 资源
     if (renderer) {
-        for (auto& [key, cc] : m_chunks) {
+        for (auto& [key, cc] : m_world.GetChunks()) { // ★ 遍历 m_world
             if (cc.mesh) renderer->DestroyMesh(cc.mesh);
         }
         for (auto& [type, mesh] : m_itemMeshCache) {
@@ -1294,10 +1294,9 @@ void MyGame::ReturnToMainMenu() {
         }
         if (m_playerMesh != 0) { renderer->DestroyMesh(m_playerMesh); m_playerMesh = 0; }
     }
-    m_chunks.clear();
+    
+    m_world.Clear();
     m_itemMeshCache.clear();
-    m_pending.clear();
-    while (!m_meshQueue.empty()) m_meshQueue.pop();
     m_itemEntities.clear();
     m_otherPlayers.clear();
     m_myClientId = 0;
@@ -1313,8 +1312,6 @@ void MyGame::ReturnToMainMenu() {
         std::lock_guard lk(m_lodTaskMutex);
         while (!m_lodTaskQueue.empty()) m_lodTaskQueue.pop();
     }
-    
-    // ★ 新增：重置 LOD 游标与请求队列
     m_lodNeedQueue.clear();
     m_lodNeedCursor = 0;
     m_lastLodPcx = INT_MIN;
@@ -1330,8 +1327,6 @@ void MyGame::ReturnToMainMenu() {
     pitch = 0.0f;
     m_playerVelocity   = glm::vec3(0.0f);
     m_positionError    = glm::vec3(0.0f);
-    m_lastPlayerChunkX = INT_MIN;
-    m_lastPlayerChunkZ = INT_MIN;
 
     m_menuOpen = false;
     m_state    = GameState::MainMenu;
@@ -1542,11 +1537,13 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             }
             break;
         }
+
         case net::MessageType::PlayerId: {
             m_myClientId = r.ReadU32BE();
             logInfo(logger, "[Net] My client ID: " << m_myClientId);
             break;
         }
+
         case game::net::MessageType::ChunkData: {
             int cx = r.Read<int>();
             int cz = r.Read<int>();
@@ -1557,77 +1554,26 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
                 return;
             }
 
-            ClientChunk cc;
-            cc.chunk.chunk_x = cx;
-            cc.chunk.chunk_z = cz;
             auto bytes = r.ReadBytes(CHUNK_VOLUME);
-            std::memcpy(cc.chunk.blocks.data(), bytes.data(), CHUNK_VOLUME);
-            cc.mesh = 0;
+            std::vector<uint8_t> blockData(bytes.begin(), bytes.end());
 
             uint64_t key = ChunkKey(cx, cz);
-            m_chunks[key] = cc;
-            m_pending.erase(key);
+            m_world.AddChunk(cx, cz, blockData, 0);
 
-            // 顺便算高度图，供 LOD1 用
-            for (int lx = 0; lx < 16; ++lx) {
-                for (int lz = 0; lz < 16; ++lz) {
-                    int topY = 0;
-                    uint8_t topB = 0;   // Air
-                    for (int y = CHUNK_SIZE_Y - 1; y >= 0; --y) {
-                        BlockType b = ChunkGet(cc.chunk, lx, y, lz);
-                        if (b != BlockType::Air && b != BlockType::Water) {
-                            topY = y;
-                            topB = (uint8_t)b;
-                            break;
-                        }
-                    }
-                    cc.heights[lx * 16 + lz] = (int16_t)topY;
-                    cc.topBlock[lx * 16 + lz] = topB;
-                }
-            }
-
-            QueueChunkMeshTask(key, m_chunks[key].chunk);
-
-            m_pending.erase(ChunkKey(cx, cz));
+            QueueChunkMeshTask(key, m_world.GetChunk(key)->chunk);
             break;
         }
+
         case game::net::MessageType::BlockChange: {
             int bx = r.Read<int32_t>();
             int by = r.Read<int32_t>();
             int bz = r.Read<int32_t>();
             auto t = static_cast<BlockType>(r.Read<uint16_t>());
 
-            int cx = bx >> 4, cz = bz >> 4;
-            int lx = bx & 15, lz = bz & 15;
-
-            auto it = m_chunks.find(ChunkKey(cx, cz));
-            if (it == m_chunks.end()) break;
-
-            BlockType oldBlock = ChunkGet(it->second.chunk, lx, by, lz);
-            if (oldBlock == t) break; // 没变化就跳过
-
-            ChunkSet(it->second.chunk, lx, by, lz, t);
-
-            QueueChunkMeshTask(ChunkKey(cx, cz), it->second.chunk);
-
-            if (lx == 0 || lx == 15 || lz == 0 || lz == 15) {
-                auto rebuild = [&](int ncx, int ncz) {
-                    auto nit = m_chunks.find(ChunkKey(ncx, ncz));
-                    if (nit == m_chunks.end()) return;
-                    
-                    // 注意：目前没有做“跨 Chunk 的光照 BFS 传播”，
-                    // 所以邻居 Chunk 的光照数据暂时无需重算。等以后支持跨边界光照时，
-                    // 这里也要加上 game::LightEngine::OnBlockChanged(nit->second.chunk, ...)
-                    
-                    QueueChunkMeshTask(ChunkKey(ncx, ncz), nit->second.chunk);
-                };
-                if (lx == 0)  rebuild(cx - 1, cz);
-                if (lx == 15) rebuild(cx + 1, cz);
-                if (lz == 0)  rebuild(cx, cz - 1);
-                if (lz == 15) rebuild(cx, cz + 1);
-            }
+            m_world.SetBlock(bx, by, bz, t);
             break;
         }
+
         case game::net::MessageType::EntitySpawn: {
             uint32_t  id   = r.Read<uint32_t>();
             glm::vec3 pos  = r.ReadVec3();
@@ -1832,80 +1778,12 @@ Eng::client::MeshHandle MyGame::BuildPlayerMesh() {
     return renderer->CreateMesh(data);
 }
 
-void MyGame::UpdateChunkStreaming() {
-    int pcx = static_cast<int>(std::floor(cameraPos.x)) >> 4;
-    int pcz = static_cast<int>(std::floor(cameraPos.z)) >> 4;
-
-    const int R = m_renderDistance;
-
-    // 卸载超过 R+2 的区块
-    const int unloadR = m_renderDistance + 2;
-
-    for (auto it = m_chunks.begin(); it != m_chunks.end(); ) {
-        uint64_t key = it->first;
-        int cx = static_cast<int>(static_cast<int32_t>(key & 0xFFFFFFFFu));
-        int cz = static_cast<int>(static_cast<int32_t>(key >> 32));
-        int dx = cx - pcx;
-        int dz = cz - pcz;
-
-        if (std::abs(dx) > unloadR || std::abs(dz) > unloadR) {
-            if (it->second.mesh != 0) {
-                renderer->DestroyMesh(it->second.mesh);
-            }
-            m_pending.erase(key);
-            it = m_chunks.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
-    // 收集缺失的区块，按距离排序
-    struct Need { int cx, cz, d2; };
-    std::vector<Need> need;
-    for (int dz = -R; dz <= R; ++dz) {
-        for (int dx = -R; dx <= R; ++dx) {
-            int cx = pcx + dx;
-            int cz = pcz + dz;
-            uint64_t key = ChunkKey(cx, cz);
-            if (m_chunks.count(key)) continue;
-            if (m_pending.count(key)) continue;
-            need.push_back({cx, cz, dx*dx + dz*dz});
-        }
-    }
-
-    // 近的优先
-    std::sort(need.begin(), need.end(),
-              [](const Need& a, const Need& b) { return a.d2 < b.d2; });
-
-    // 只发前 K 个
-    int sent = 0;
-    for (const auto& n : need) {
-        if (sent++ >= kRequestsPerTick) break;
-
-        Eng::MessageWriter w;
-        w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkRequest));
-        w.Write<int32_t>(n.cx);
-        w.Write<int32_t>(n.cz);
-        m_client->Send(w.GetBuffer());
-
-        m_pending.insert(ChunkKey(n.cx, n.cz));
-    }
-}
-
 BlockType MyGame::GetBlockAt(int wx, int wy, int wz) const {
-    if (wy < 0 || wy >= CHUNK_SIZE_Y) return BlockType::Air;
-    int cx = wx >> 4;
-    int cz = wz >> 4;
-    int lx = wx & 15;
-    int lz = wz & 15;
-    auto it = m_chunks.find(ChunkKey(cx, cz));
-    if (it == m_chunks.end()) return BlockType::Air;
-    return ChunkGet(it->second.chunk, lx, wy, lz);
+    return m_world.GetBlockAt(wx, wy, wz);
 }
 
 bool MyGame::IsSolidAt(int wx, int wy, int wz) const {
-    BlockType b = GetBlockAt(wx, wy, wz);
-    return b != BlockType::Air && b != BlockType::Water;
+    return m_world.IsSolidAt(wx, wy, wz);
 }
 
 bool MyGame::AABBCollides(const glm::vec3& pos) const {
@@ -1948,17 +1826,15 @@ void MyGame::AddToInventory(BlockType type, int count) {
 
 void MyGame::DrainMeshResults() {
     m_meshManager.DrainResults([this](game::client::MeshResult&& r) {
-        auto it = m_chunks.find(r.chunkKey);
-        if (it != m_chunks.end()) {
-            // 1. 将算好的光照同步回主线程
-            it->second.chunk.sky = r.sky;
-            it->second.chunk.block = r.block;
+        auto* cc = m_world.GetChunk(r.chunkKey);
+        if (cc) {
+            cc->chunk.sky = r.sky;
+            cc->chunk.block = r.block;
 
-            // 2. 处理 Mesh 创建与替换
             if (r.vertices.empty()) {
-                if (it->second.mesh != 0) {
-                    renderer->DestroyMesh(it->second.mesh);
-                    it->second.mesh = 0;
+                if (cc->mesh != 0) {
+                    renderer->DestroyMesh(cc->mesh);
+                    cc->mesh = 0;
                 }
             } else {
                 Eng::client::MeshData data;
@@ -1966,10 +1842,10 @@ void MyGame::DrainMeshResults() {
                 data.indices  = std::move(r.indices);
 
                 auto newMesh = renderer->CreateMesh(data);
-                if (it->second.mesh != 0) {
-                    renderer->DestroyMesh(it->second.mesh);
+                if (cc->mesh != 0) {
+                    renderer->DestroyMesh(cc->mesh);
                 }
-                it->second.mesh = newMesh;
+                cc->mesh = newMesh;
             }
         }
     });
@@ -1984,20 +1860,15 @@ void MyGame::QueueChunkMeshTask(uint64_t key, const Chunk& chunk) {
     const Chunk* nZm = nullptr;
     const Chunk* nZp = nullptr;
 
-    // 找邻居，如果找到了直接拿指针传过去
-    auto it = m_chunks.find(ChunkKey(cx - 1, cz));
-    if (it != m_chunks.end()) nXm = &it->second.chunk;
+    auto* cXm = m_world.GetChunk(ChunkKey(cx - 1, cz));
+    if (cXm) nXm = &cXm->chunk;
+    auto* cXp = m_world.GetChunk(ChunkKey(cx + 1, cz));
+    if (cXp) nXp = &cXp->chunk;
+    auto* cZm = m_world.GetChunk(ChunkKey(cx, cz - 1));
+    if (cZm) nZm = &cZm->chunk;
+    auto* cZp = m_world.GetChunk(ChunkKey(cx, cz + 1));
+    if (cZp) nZp = &cZp->chunk;
 
-    it = m_chunks.find(ChunkKey(cx + 1, cz));
-    if (it != m_chunks.end()) nXp = &it->second.chunk;
-
-    it = m_chunks.find(ChunkKey(cx, cz - 1));
-    if (it != m_chunks.end()) nZm = &it->second.chunk;
-
-    it = m_chunks.find(ChunkKey(cx, cz + 1));
-    if (it != m_chunks.end()) nZp = &it->second.chunk;
-
-    // 丢给 MeshManager，内部会自动深拷贝并多线程处理
     m_meshManager.Submit(key, chunk, nXm, nXp, nZm, nZp);
 }
 
@@ -2060,9 +1931,6 @@ void MyGame::LodWorkerLoop(uint32_t seed) {
     }
 }
 
-// ============================================================
-// 构建一个 LOD 单元：33×33 顶点网格，每格一个水平 quad
-// ============================================================
 void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                           int level, int ucx, int ucz,
                           std::vector<Eng::client::Vertex>& outV,
@@ -2189,11 +2057,11 @@ void MyGame::BuildLod1FromChunks(const LodKey& key) {
     const int baseX = key.cx * CELLS;
     const int baseZ = key.cz * CELLS;
 
-    auto getChunk = [this](int cx, int cz) -> const ClientChunk* {
-        auto it = m_chunks.find(ChunkKey(cx, cz));
-        return it == m_chunks.end() ? nullptr : &it->second;
+    auto getChunk = [this](int cx, int cz) -> const game::client::ClientChunk* {
+        auto it = m_world.GetChunks().find(ChunkKey(cx, cz));
+        return it == m_world.GetChunks().end() ? nullptr : &it->second;
     };
-    const ClientChunk* cs[2][2] = {
+    const game::client::ClientChunk* cs[2][2] = {
         { getChunk(key.cx*2+0, key.cz*2+0), getChunk(key.cx*2+0, key.cz*2+1) },
         { getChunk(key.cx*2+1, key.cz*2+0), getChunk(key.cx*2+1, key.cz*2+1) },
     };
@@ -2226,7 +2094,7 @@ void MyGame::BuildLod1FromChunks(const LodKey& key) {
     auto sample = [&](int i, int j, float& y, int& tile) {
         int cxi = i >> 4, czi = j >> 4;
         int lx  = i & 15, lz  = j & 15;
-        const ClientChunk* cc = cs[cxi][czi];
+        const client::ClientChunk* cc = cs[cxi][czi];
 
         int h;
         uint8_t tb;
@@ -2340,9 +2208,6 @@ void MyGame::BuildLod1FromChunks(const LodKey& key) {
     m_lodUnits[key] = u;
 }
 
-// ============================================================
-// 每帧：根据相机位置更新 LOD 单元
-// ============================================================
 void MyGame::UpdateLodStreaming() {
     if (!m_lodTerrain) return;
 
@@ -2427,9 +2292,6 @@ void MyGame::UpdateLodStreaming() {
     }
 }
 
-// ============================================================
-// 主线程收结果，创建 GPU mesh
-// ============================================================
 void MyGame::DrainLodResults() {
     constexpr int K = 4;
     int done = 0;
@@ -2465,6 +2327,9 @@ void MyGame::DrainLodResults() {
     }
 }
 
+// ============================================================
+// 视锥体计算
+// ============================================================
 void MyGame::UpdateFrustum(const glm::mat4& vp) {
     auto row = [&](int r) { return glm::vec4(vp[0][r], vp[1][r], vp[2][r], vp[3][r]); };
     glm::vec4 r0=row(0), r1=row(1), r2=row(2), r3=row(3);
@@ -2486,13 +2351,12 @@ bool MyGame::AabbInFrustum(const glm::vec3& mn, const glm::vec3& mx) const {
     for (const auto& p : m_frustum.planes) {
         glm::vec3 n = glm::vec3(p);
         float   d = p.w;
-        // 找 AABB 中"最靠平面"的顶点：沿法线方向最远的点
         glm::vec3 v(
             n.x >= 0 ? mx.x : mn.x,
             n.y >= 0 ? mx.y : mn.y,
             n.z >= 0 ? mx.z : mn.z
         );
-        if (glm::dot(n, v) + d < 0.0f) return false;   // 全在平面外侧
+        if (glm::dot(n, v) + d < 0.0f) return false;
     }
     return true;
 }
