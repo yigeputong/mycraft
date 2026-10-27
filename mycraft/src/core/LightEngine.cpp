@@ -53,7 +53,7 @@ void LightEngine::InitRegion(Chunk& c, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk
     PropagateBlock(qBlock, nXm, nXp, nZm, nZp);
 }
 
-void LightEngine::OnBlockChanged(Chunk& c, int lx, int ly, int lz, BlockType oldB, BlockType newB) {
+void LightEngine::OnBlockChanged(Chunk& c, [[maybe_unused]] int lx, [[maybe_unused]] int ly, [[maybe_unused]] int lz, BlockType oldB, BlockType newB) {
     if (oldB == newB) return;
     // 服务端暂不传邻居，只做单块全量重算；客户端会在 Worker 里用 InitRegion 跨块计算
     InitRegion(c, nullptr, nullptr, nullptr, nullptr);

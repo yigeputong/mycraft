@@ -4,6 +4,7 @@
 #include "Protocol.h"
 #include "core/Transport.h"
 #include "game/GameServer.h"
+#include "game/client/MeshManager.h"
 #include "game/server/WorldGenerator.h"
 #include <cstdint>
 #include <memory>
@@ -96,40 +97,9 @@ private:
     float m_animTime = 0.0f;
 
     // ==================== 多线程 Chunk Mesh 构建 ====================
-    struct MeshTask {
-        uint64_t chunkKey;
-        Chunk chunk;
-        Chunk nXm, nXp, nZm, nZp;
-        bool hasN[4] = {false, false, false, false}; // 0: X-, 1: X+, 2: Z-, 3: Z+
-    };
-
-    struct MeshResult {
-        uint64_t chunkKey;
-        std::vector<Eng::client::Vertex> vertices;
-        std::vector<uint32_t>            indices;
-        std::array<uint8_t, CHUNK_VOLUME> sky;
-        std::array<game::LightRGB, CHUNK_VOLUME> block;
-    };
-
-    std::vector<std::thread>              m_meshWorkers;
-    std::mutex                            m_meshTaskMutex;
-    std::condition_variable               m_meshTaskCv;
-    std::queue<std::shared_ptr<MeshTask>> m_meshTaskQueue;
-    std::atomic<bool>                     m_meshWorkerStop{false};
-
-    std::mutex                            m_meshResultMutex;
-    std::queue<MeshResult>                m_meshResultQueue;
-    std::unordered_set<uint64_t>          m_pendingMeshKeys;
-
-    void StartMeshWorker();
-    void StopMeshWorker();
-    void MeshWorkerLoop();
+    client::MeshManager m_meshManager;
+    void QueueChunkMeshTask(uint64_t key, const Chunk& chunk); // 保留这个，但内部调 Submit
     void DrainMeshResults();
-
-    static void BuildChunkMeshData(MeshTask& task, MeshResult& result);
-    
-    // 辅助函数：在主线程安全地提取 MeshTask 并推入队列
-    void QueueChunkMeshTask(uint64_t key, const Chunk& chunk);
 
     // ==================== LOD 系统 ====================
     std::unique_ptr<game::server::TerrainGenerator> m_lodTerrain;

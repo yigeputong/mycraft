@@ -20,6 +20,8 @@ target_link_libraries(game-server PRIVATE nlohmann_json::nlohmann_json)
 add_executable(mycraft
     ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Game.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/MeshManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/TextureAtlas.cpp
 )
 target_include_directories(mycraft PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include

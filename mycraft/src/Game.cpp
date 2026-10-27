@@ -9,7 +9,6 @@
 #include "game/GameServer.h"
 #include "game/core/Blocks.h"   
 #include "game/core/Physics.h"
-#include "game/core/LightEngine.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include <SDL3/SDL_timer.h>
@@ -518,7 +517,7 @@ void MyGame::OnStart(Eng::Engine& engine) {
     if (!SetupRenderer(engine)) return;
     SetupShaders();
 
-    StartMeshWorker();
+    m_meshManager.Start();
 
     m_state = GameState::MainMenu;
 }
@@ -1280,7 +1279,6 @@ void MyGame::ReturnToMainMenu() {
     }
 
     // 2. 先停 worker
-    StopMeshWorker();
     StopLodWorker();
 
     // 3. 销毁 GPU 资源
@@ -1355,7 +1353,6 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
     // ★ 从 mainWin 重新获取 API，确保在 Window 存活时它才有效
     auto* safeRenderer = mainWin ? mainWin->GetAPI() : nullptr;
     if (safeRenderer) {
-        StopMeshWorker();
         StopLodWorker();
         for (auto& [key, u] : m_lodUnits) {
             if (u.mesh != 0) safeRenderer->DestroyMesh(u.mesh);
@@ -1770,235 +1767,6 @@ Eng::client::MeshHandle MyGame::BuildItemCubeMesh(BlockType type) {
     return renderer->CreateMesh(data);
 }
 
-void MyGame::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
-    result.vertices.clear();
-    result.indices.clear();
-    result.vertices.reserve(static_cast<size_t>(2000) * 4);
-    result.indices.reserve(static_cast<size_t>(2000) * 6);
-
-    // 1. 统一获取指针（可修改），避免后续重复定义
-    Chunk* pC = &task.chunk;
-    Chunk* pXm = task.hasN[0] ? &task.nXm : nullptr;
-    Chunk* pXp = task.hasN[1] ? &task.nXp : nullptr;
-    Chunk* pZm = task.hasN[2] ? &task.nZm : nullptr;
-    Chunk* pZp = task.hasN[3] ? &task.nZp : nullptr;
-
-    // 2. 统一初始化和传播光照
-    LightEngine::InitRegion(*pC, pXm, pXp, pZm, pZp);
-
-    // 3. 将光照结果带回主线程
-    result.sky = pC->sky;
-    result.block = pC->block;
-
-    const Chunk& chunk = *pC; // 复用指针
-    const int cx = chunk.chunk_x;
-    const int cz = chunk.chunk_z;
-    const int baseX = cx * CHUNK_SIZE_X;
-    const int baseZ = cz * CHUNK_SIZE_Z;
-
-    // 4. 获取方块
-    auto getBlock = [&](int lx, int ly, int lz) -> BlockType {
-        if (ly < 0 || ly >= CHUNK_SIZE_Y) return BlockType::Air;
-        if (lx >= 0 && lx < CHUNK_SIZE_X && lz >= 0 && lz < CHUNK_SIZE_Z)
-            return ChunkGet(chunk, lx, ly, lz);
-        
-        const Chunk* n = nullptr;
-        int nlx = lx, nlz = lz;
-        if      (lx < 0)             { n = pXm; nlx = lx + CHUNK_SIZE_X; }
-        else if (lx >= CHUNK_SIZE_X) { n = pXp; nlx = lx - CHUNK_SIZE_X; }
-        else if (lz < 0)             { n = pZm; nlz = lz + CHUNK_SIZE_Z; }
-        else if (lz >= CHUNK_SIZE_Z) { n = pZp; nlz = lz - CHUNK_SIZE_Z; }
-        
-        if (!n) return BlockType::Air;
-        if (nlx < 0 || nlx >= CHUNK_SIZE_X || nlz < 0 || nlz >= CHUNK_SIZE_Z) return BlockType::Air;
-        return ChunkGet(*n, nlx, ly, nlz);
-    };
-
-    auto isSolidAt = [&](int lx, int ly, int lz) -> bool {
-        BlockType b = getBlock(lx, ly, lz);
-        return b != BlockType::Air && b != BlockType::Water && b != BlockType::Void &&
-               b != BlockType::TallGrass && b != BlockType::FlowerRed && b != BlockType::FlowerYellow;
-    };
-
-    static constexpr int faceOffsets[6][4][3] = {
-        {{1,0,0},{1,1,0},{1,1,1},{1,0,1}},
-        {{0,0,1},{0,1,1},{0,1,0},{0,0,0}},
-        {{0,1,1},{1,1,1},{1,1,0},{0,1,0}},
-        {{0,0,0},{1,0,0},{1,0,1},{0,0,1}},
-        {{1,0,1},{1,1,1},{0,1,1},{0,0,1}},
-        {{0,0,0},{0,1,0},{1,1,0},{1,0,0}},
-    };
-    static constexpr int faceNormals[6][3] = {
-        { 1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}
-    };
-    static constexpr float faceUVs[4][2] = {
-        {0,0},{0,1},{1,1},{1,0}
-    };
-
-    for (int lx = 0; lx < CHUNK_SIZE_X; ++lx) {
-        for (int ly = 0; ly < CHUNK_SIZE_Y; ++ly) {
-            for (int lz = 0; lz < CHUNK_SIZE_Z; ++lz) {
-                BlockType type = ChunkGet(chunk, lx, ly, lz);
-
-                if (type == BlockType::Air || type == BlockType::Void) continue;
-
-                // 十字交叉植物
-                if (type == BlockType::TallGrass || type == BlockType::FlowerRed || type == BlockType::FlowerYellow) {
-                    int tile = TileForBlock(type, 0);
-                    float u0 = (tile % ATLAS_COLS) * TILE_UV;
-                    float v0 = (tile / static_cast<float>(ATLAS_COLS)) * TILE_UV;
-                    float u1 = u0 + TILE_UV;
-                    float v1 = v0 + TILE_UV;
-                    float x0 = baseX + lx + 0.15f;
-                    float x1 = baseX + lx + 0.85f;
-                    float z0 = baseZ + lz + 0.15f;
-                    float z1 = baseZ + lz + 0.85f;
-                    float y0 = (float)ly;
-                    float y1 = (float)ly + 1.0f;
-
-                    auto addQuad = [&](glm::vec3 p1, glm::vec3 p2, glm::vec3 p3, glm::vec3 p4) {
-                        uint32_t baseIndex = (uint32_t)result.vertices.size();
-                        Eng::client::Vertex v;
-                        v.ao = 1.0f;
-                        v.normal = {0, 1, 0};
-                        v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
-                        v.position = p1; v.uv = {u0, v1}; result.vertices.push_back(v);
-                        v.position = p2; v.uv = {u1, v1}; result.vertices.push_back(v);
-                        v.position = p3; v.uv = {u1, v0}; result.vertices.push_back(v);
-                        v.position = p4; v.uv = {u0, v0}; result.vertices.push_back(v);
-                        result.indices.push_back(baseIndex + 0); result.indices.push_back(baseIndex + 1); result.indices.push_back(baseIndex + 2);
-                        result.indices.push_back(baseIndex + 2); result.indices.push_back(baseIndex + 3); result.indices.push_back(baseIndex + 0);
-                        result.indices.push_back(baseIndex + 0); result.indices.push_back(baseIndex + 2); result.indices.push_back(baseIndex + 1);
-                        result.indices.push_back(baseIndex + 3); result.indices.push_back(baseIndex + 2); result.indices.push_back(baseIndex + 0);
-                    };
-                    addQuad({x0, y0, z0}, {x1, y0, z1}, {x1, y1, z1}, {x0, y1, z0});
-                    addQuad({x0, y0, z1}, {x1, y0, z0}, {x1, y1, z0}, {x0, y1, z1});
-                    continue; 
-                }
-
-                // 6 个面
-                for (int f = 0; f < 6; ++f) {
-                    int nx = lx + faceNormals[f][0];
-                    int ny = ly + faceNormals[f][1];
-                    int nz = lz + faceNormals[f][2];
-
-                    BlockType neighbor = getBlock(nx, ny, nz);
-                    
-                    if (IsSolid(neighbor)) continue;
-                    if (type == BlockType::Water && neighbor == BlockType::Water) continue;
-
-                    int N_axis = (faceNormals[f][0] != 0) ? 0 : (faceNormals[f][1] != 0) ? 1 : 2;
-                    int U_axis = (N_axis + 1) % 3;
-                    int V_axis = (N_axis + 2) % 3;
-
-                    glm::ivec3 N(faceNormals[f][0], faceNormals[f][1], faceNormals[f][2]);
-
-                    uint32_t baseIndex = (uint32_t)result.vertices.size();
-
-                    for (int v = 0; v < 4; ++v) {
-                        Eng::client::Vertex vert;
-                        
-                        // 水面高度 0.9f
-                        float yPos = (float)ly + faceOffsets[f][v][1];
-                        if (type == BlockType::Water && faceOffsets[f][v][1] == 1) {
-                            yPos = (float)ly + 0.9f; 
-                        }
-
-                        vert.position = {
-                            baseX + lx + faceOffsets[f][v][0],
-                            yPos,
-                            baseZ + lz + faceOffsets[f][v][2]
-                        };
-                        vert.normal = {
-                            (float)faceNormals[f][0],
-                            (float)faceNormals[f][1],
-                            (float)faceNormals[f][2]
-                        };
-                        int tile = TileForBlock(type, f);
-                        int tileRow = tile / ATLAS_COLS;
-                        int tileCol = tile % ATLAS_COLS;
-                        float u0 = static_cast<float>(tileCol) * TILE_UV;
-                        float v0 = static_cast<float>(tileRow) * TILE_UV;
-                        vert.uv = {
-                            u0 + faceUVs[v][0] * TILE_UV,
-                            v0 + (1.0f - faceUVs[v][1]) * TILE_UV
-                        };
-
-                        // AO 计算
-                        int du = (faceOffsets[f][v][U_axis] == 0) ? -1 : +1;
-                        int dv = (faceOffsets[f][v][V_axis] == 0) ? -1 : +1;
-
-                        glm::ivec3 U(0), V(0);
-                        U[U_axis] = du;
-                        V[V_axis] = dv;
-
-                        int s1 = isSolidAt(lx + N.x + U.x, ly + N.y + U.y, lz + N.z + U.z) ? 1 : 0;
-                        int s2 = isSolidAt(lx + N.x + V.x, ly + N.y + V.y, lz + N.z + V.z) ? 1 : 0;
-                        int sc = isSolidAt(lx + N.x + U.x + V.x, ly + N.y + U.y + V.y, lz + N.z + U.z + V.z) ? 1 : 0;
-
-                        vert.ao = (s1 && s2) ? 0.4f : 1.0f - 0.2f * static_cast<float>(s1 + s2 + sc);
-                        if (type == BlockType::Water) vert.ao = 1.0f;
-
-                                                // 获取光照（如果越界且邻居没加载，默认给满天空光防黑边）
-                        auto getLightAt = [&](int wx, int wy, int wz, glm::vec4& outLight) -> void {
-                            if (wy < 0 || wy >= CHUNK_SIZE_Y) { outLight = glm::vec4(0.0f); return; }
-                            int idx;
-                            if (wx >= 0 && wx < CHUNK_SIZE_X && wz >= 0 && wz < CHUNK_SIZE_Z) {
-                                idx = ChunkIndex(wx, wy, wz);
-                                outLight = {chunk.sky[idx] / 15.0f, chunk.block[idx].r / 15.0f, chunk.block[idx].g / 15.0f, chunk.block[idx].b / 15.0f};
-                                return;
-                            }
-                            const Chunk* n = nullptr; int nlx = wx, nlz = wz;
-                            if (wx < 0) { n = pXm; nlx = wx + CHUNK_SIZE_X; }
-                            else if (wx >= CHUNK_SIZE_X) { n = pXp; nlx = wx - CHUNK_SIZE_X; }
-                            else if (wz < 0) { n = pZm; nlz = wz + CHUNK_SIZE_Z; }
-                            else if (wz >= CHUNK_SIZE_Z) { n = pZp; nlz = wz - CHUNK_SIZE_Z; }
-                            
-                            if (n && nlx >= 0 && nlx < CHUNK_SIZE_X && nlz >= 0 && nlz < CHUNK_SIZE_Z) {
-                                idx = ChunkIndex(nlx, wy, nlz);
-                                outLight = {n->sky[idx] / 15.0f, n->block[idx].r / 15.0f, n->block[idx].g / 15.0f, n->block[idx].b / 15.0f};
-                            } else {
-                                // 邻居没加载，当作空气处理（满天空光），避免边界缩水发黑
-                                outLight = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f); 
-                            }
-                        };
-
-                        // 采样点的 4 个位置（全部位于面的外侧）
-                        glm::ivec3 P_outer = {lx + N.x, ly + N.y, lz + N.z};
-                        glm::ivec3 P_U     = {lx + N.x + U.x, ly + N.y + U.y, lz + N.z + U.z};
-                        glm::ivec3 P_V     = {lx + N.x + V.x, ly + N.y + V.y, lz + N.z + V.z};
-                        glm::ivec3 P_UV    = {lx + N.x + U.x + V.x, ly + N.y + U.y + V.y, lz + N.z + U.z + V.z};
-
-                        glm::vec4 sumLight(0.0f);
-                        glm::vec4 l;
-                        int count = 0;
-
-                        // 采样外侧 4 个点
-                        getLightAt(P_outer.x, P_outer.y, P_outer.z, l); sumLight += l; count++;
-                        getLightAt(P_U.x, P_U.y, P_U.z, l); sumLight += l; count++;
-                        getLightAt(P_V.x, P_V.y, P_V.z, l); sumLight += l; count++;
-                        getLightAt(P_UV.x, P_UV.y, P_UV.z, l); sumLight += l; count++;
-
-                        vert.light = sumLight / static_cast<float>(count);
-
-                        // 如果是水，给保底值
-                        if (type == BlockType::Water) vert.light = glm::vec4(1.0f);
-
-                        result.vertices.push_back(vert);
-                    }
-
-                    result.indices.push_back(baseIndex + 0);
-                    result.indices.push_back(baseIndex + 1);
-                    result.indices.push_back(baseIndex + 2);
-                    result.indices.push_back(baseIndex + 2);
-                    result.indices.push_back(baseIndex + 3);
-                    result.indices.push_back(baseIndex + 0);
-                }
-            }
-        }
-    }
-}
-
 Eng::client::MeshHandle MyGame::BuildPlayerMesh() {
     std::vector<Eng::client::Vertex> vertices;
     std::vector<uint32_t> indices;
@@ -2178,76 +1946,15 @@ void MyGame::AddToInventory(BlockType type, int count) {
     // 3. 背包满 → 丢弃（暂时）
 }
 
-// Mesh worker
-void MyGame::StartMeshWorker() {
-    unsigned hw = std::thread::hardware_concurrency();
-    // Mesh 构建比较耗 CPU，分配多一点线程
-    unsigned n  = std::clamp(hw > 2 ? hw - 2 : 2u, 2u, 8u); 
-
-    m_meshWorkerStop = false;
-    for (unsigned i = 0; i < n; ++i) {
-        m_meshWorkers.emplace_back([this] { MeshWorkerLoop(); });
-    }
-    logInfo(logger, "[MeshWorker] Started " << n << " workers");
-}
-
-void MyGame::StopMeshWorker() {
-    if (m_meshWorkers.empty()) return;
-
-    {
-        std::lock_guard lk(m_meshTaskMutex);
-        m_meshWorkerStop = true;
-        while (!m_meshTaskQueue.empty()) m_meshTaskQueue.pop();
-    }
-    m_meshTaskCv.notify_all();
-    for (auto& t : m_meshWorkers) {
-        if (t.joinable()) t.join();
-    }
-    m_meshWorkers.clear();
-}
-
-void MyGame::MeshWorkerLoop() {
-    while (true) {
-        std::shared_ptr<MeshTask> task; // 这里只是个指针，不占栈空间
-        {
-            std::unique_lock lk(m_meshTaskMutex);
-            m_meshTaskCv.wait(lk, [this] {
-                return m_meshWorkerStop.load() || !m_meshTaskQueue.empty();
-            });
-            if (m_meshWorkerStop.load()) return;
-            task = std::move(m_meshTaskQueue.front());
-            m_meshTaskQueue.pop();
-        }
-
-        MeshResult result;
-        result.chunkKey = task->chunkKey;
-        // 传引用 *task
-        BuildChunkMeshData(*task, result);
-
-        {
-            std::lock_guard lk(m_meshResultMutex);
-            m_meshResultQueue.push(std::move(result));
-        }
-    }
-}
-
 void MyGame::DrainMeshResults() {
-    constexpr int K = 4; 
-    int done = 0;
-    for (;;) {
-        MeshResult r;
-        {
-            std::lock_guard lk(m_meshResultMutex);
-            if (m_meshResultQueue.empty() || done >= K) break;
-            r = std::move(m_meshResultQueue.front());
-            m_meshResultQueue.pop();
-        }
-
+    m_meshManager.DrainResults([this](game::client::MeshResult&& r) {
         auto it = m_chunks.find(r.chunkKey);
         if (it != m_chunks.end()) {
+            // 1. 将算好的光照同步回主线程
             it->second.chunk.sky = r.sky;
             it->second.chunk.block = r.block;
 
+            // 2. 处理 Mesh 创建与替换
             if (r.vertices.empty()) {
                 if (it->second.mesh != 0) {
                     renderer->DestroyMesh(it->second.mesh);
@@ -2257,7 +1964,7 @@ void MyGame::DrainMeshResults() {
                 Eng::client::MeshData data;
                 data.vertices = std::move(r.vertices);
                 data.indices  = std::move(r.indices);
-                
+
                 auto newMesh = renderer->CreateMesh(data);
                 if (it->second.mesh != 0) {
                     renderer->DestroyMesh(it->second.mesh);
@@ -2265,38 +1972,33 @@ void MyGame::DrainMeshResults() {
                 it->second.mesh = newMesh;
             }
         }
-        ++done;
-    }
+    });
 }
 
 void MyGame::QueueChunkMeshTask(uint64_t key, const Chunk& chunk) {
-    auto task = std::make_shared<MeshTask>(); // 创建在堆上
-    task->chunkKey = key;
-    task->chunk = chunk;
-
     int cx = chunk.chunk_x;
     int cz = chunk.chunk_z;
 
-    auto fetchNeighbor = [&](int ncx, int ncz, Chunk& outChunk, bool& has) {
-        auto it = m_chunks.find(ChunkKey(ncx, ncz));
-        if (it != m_chunks.end()) {
-            outChunk = it->second.chunk;
-            has = true;
-        } else {
-            has = false;
-        }
-    };
+    const Chunk* nXm = nullptr;
+    const Chunk* nXp = nullptr;
+    const Chunk* nZm = nullptr;
+    const Chunk* nZp = nullptr;
 
-    fetchNeighbor(cx - 1, cz, task->nXm, task->hasN[0]);
-    fetchNeighbor(cx + 1, cz, task->nXp, task->hasN[1]);
-    fetchNeighbor(cx, cz - 1, task->nZm, task->hasN[2]);
-    fetchNeighbor(cx, cz + 1, task->nZp, task->hasN[3]);
+    // 找邻居，如果找到了直接拿指针传过去
+    auto it = m_chunks.find(ChunkKey(cx - 1, cz));
+    if (it != m_chunks.end()) nXm = &it->second.chunk;
 
-    {
-        std::lock_guard lk(m_meshTaskMutex);
-        m_meshTaskQueue.push(task);
-    }
-    m_meshTaskCv.notify_one();
+    it = m_chunks.find(ChunkKey(cx + 1, cz));
+    if (it != m_chunks.end()) nXp = &it->second.chunk;
+
+    it = m_chunks.find(ChunkKey(cx, cz - 1));
+    if (it != m_chunks.end()) nZm = &it->second.chunk;
+
+    it = m_chunks.find(ChunkKey(cx, cz + 1));
+    if (it != m_chunks.end()) nZp = &it->second.chunk;
+
+    // 丢给 MeshManager，内部会自动深拷贝并多线程处理
+    m_meshManager.Submit(key, chunk, nXm, nXp, nZm, nZp);
 }
 
 // ============================================================
