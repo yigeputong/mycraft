@@ -8,6 +8,7 @@
 #include "game/server/WorldGenerator.h"
 #include "game/core/RayCast.h"
 #include "game/core/Physics.h"
+#include "game/core/LightEngine.h"
 
 #include <SDL3/SDL.h>
 
@@ -52,10 +53,11 @@ void GameServer::WorkerLoop(uint32_t seed) {
         ChunkResult r;
         r.key   = task.key;
         r.chunk = terrain.GenerateChunk(task.cx, task.cz);
+        LightEngine::InitRegion(r.chunk, nullptr, nullptr, nullptr, nullptr);
 
         {
             std::lock_guard lk(m_resultMutex);
-            m_resultQueue.push(std::move(r));
+            m_resultQueue.push(r);
         }
     }
 }
@@ -80,7 +82,7 @@ void GameServer::DrainChunkResults() {
         {
             std::lock_guard lk(m_resultMutex);
             if (m_resultQueue.empty() || sends >= kMaxSendsPerTick) break;
-            r = std::move(m_resultQueue.front());
+            r = m_resultQueue.front();
             m_resultQueue.pop();
         }
 
@@ -94,7 +96,7 @@ void GameServer::DrainChunkResults() {
         }
 
         // 存表
-        m_chunks.emplace(r.key, std::move(r.chunk));
+        m_chunks.emplace(r.key, r.chunk);
         m_inFlight.erase(r.key);
 
         // 发给等待的 client
@@ -518,16 +520,25 @@ void GameServer::HandleDig(ServerPlayer& p) {
     if (!hit.hit) return;
 
     BlockType oldBlock = GetBlockAt(hit.bx, hit.by, hit.bz);
+    if (oldBlock == BlockType::Air || oldBlock == BlockType::Void) return; // 防止挖空气
 
     SetBlockAt(hit.bx, hit.by, hit.bz, BlockType::Air);
     BroadcastBlockChange(hit.bx, hit.by, hit.bz, BlockType::Air);
 
-    // 挖掉非空气方块 → 生成掉落物
-    if (oldBlock != BlockType::Air && oldBlock != BlockType::Void) {
-        SpawnItemDrop(
-            glm::vec3(hit.bx + 0.5f, hit.by + 0.5f, hit.bz + 0.5f),
-            oldBlock);
+    // 重算服务端光照
+    int cx = game::WorldToChunkX(hit.bx);
+    int cz = game::WorldToChunkZ(hit.bz);
+    int lx = game::WorldToLocalX(hit.bx);
+    int lz = game::WorldToLocalZ(hit.bz);
+    auto it = m_chunks.find(game::ChunkKey(cx, cz));
+    if (it != m_chunks.end()) {
+        game::LightEngine::OnBlockChanged(it->second, lx, hit.by, lz, oldBlock, BlockType::Air);
     }
+
+    // 挖掉非空气方块 → 生成掉落物
+    SpawnItemDrop(
+        glm::vec3(hit.bx + 0.5f, hit.by + 0.5f, hit.bz + 0.5f),
+        oldBlock);
 }
 
 void GameServer::HandlePlace(ServerPlayer& p, BlockType type) {
@@ -550,10 +561,22 @@ void GameServer::HandlePlace(ServerPlayer& p, BlockType type) {
 
     // 别把方块放进自己身体里
     if (IsInsidePlayer(p, px, py, pz)) return;
-    if (GetBlockAt(px, py, pz) != BlockType::Air) return;
+    
+    BlockType oldBlock = GetBlockAt(px, py, pz);
+    if (oldBlock != BlockType::Air) return;
 
     SetBlockAt(px, py, pz, type);
     BroadcastBlockChange(px, py, pz, type);
+
+    // 重算服务端光照
+    int cx = game::WorldToChunkX(px);
+    int cz = game::WorldToChunkZ(pz);
+    int lx = game::WorldToLocalX(px);
+    int lz = game::WorldToLocalZ(pz);
+    auto it = m_chunks.find(game::ChunkKey(cx, cz));
+    if (it != m_chunks.end()) {
+        game::LightEngine::OnBlockChanged(it->second, lx, py, lz, oldBlock, type);
+    }
 }
 
 BlockType GameServer::GetBlockAt(int wx, int wy, int wz) const {

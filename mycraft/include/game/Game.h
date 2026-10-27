@@ -107,24 +107,26 @@ private:
         uint64_t chunkKey;
         std::vector<Eng::client::Vertex> vertices;
         std::vector<uint32_t>            indices;
+        std::array<uint8_t, CHUNK_VOLUME> sky;
+        std::array<game::LightRGB, CHUNK_VOLUME> block;
     };
 
-    std::vector<std::thread>      m_meshWorkers;
-    std::mutex                    m_meshTaskMutex;
-    std::condition_variable       m_meshTaskCv;
-    std::queue<MeshTask>          m_meshTaskQueue;
-    std::atomic<bool>             m_meshWorkerStop{false};
+    std::vector<std::thread>              m_meshWorkers;
+    std::mutex                            m_meshTaskMutex;
+    std::condition_variable               m_meshTaskCv;
+    std::queue<std::shared_ptr<MeshTask>> m_meshTaskQueue;
+    std::atomic<bool>                     m_meshWorkerStop{false};
 
-    std::mutex                    m_meshResultMutex;
-    std::queue<MeshResult>        m_meshResultQueue;
+    std::mutex                            m_meshResultMutex;
+    std::queue<MeshResult>                m_meshResultQueue;
+    std::unordered_set<uint64_t>          m_pendingMeshKeys;
 
     void StartMeshWorker();
     void StopMeshWorker();
     void MeshWorkerLoop();
     void DrainMeshResults();
 
-    // 将构建函数改为静态纯函数，不依赖 this
-    static void BuildChunkMeshData(const MeshTask& task, MeshResult& result);
+    static void BuildChunkMeshData(MeshTask& task, MeshResult& result);
     
     // 辅助函数：在主线程安全地提取 MeshTask 并推入队列
     void QueueChunkMeshTask(uint64_t key, const Chunk& chunk);
@@ -257,6 +259,10 @@ private:
         game::MakeItemStack(BlockType::Sand,       64),
     }};
     void AddToInventory(BlockType type, int count);
+
+    // 背包与 UI 状态
+    bool m_inventoryOpen = false;
+    std::array<ItemStack, 27> m_inventory{}; // 3x9 的主背包
 
     // ==================== 状态与 UI 标志 ====================
     bool m_shouldQuit = false;

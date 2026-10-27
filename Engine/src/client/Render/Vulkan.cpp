@@ -1089,7 +1089,7 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const 
     stages[1].module = *si.fragModule;
     stages[1].pName  = fragEntry;
 
-        // ==================== Vertex input ====================
+    // ==================== Vertex input ====================
     VkVertexInputBindingDescription bindings[2]{};
     bindings[0].binding   = 0;
     bindings[0].stride    = sizeof(Vertex);
@@ -1098,7 +1098,8 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const 
     bindings[1].stride    = sizeof(glm::mat4);
     bindings[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
 
-    VkVertexInputAttributeDescription attrs[8]{};
+    // ★ 修改：数组大小从 8 改为 9
+    VkVertexInputAttributeDescription attrs[9]{};
     attrs[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position) };
     attrs[1] = { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)   };
     attrs[2] = { 2, 0, VK_FORMAT_R32G32_SFLOAT,    offsetof(Vertex, uv)       };
@@ -1107,6 +1108,8 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const 
     attrs[5] = { 5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16 };
     attrs[6] = { 6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32 };
     attrs[7] = { 7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 48 };
+    // ★ 新增：光照属性 location = 8
+    attrs[8] = { 8, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, light)  };
 
     VkPipelineVertexInputStateCreateInfo vi{};
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -1118,7 +1121,8 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const 
     } else {
         vi.vertexBindingDescriptionCount   = 2;
         vi.pVertexBindingDescriptions      = bindings;
-        vi.vertexAttributeDescriptionCount = 8;
+        // ★ 修改：属性数量从 8 改为 9
+        vi.vertexAttributeDescriptionCount = 9;
         vi.pVertexAttributeDescriptions    = attrs;
     }
 
@@ -1183,8 +1187,7 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const 
     blend.attachmentCount = 1;
     blend.pAttachments    = &blendAtt;
 
-    // ==================== Pipeline layout（vk:: 保留，逻辑较复杂） ====================
-    // ★ 已删除 pcRange：mesh.vert 改用 instance mat4 读 model，不再读 push constant
+    // ==================== Pipeline layout ====================
     std::array<vk::DescriptorSetLayout, 2> setLayouts = {
         *m_globalSetLayout, *m_textureSetLayout
     };
@@ -1206,7 +1209,7 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const 
     }
     si.layout = vk::raii::PipelineLayout(m_device, plci);
 
-    // ==================== PipelineRenderingCreateInfo（C） ====================
+    // ==================== PipelineRenderingCreateInfo ====================
     VkFormat colorFmt = VK_FORMAT_R8G8B8A8_UNORM;
     VkFormat depthFmt = static_cast<VkFormat>(findDepthFormat());
 
@@ -1219,10 +1222,10 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const 
     priC.depthAttachmentFormat   = depthFmt;
     priC.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
 
-    // ==================== GraphicsPipelineCreateInfo（C） ====================
+    // ==================== GraphicsPipelineCreateInfo ====================
     VkGraphicsPipelineCreateInfo gpciC{};
     gpciC.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    gpciC.pNext               = &priC;             // ★ C 指针显式链
+    gpciC.pNext               = &priC;
     gpciC.flags               = 0;
     gpciC.stageCount          = 2;
     gpciC.pStages             = stages;
@@ -2158,8 +2161,7 @@ void VulkanAPI::ShutdownImGuiBackend() {
     logInfo(m_logger, "[RenderAPI] ImGui backend shutdown");
 }
 
-void VulkanAPI::ImGuiNewFrame()
-{
+void VulkanAPI::ImGuiNewFrame() {
     if (!m_imguiInitialized)
         return;
 
@@ -2175,13 +2177,11 @@ void VulkanAPI::ImGuiRenderDrawData() {
 
     VkCommandBuffer cmd = *m_commandBuffers[m_frameIndex];
 
-    // ★ 1. 如果当前有 render pass，先关掉
     if (m_renderPassActive) {
         vkCmdEndRendering(cmd);
         m_renderPassActive = false;
     }
 
-    // ★ 2. 开一个只含 swapchain color、无 depth 的 render pass
     VkRenderingAttachmentInfo colorAtt{};
     colorAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAtt.pNext       = nullptr;
@@ -2273,9 +2273,8 @@ void VulkanAPI::ApplySettings(const WindowConfig& win, const RenderConfig& rende
 }
 
 void VulkanAPI::WaitIdle() {
-    if (*m_device) {              // ← 成员名按你实际的改
-        m_device.waitIdle();     // vk::raii::Device 写法
-        // 裸 VkDevice 用：vkDeviceWaitIdle(m_device);
+    if (*m_device) {
+        m_device.waitIdle();
     }
 }
 

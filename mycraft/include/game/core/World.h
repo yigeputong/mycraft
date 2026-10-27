@@ -11,12 +11,18 @@ constexpr int CHUNK_SIZE_Z = 16;
 constexpr int CHUNK_VOLUME = CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
 constexpr int SEA_LEVEL = 64;
 
-struct Chunk {
-    int chunk_x = 0;   // 区块 X 坐标
-    int chunk_z = 0;   // 区块 Z 坐标
+struct LightRGB { uint8_t r = 0, g = 0, b = 0; };
 
-    // 方块数据（x → z → y 顺序，缓存友好）
+struct Chunk {
+    int chunk_x = 0;
+    int chunk_z = 0;
+
+    // 方块数据
     std::array<BlockType, CHUNK_VOLUME> blocks{};
+
+    // 光照数据（随 chunk 加载/卸载）
+    std::array<uint8_t, CHUNK_VOLUME>  sky{};
+    std::array<LightRGB, CHUNK_VOLUME> block{};
 };
 
 // 本地坐标 → 数组索引（y → z → x）

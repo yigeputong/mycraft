@@ -1,0 +1,943 @@
+diff --git a/.clangd b/.clangd
+index 166cc3c..07bfe3a 100644
+--- a/.clangd
++++ b/.clangd
+@@ -1,14 +1,14 @@
+ CompileFlags:
+-  CompilationDatabase: build
++  CompilationDatabase: build/clang
+ 
+ Diagnostics:
+-  ClangTidy:
+-    Add:
+-      - bugprone-*
+-      - performance-*
+-      - portability-*
+-      - modernize-*
+-    Remove:
+-      - bugprone-easily-swappable-parameters
+-      - bugprone-narrowing-conversions
+-      - modernize-use-trailing-return-type
+\ No newline at end of file
++    ClangTidy:
++        Add:
++            - bugprone-*
++            - performance-*
++            - portability-*
++            - modernize-*
++        Remove:
++            - bugprone-easily-swappable-parameters
++            - bugprone-narrowing-conversions
++            - modernize-use-trailing-return-type
+\ No newline at end of file
+diff --git a/CMakePresets.json b/CMakePresets.json
+index ea812ee..fdd2b93 100644
+--- a/CMakePresets.json
++++ b/CMakePresets.json
+@@ -26,13 +26,13 @@
+             "name": "windows-msvc",
+             "displayName": "Windows MSVC",
+             "inherits": "windows-base",
+-            "binaryDir": "${sourceDir}/build/windows-msvc"
++            "binaryDir": "${sourceDir}/build/msvc"
+         },
+         {
+             "name": "windows-msvc-asan",
+             "displayName": "Windows MSVC ASan",
+             "inherits": "windows-base",
+-            "binaryDir": "${sourceDir}/build/windows-msvc-asan",
++            "binaryDir": "${sourceDir}/build/msvc-asan",
+             "cacheVariables": {
+                 "SANITIZER": "address"
+             }
+@@ -41,7 +41,7 @@
+             "name": "windows-clang",
+             "displayName": "Windows Clang",
+             "inherits": "windows-base",
+-            "binaryDir": "${sourceDir}/build/windows-clang",
++            "binaryDir": "${sourceDir}/build/clang",
+             "cacheVariables": {
+                 "CMAKE_C_COMPILER": "clang-cl",
+                 "CMAKE_CXX_COMPILER": "clang-cl"
+@@ -51,7 +51,7 @@
+             "name": "windows-clang-asan",
+             "displayName": "Windows Clang ASan",
+             "inherits": "windows-base",
+-            "binaryDir": "${sourceDir}/build/windows-clang-asan",
++            "binaryDir": "${sourceDir}/build/clang-asan",
+             "cacheVariables": {
+                 "CMAKE_C_COMPILER": "clang-cl",
+                 "CMAKE_CXX_COMPILER": "clang-cl",
+@@ -62,13 +62,13 @@
+             "name": "linux-gcc",
+             "displayName": "Linux GCC",
+             "inherits": "linux-base",
+-            "binaryDir": "${sourceDir}/build/linux-gcc"
++            "binaryDir": "${sourceDir}/build/gcc"
+         },
+         {
+             "name": "linux-gcc-asan",
+             "displayName": "Linux GCC ASan + UBSan",
+             "inherits": "linux-base",
+-            "binaryDir": "${sourceDir}/build/linux-gcc-asan",
++            "binaryDir": "${sourceDir}/build/gcc-asan",
+             "cacheVariables": {
+                 "SANITIZER": "address+undefined"
+             }
+@@ -77,7 +77,7 @@
+             "name": "linux-gcc-tsan",
+             "displayName": "Linux GCC TSan",
+             "inherits": "linux-base",
+-            "binaryDir": "${sourceDir}/build/linux-gcc-tsan",
++            "binaryDir": "${sourceDir}/build/gcc-tsan",
+             "cacheVariables": {
+                 "SANITIZER": "thread"
+             }
+@@ -86,7 +86,7 @@
+             "name": "linux-clang",
+             "displayName": "Linux Clang",
+             "inherits": "linux-base",
+-            "binaryDir": "${sourceDir}/build/linux-clang",
++            "binaryDir": "${sourceDir}/build/clang",
+             "cacheVariables": {
+                 "CMAKE_C_COMPILER": "clang",
+                 "CMAKE_CXX_COMPILER": "clang++"
+diff --git a/Engine/include/client/Render/RenderAPI.h b/Engine/include/client/Render/RenderAPI.h
+index 5dd4b3e..e137069 100644
+--- a/Engine/include/client/Render/RenderAPI.h
++++ b/Engine/include/client/Render/RenderAPI.h
+@@ -30,6 +30,7 @@ struct Vertex {
+     glm::vec3 normal;
+     glm::vec2 uv;
+     float     ao = 1.0f;
++    glm::vec4 light; // r: 天空光, g: 方块R, b: 方块G, a: 方块B
+ };
+ 
+ struct MeshData {
+@@ -167,12 +168,10 @@ public:
+     virtual void DrawFullscreenQuad(TextureHandle textureID) = 0;
+ 
+     // ==================== ImGui 后端 ====================
+-    // 调用方负责 ImGui::CreateContext() 和 ImGui_ImplSDL3_InitXXX
+-    // 后端负责渲染器相关的初始化和每帧绘制
+-    virtual bool InitImGuiBackend()   = 0;
++    virtual bool InitImGuiBackend()     = 0;
+     virtual void ShutdownImGuiBackend() = 0;
+-    virtual void ImGuiNewFrame()      = 0;   // 内部调 ImGui_ImplXxx_NewFrame
+-    virtual void ImGuiRenderDrawData() = 0;  // 内部调 ImGui_ImplXxx_RenderDrawData
++    virtual void ImGuiNewFrame()        = 0;   // 内部调 ImGui_ImplXxx_NewFrame
++    virtual void ImGuiRenderDrawData()  = 0;  // 内部调 ImGui_ImplXxx_RenderDrawData
+ 
+     //其他
+     [[nodiscard]] virtual DeviceInfo GetDeviceInfo() const = 0;
+diff --git a/Engine/src/client/Render/OpenGL.cpp b/Engine/src/client/Render/OpenGL.cpp
+index 35cd29d..9d44180 100644
+--- a/Engine/src/client/Render/OpenGL.cpp
++++ b/Engine/src/client/Render/OpenGL.cpp
+@@ -24,6 +24,38 @@
+         logError(m_logger, "[GL] " << tag << " error=" << e); \
+ } while(0)
+ 
++namespace {
++    // 读二进制文件
++    std::vector<char> ReadBinaryFile(const std::string& path) {
++        std::ifstream f(path, std::ios::binary | std::ios::ate);
++        if (!f.is_open()) return {};
++        auto size = f.tellg();
++        f.seekg(0);
++        std::vector<char> buf(static_cast<size_t>(size));
++        f.read(buf.data(), size);
++        return buf;
++    }
++
++    // 从 SPIR-V 编译 shader
++    GLuint CompileShaderSPIRV(GLenum stage, const std::vector<char>& spv) {
++        GLuint shader = glCreateShader(stage);
++        glShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V,
++                    spv.data(), static_cast<GLsizei>(spv.size()));
++        glSpecializeShader(shader, "main", 0, nullptr, nullptr);
++
++        GLint ok = 0;
++        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
++        if (!ok) {
++            char logBuf[2048];
++            glGetShaderInfoLog(shader, sizeof(logBuf), nullptr, logBuf);
++            // 通过参数把 log 传出去不太好，直接吞掉，外面只看 0
++            glDeleteShader(shader);
++            return 0;
++        }
++        return shader;
++    }
++}
++
+ namespace Eng::client {
+ 
+ // ---------- 构造函数 / 析构函数 ----------
+@@ -216,6 +248,11 @@ MeshHandle OpenGLAPI::CreateMeshInternal(const MeshData& data, bool instanced) {
+     }
+     glVertexArrayBindingDivisor(internal.vao, 1, 1);
+ 
++    // ---- 光照 VBO 属性 ----
++    glVertexArrayAttribFormat(internal.vao, 8, 4, GL_FLOAT, GL_FALSE, offsetof(Vertex, light));
++    glVertexArrayAttribBinding(internal.vao, 8, 0);
++    glEnableVertexArrayAttrib(internal.vao, 8);
++
+     // ---- EBO ----
+     if (!data.indices.empty()) {
+         glCreateBuffers(1, &internal.ebo);
+@@ -430,38 +467,6 @@ TextureHandle OpenGLAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int
+     return handle;
+ }
+ 
+-namespace {
+-    // 读二进制文件
+-    std::vector<char> ReadBinaryFile(const std::string& path) {
+-        std::ifstream f(path, std::ios::binary | std::ios::ate);
+-        if (!f.is_open()) return {};
+-        auto size = f.tellg();
+-        f.seekg(0);
+-        std::vector<char> buf(static_cast<size_t>(size));
+-        f.read(buf.data(), size);
+-        return buf;
+-    }
+-
+-    // 从 SPIR-V 编译 shader
+-    GLuint CompileShaderSPIRV(GLenum stage, const std::vector<char>& spv) {
+-        GLuint shader = glCreateShader(stage);
+-        glShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V,
+-                    spv.data(), static_cast<GLsizei>(spv.size()));
+-        glSpecializeShader(shader, "main", 0, nullptr, nullptr);
+-
+-        GLint ok = 0;
+-        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+-        if (!ok) {
+-            char logBuf[2048];
+-            glGetShaderInfoLog(shader, sizeof(logBuf), nullptr, logBuf);
+-            // 通过参数把 log 传出去不太好，直接吞掉，外面只看 0
+-            glDeleteShader(shader);
+-            return 0;
+-        }
+-        return shader;
+-    }
+-}
+-
+ ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath, const std::string& fragPath) {
+     if (!m_initialized) return 0;
+ 
+diff --git a/Engine/src/client/Render/Vulkan.cpp b/Engine/src/client/Render/Vulkan.cpp
+index 19a9e68..8838b30 100644
+--- a/Engine/src/client/Render/Vulkan.cpp
++++ b/Engine/src/client/Render/Vulkan.cpp
+@@ -1089,7 +1089,7 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const
+     stages[1].module = *si.fragModule;
+     stages[1].pName  = fragEntry;
+ 
+-        // ==================== Vertex input ====================
++    // ==================== Vertex input ====================
+     VkVertexInputBindingDescription bindings[2]{};
+     bindings[0].binding   = 0;
+     bindings[0].stride    = sizeof(Vertex);
+@@ -1098,7 +1098,8 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const
+     bindings[1].stride    = sizeof(glm::mat4);
+     bindings[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+ 
+-    VkVertexInputAttributeDescription attrs[8]{};
++    // ★ 修改：数组大小从 8 改为 9
++    VkVertexInputAttributeDescription attrs[9]{};
+     attrs[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position) };
+     attrs[1] = { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)   };
+     attrs[2] = { 2, 0, VK_FORMAT_R32G32_SFLOAT,    offsetof(Vertex, uv)       };
+@@ -1107,6 +1108,8 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const
+     attrs[5] = { 5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16 };
+     attrs[6] = { 6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32 };
+     attrs[7] = { 7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 48 };
++    // ★ 新增：光照属性 location = 8
++    attrs[8] = { 8, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, light)  };
+ 
+     VkPipelineVertexInputStateCreateInfo vi{};
+     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+@@ -1118,7 +1121,8 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const
+     } else {
+         vi.vertexBindingDescriptionCount   = 2;
+         vi.pVertexBindingDescriptions      = bindings;
+-        vi.vertexAttributeDescriptionCount = 8;
++        // ★ 修改：属性数量从 8 改为 9
++        vi.vertexAttributeDescriptionCount = 9;
+         vi.pVertexAttributeDescriptions    = attrs;
+     }
+ 
+@@ -1183,8 +1187,7 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const
+     blend.attachmentCount = 1;
+     blend.pAttachments    = &blendAtt;
+ 
+-    // ==================== Pipeline layout（vk:: 保留，逻辑较复杂） ====================
+-    // ★ 已删除 pcRange：mesh.vert 改用 instance mat4 读 model，不再读 push constant
++    // ==================== Pipeline layout ====================
+     std::array<vk::DescriptorSetLayout, 2> setLayouts = {
+         *m_globalSetLayout, *m_textureSetLayout
+     };
+@@ -1206,7 +1209,7 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const
+     }
+     si.layout = vk::raii::PipelineLayout(m_device, plci);
+ 
+-    // ==================== PipelineRenderingCreateInfo（C） ====================
++    // ==================== PipelineRenderingCreateInfo ====================
+     VkFormat colorFmt = VK_FORMAT_R8G8B8A8_UNORM;
+     VkFormat depthFmt = static_cast<VkFormat>(findDepthFormat());
+ 
+@@ -1219,10 +1222,10 @@ ShaderHandle VulkanAPI::createShaderInternal(const std::string& vertPath, const
+     priC.depthAttachmentFormat   = depthFmt;
+     priC.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
+ 
+-    // ==================== GraphicsPipelineCreateInfo（C） ====================
++    // ==================== GraphicsPipelineCreateInfo ====================
+     VkGraphicsPipelineCreateInfo gpciC{};
+     gpciC.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+-    gpciC.pNext               = &priC;             // ★ C 指针显式链
++    gpciC.pNext               = &priC;
+     gpciC.flags               = 0;
+     gpciC.stageCount          = 2;
+     gpciC.pStages             = stages;
+@@ -2158,8 +2161,7 @@ void VulkanAPI::ShutdownImGuiBackend() {
+     logInfo(m_logger, "[RenderAPI] ImGui backend shutdown");
+ }
+ 
+-void VulkanAPI::ImGuiNewFrame()
+-{
++void VulkanAPI::ImGuiNewFrame() {
+     if (!m_imguiInitialized)
+         return;
+ 
+@@ -2175,13 +2177,11 @@ void VulkanAPI::ImGuiRenderDrawData() {
+ 
+     VkCommandBuffer cmd = *m_commandBuffers[m_frameIndex];
+ 
+-    // ★ 1. 如果当前有 render pass，先关掉
+     if (m_renderPassActive) {
+         vkCmdEndRendering(cmd);
+         m_renderPassActive = false;
+     }
+ 
+-    // ★ 2. 开一个只含 swapchain color、无 depth 的 render pass
+     VkRenderingAttachmentInfo colorAtt{};
+     colorAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+     colorAtt.pNext       = nullptr;
+@@ -2273,9 +2273,8 @@ void VulkanAPI::ApplySettings(const WindowConfig& win, const RenderConfig& rende
+ }
+ 
+ void VulkanAPI::WaitIdle() {
+-    if (*m_device) {              // ← 成员名按你实际的改
+-        m_device.waitIdle();     // vk::raii::Device 写法
+-        // 裸 VkDevice 用：vkDeviceWaitIdle(m_device);
++    if (*m_device) {
++        m_device.waitIdle();
+     }
+ }
+ 
+diff --git a/mycraft/CMakeLists.txt b/mycraft/CMakeLists.txt
+index e660df4..dcb741f 100644
+--- a/mycraft/CMakeLists.txt
++++ b/mycraft/CMakeLists.txt
+@@ -6,6 +6,7 @@ add_library(game-server STATIC
+     ${CMAKE_CURRENT_SOURCE_DIR}/src/server.cpp
+     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WorldGenerator.cpp
+     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WorldSave.cpp
++    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/LightEngine.cpp
+ )
+ target_include_directories(game-server PUBLIC
+     ${CMAKE_CURRENT_SOURCE_DIR}/include
+diff --git a/mycraft/assets/shaders/src/lod.vert b/mycraft/assets/shaders/src/lod.vert
+index c0305a9..2da83a7 100644
+--- a/mycraft/assets/shaders/src/lod.vert
++++ b/mycraft/assets/shaders/src/lod.vert
+@@ -9,6 +9,13 @@ layout(location = 0) in vec3 aPos;
+ layout(location = 1) in vec3 aNormal;
+ layout(location = 2) in vec2 aUV;
+ layout(location = 3) in float aAO;
++// 实例矩阵
++layout(location = 4) in vec4 aI0;
++layout(location = 5) in vec4 aI1;
++layout(location = 6) in vec4 aI2;
++layout(location = 7) in vec4 aI3;
++// 光照
++layout(location = 8) in vec4 aLight; 
+ 
+ layout(std140, binding = 0) uniform GlobalData {
+     mat4 view;
+diff --git a/mycraft/assets/shaders/src/mesh.frag b/mycraft/assets/shaders/src/mesh.frag
+index 7476ed9..0eed110 100644
+--- a/mycraft/assets/shaders/src/mesh.frag
++++ b/mycraft/assets/shaders/src/mesh.frag
+@@ -4,6 +4,7 @@ layout(location = 0) in vec3 FragPos;
+ layout(location = 1) in vec3 Normal;
+ layout(location = 2) in vec2 uv;
+ layout(location = 3) in float ao;
++layout(location = 4) in vec4 vLight; // ★ 接收光照
+ 
+ layout(location = 0) out vec4 FragColor;
+ 
+@@ -21,36 +22,46 @@ layout (std140, binding = 0) uniform GlobalData {
+ } global;
+ 
+ #ifdef USE_OPENGL
+-layout(binding = 0) uniform sampler2D uDiffuse;           // GL: texture unit 0
++layout(binding = 0) uniform sampler2D uDiffuse;
+ #else
+-layout(set = 1, binding = 0) uniform sampler2D uDiffuse;  // VK: set 1, binding 0
++layout(set = 1, binding = 0) uniform sampler2D uDiffuse;
+ #endif
+ 
+ void main() {
+     vec4 texColor4 = texture(uDiffuse, uv);
+     
+-    // 丢弃透明像素
+     if (texColor4.a < 0.1) {
+         discard;
+     }
+     
+     vec3 texColor = texColor4.rgb;
+     vec3 norm = normalize(Normal);
++    
++    // 提取光照数据
++    float skyLight = vLight.r;
++    vec3 blockLight = vLight.gba;
+ 
++    // 1. 原有的基础光照，根据天空光进行衰减
+     vec3 lightDirN = normalize(global.lightDir);
+     float diff = max(dot(norm, lightDirN), 0.0);
++    
++    // 将环境光与方向光乘以天空光，这样洞穴里就会变暗
++    vec3 lit = (global.lightAmbient + diff * global.lightColor * global.lightIntensity) * skyLight * texColor;
+ 
+-    vec3 lit = global.lightAmbient * texColor
+-             + diff * global.lightColor * global.lightIntensity * texColor;
++    // 2. 方块光（火把光）叠加
++    vec3 torchLight = blockLight * texColor * 1.5; // 1.5 是火把亮度系数，可调
+ 
++    // 3. 取两者最大值，并给个保底亮度 0.05
++    vec3 finalLight = max(max(lit, torchLight), texColor * 0.05);
++
++    // 4. 原有的面阴影
+     float faceShade;
+     if      (norm.y >  0.5) faceShade = 1.00;
+     else if (norm.y < -0.5) faceShade = 0.65;
+     else if (abs(norm.x) > 0.5) faceShade = 0.85;
+     else                        faceShade = 0.92;
+ 
+-    vec3 result = lit * faceShade;
+-    result = max(result, texColor * 0.35);
+-
++    // 5. 结合 AO 输出
++    vec3 result = finalLight * faceShade;
+     FragColor = vec4(result * mix(1.0, ao, global.aoStrength), 1.0);
+ }
+\ No newline at end of file
+diff --git a/mycraft/assets/shaders/src/mesh.vert b/mycraft/assets/shaders/src/mesh.vert
+index a69db53..16deb43 100644
+--- a/mycraft/assets/shaders/src/mesh.vert
++++ b/mycraft/assets/shaders/src/mesh.vert
+@@ -4,16 +4,19 @@ layout(location = 0) in vec3 aPos;
+ layout(location = 1) in vec3 aNormal;
+ layout(location = 2) in vec2 aUV;
+ layout(location = 3) in float aAO;
+-// ★ 新增：实例矩阵（4 列）
++// 实例矩阵
+ layout(location = 4) in vec4 aI0;
+ layout(location = 5) in vec4 aI1;
+ layout(location = 6) in vec4 aI2;
+ layout(location = 7) in vec4 aI3;
++// 光照
++layout(location = 8) in vec4 aLight; 
+ 
+ layout(location = 0) out vec3 FragPos;
+ layout(location = 1) out vec3 Normal;
+ layout(location = 2) out vec2 uv;
+ layout(location = 3) out float ao;
++layout(location = 4) out vec4 vLight; // ★ 新增输出
+ 
+ layout(std140, binding = 0) uniform GlobalData {
+     mat4 view;
+@@ -35,5 +38,7 @@ void main() {
+     Normal  = mat3(model) * aNormal;
+     uv      = aUV;
+     ao      = aAO;
++    vLight  = aLight; // ★ 传给片元
++    
+     gl_Position = global.projection * global.view * worldPos;
+ }
+\ No newline at end of file
+diff --git a/mycraft/include/game/Game.h b/mycraft/include/game/Game.h
+index e7e9e5c..f5a6ee9 100644
+--- a/mycraft/include/game/Game.h
++++ b/mycraft/include/game/Game.h
+@@ -107,24 +107,26 @@ private:
+         uint64_t chunkKey;
+         std::vector<Eng::client::Vertex> vertices;
+         std::vector<uint32_t>            indices;
++        std::array<uint8_t, CHUNK_VOLUME> sky;
++        std::array<game::LightRGB, CHUNK_VOLUME> block;
+     };
+ 
+-    std::vector<std::thread>      m_meshWorkers;
+-    std::mutex                    m_meshTaskMutex;
+-    std::condition_variable       m_meshTaskCv;
+-    std::queue<MeshTask>          m_meshTaskQueue;
+-    std::atomic<bool>             m_meshWorkerStop{false};
++    std::vector<std::thread>              m_meshWorkers;
++    std::mutex                            m_meshTaskMutex;
++    std::condition_variable               m_meshTaskCv;
++    std::queue<std::shared_ptr<MeshTask>> m_meshTaskQueue;
++    std::atomic<bool>                     m_meshWorkerStop{false};
+ 
+-    std::mutex                    m_meshResultMutex;
+-    std::queue<MeshResult>        m_meshResultQueue;
++    std::mutex                            m_meshResultMutex;
++    std::queue<MeshResult>                m_meshResultQueue;
++    std::unordered_set<uint64_t>          m_pendingMeshKeys;
+ 
+     void StartMeshWorker();
+     void StopMeshWorker();
+     void MeshWorkerLoop();
+     void DrainMeshResults();
+ 
+-    // 将构建函数改为静态纯函数，不依赖 this
+-    static void BuildChunkMeshData(const MeshTask& task, MeshResult& result);
++    static void BuildChunkMeshData(MeshTask& task, MeshResult& result);
+     
+     // 辅助函数：在主线程安全地提取 MeshTask 并推入队列
+     void QueueChunkMeshTask(uint64_t key, const Chunk& chunk);
+@@ -258,6 +260,10 @@ private:
+     }};
+     void AddToInventory(BlockType type, int count);
+ 
++    // 背包与 UI 状态
++    bool m_inventoryOpen = false;
++    std::array<ItemStack, 27> m_inventory{}; // 3x9 的主背包
++
+     // ==================== 状态与 UI 标志 ====================
+     bool m_shouldQuit = false;
+     bool m_menuOpen   = false;
+diff --git a/mycraft/include/game/core/World.h b/mycraft/include/game/core/World.h
+index ce80808..c1f1a19 100644
+--- a/mycraft/include/game/core/World.h
++++ b/mycraft/include/game/core/World.h
+@@ -11,12 +11,18 @@ constexpr int CHUNK_SIZE_Z = 16;
+ constexpr int CHUNK_VOLUME = CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
+ constexpr int SEA_LEVEL = 64;
+ 
++struct LightRGB { uint8_t r = 0, g = 0, b = 0; };
++
+ struct Chunk {
+-    int chunk_x = 0;   // 区块 X 坐标
+-    int chunk_z = 0;   // 区块 Z 坐标
++    int chunk_x = 0;
++    int chunk_z = 0;
+ 
+-    // 方块数据（x → z → y 顺序，缓存友好）
++    // 方块数据
+     std::array<BlockType, CHUNK_VOLUME> blocks{};
++
++    // 光照数据（随 chunk 加载/卸载）
++    std::array<uint8_t, CHUNK_VOLUME>  sky{};
++    std::array<LightRGB, CHUNK_VOLUME> block{};
+ };
+ 
+ // 本地坐标 → 数组索引（y → z → x）
+diff --git a/mycraft/src/Game.cpp b/mycraft/src/Game.cpp
+index 2965055..45a12a2 100644
+--- a/mycraft/src/Game.cpp
++++ b/mycraft/src/Game.cpp
+@@ -9,11 +9,13 @@
+ #include "game/GameServer.h"
+ #include "game/core/Blocks.h"   
+ #include "game/core/Physics.h"
++#include "game/core/LightEngine.h"
+ #include "imgui.h"
+ #include "imgui_impl_sdl3.h"
+ #include <SDL3/SDL_timer.h>
+ #include <SDL3/SDL_messagebox.h>
+ #include <algorithm>
++#include <cstddef>
+ #include <nlohmann/json.hpp>
+ #include <fstream>
+ 
+@@ -1543,7 +1545,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
+             }
+             break;
+         }
+-        case net::MessageType::PlayerId: {  // YourId
++        case net::MessageType::PlayerId: {
+             m_myClientId = r.ReadU32BE();
+             logInfo(logger, "[Net] My client ID: " << m_myClientId);
+             break;
+@@ -1596,7 +1598,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
+             int bx = r.Read<int32_t>();
+             int by = r.Read<int32_t>();
+             int bz = r.Read<int32_t>();
+-            BlockType t = static_cast<BlockType>(r.Read<uint16_t>());
++            auto t = static_cast<BlockType>(r.Read<uint16_t>());
+ 
+             int cx = bx >> 4, cz = bz >> 4;
+             int lx = bx & 15, lz = bz & 15;
+@@ -1604,6 +1606,9 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
+             auto it = m_chunks.find(ChunkKey(cx, cz));
+             if (it == m_chunks.end()) break;
+ 
++            BlockType oldBlock = ChunkGet(it->second.chunk, lx, by, lz);
++            if (oldBlock == t) break; // 没变化就跳过
++
+             ChunkSet(it->second.chunk, lx, by, lz, t);
+ 
+             QueueChunkMeshTask(ChunkKey(cx, cz), it->second.chunk);
+@@ -1612,6 +1617,11 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
+                 auto rebuild = [&](int ncx, int ncz) {
+                     auto nit = m_chunks.find(ChunkKey(ncx, ncz));
+                     if (nit == m_chunks.end()) return;
++                    
++                    // 注意：目前没有做“跨 Chunk 的光照 BFS 传播”，
++                    // 所以邻居 Chunk 的光照数据暂时无需重算。等以后支持跨边界光照时，
++                    // 这里也要加上 game::LightEngine::OnBlockChanged(nit->second.chunk, ...)
++                    
+                     QueueChunkMeshTask(ChunkKey(ncx, ncz), nit->second.chunk);
+                 };
+                 if (lx == 0)  rebuild(cx - 1, cz);
+@@ -1743,6 +1753,7 @@ Eng::client::MeshHandle MyGame::BuildItemCubeMesh(BlockType type) {
+                 v0 + (1.0f - faceUVs[v][1]) * TILE_UV
+             };
+             vert.ao = 1.0f;
++            vert.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+             vertices.push_back(vert);
+         }
+         indices.push_back(baseIndex + 0);
+@@ -1759,38 +1770,47 @@ Eng::client::MeshHandle MyGame::BuildItemCubeMesh(BlockType type) {
+     return renderer->CreateMesh(data);
+ }
+ 
+-void MyGame::BuildChunkMeshData(const MeshTask& task, MeshResult& result) {
++void MyGame::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
+     result.vertices.clear();
+     result.indices.clear();
+-    // 预估大小，避免多次扩容内存
+     result.vertices.reserve(static_cast<size_t>(2000) * 4);
+     result.indices.reserve(static_cast<size_t>(2000) * 6);
+ 
+-    const Chunk& chunk = task.chunk;
++    // 1. 统一获取指针（可修改），避免后续重复定义
++    Chunk* pC = &task.chunk;
++    Chunk* pXm = task.hasN[0] ? &task.nXm : nullptr;
++    Chunk* pXp = task.hasN[1] ? &task.nXp : nullptr;
++    Chunk* pZm = task.hasN[2] ? &task.nZm : nullptr;
++    Chunk* pZp = task.hasN[3] ? &task.nZp : nullptr;
++
++    // 2. 统一初始化和传播光照
++    LightEngine::InitRegion(*pC, pXm, pXp, pZm, pZp);
++
++    // 3. 将光照结果带回主线程
++    result.sky = pC->sky;
++    result.block = pC->block;
++
++    const Chunk& chunk = *pC; // 复用指针
+     const int cx = chunk.chunk_x;
+     const int cz = chunk.chunk_z;
+     const int baseX = cx * CHUNK_SIZE_X;
+     const int baseZ = cz * CHUNK_SIZE_Z;
+ 
+-    // 从 task 中拿邻居指针，没有则是 nullptr
+-    const Chunk* nXm = task.hasN[0] ? &task.nXm : nullptr;
+-    const Chunk* nXp = task.hasN[1] ? &task.nXp : nullptr;
+-    const Chunk* nZm = task.hasN[2] ? &task.nZm : nullptr;
+-    const Chunk* nZp = task.hasN[3] ? &task.nZp : nullptr;
+-
++    // 4. 获取方块
+     auto getBlock = [&](int lx, int ly, int lz) -> BlockType {
+         if (ly < 0 || ly >= CHUNK_SIZE_Y) return BlockType::Air;
+         if (lx >= 0 && lx < CHUNK_SIZE_X && lz >= 0 && lz < CHUNK_SIZE_Z)
+             return ChunkGet(chunk, lx, ly, lz);
++        
+         const Chunk* n = nullptr;
+         int nlx = lx, nlz = lz;
+-        if      (lx < 0)                  { n = nXm; nlx = lx + CHUNK_SIZE_X; }
+-        else if (lx >= CHUNK_SIZE_X)      { n = nXp; nlx = lx - CHUNK_SIZE_X; }
+-        else if (lz < 0)                  { n = nZm; nlz = lz + CHUNK_SIZE_Z; }
+-        else if (lz >= CHUNK_SIZE_Z)      { n = nZp; nlz = lz - CHUNK_SIZE_Z; }
++        if      (lx < 0)             { n = pXm; nlx = lx + CHUNK_SIZE_X; }
++        else if (lx >= CHUNK_SIZE_X) { n = pXp; nlx = lx - CHUNK_SIZE_X; }
++        else if (lz < 0)             { n = pZm; nlz = lz + CHUNK_SIZE_Z; }
++        else if (lz >= CHUNK_SIZE_Z) { n = pZp; nlz = lz - CHUNK_SIZE_Z; }
++        
+         if (!n) return BlockType::Air;
+-        if (nlx < 0 || nlx >= CHUNK_SIZE_X) return BlockType::Air;
+-        if (nlz < 0 || nlz >= CHUNK_SIZE_Z) return BlockType::Air;
++        if (nlx < 0 || nlx >= CHUNK_SIZE_X || nlz < 0 || nlz >= CHUNK_SIZE_Z) return BlockType::Air;
+         return ChunkGet(*n, nlx, ly, nlz);
+     };
+ 
+@@ -1841,6 +1861,7 @@ void MyGame::BuildChunkMeshData(const MeshTask& task, MeshResult& result) {
+                         Eng::client::Vertex v;
+                         v.ao = 1.0f;
+                         v.normal = {0, 1, 0};
++                        v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+                         v.position = p1; v.uv = {u0, v1}; result.vertices.push_back(v);
+                         v.position = p2; v.uv = {u1, v1}; result.vertices.push_back(v);
+                         v.position = p3; v.uv = {u1, v0}; result.vertices.push_back(v);
+@@ -1918,6 +1939,51 @@ void MyGame::BuildChunkMeshData(const MeshTask& task, MeshResult& result) {
+                         vert.ao = (s1 && s2) ? 0.4f : 1.0f - 0.2f * static_cast<float>(s1 + s2 + sc);
+                         if (type == BlockType::Water) vert.ao = 1.0f;
+ 
++                                                // 获取光照（如果越界且邻居没加载，默认给满天空光防黑边）
++                        auto getLightAt = [&](int wx, int wy, int wz, glm::vec4& outLight) -> void {
++                            if (wy < 0 || wy >= CHUNK_SIZE_Y) { outLight = glm::vec4(0.0f); return; }
++                            int idx;
++                            if (wx >= 0 && wx < CHUNK_SIZE_X && wz >= 0 && wz < CHUNK_SIZE_Z) {
++                                idx = ChunkIndex(wx, wy, wz);
++                                outLight = {chunk.sky[idx] / 15.0f, chunk.block[idx].r / 15.0f, chunk.block[idx].g / 15.0f, chunk.block[idx].b / 15.0f};
++                                return;
++                            }
++                            const Chunk* n = nullptr; int nlx = wx, nlz = wz;
++                            if (wx < 0) { n = pXm; nlx = wx + CHUNK_SIZE_X; }
++                            else if (wx >= CHUNK_SIZE_X) { n = pXp; nlx = wx - CHUNK_SIZE_X; }
++                            else if (wz < 0) { n = pZm; nlz = wz + CHUNK_SIZE_Z; }
++                            else if (wz >= CHUNK_SIZE_Z) { n = pZp; nlz = wz - CHUNK_SIZE_Z; }
++                            
++                            if (n && nlx >= 0 && nlx < CHUNK_SIZE_X && nlz >= 0 && nlz < CHUNK_SIZE_Z) {
++                                idx = ChunkIndex(nlx, wy, nlz);
++                                outLight = {n->sky[idx] / 15.0f, n->block[idx].r / 15.0f, n->block[idx].g / 15.0f, n->block[idx].b / 15.0f};
++                            } else {
++                                // 邻居没加载，当作空气处理（满天空光），避免边界缩水发黑
++                                outLight = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f); 
++                            }
++                        };
++
++                        // 采样点的 4 个位置（全部位于面的外侧）
++                        glm::ivec3 P_outer = {lx + N.x, ly + N.y, lz + N.z};
++                        glm::ivec3 P_U     = {lx + N.x + U.x, ly + N.y + U.y, lz + N.z + U.z};
++                        glm::ivec3 P_V     = {lx + N.x + V.x, ly + N.y + V.y, lz + N.z + V.z};
++                        glm::ivec3 P_UV    = {lx + N.x + U.x + V.x, ly + N.y + U.y + V.y, lz + N.z + U.z + V.z};
++
++                        glm::vec4 sumLight(0.0f);
++                        glm::vec4 l;
++                        int count = 0;
++
++                        // 采样外侧 4 个点
++                        getLightAt(P_outer.x, P_outer.y, P_outer.z, l); sumLight += l; count++;
++                        getLightAt(P_U.x, P_U.y, P_U.z, l); sumLight += l; count++;
++                        getLightAt(P_V.x, P_V.y, P_V.z, l); sumLight += l; count++;
++                        getLightAt(P_UV.x, P_UV.y, P_UV.z, l); sumLight += l; count++;
++
++                        vert.light = sumLight / static_cast<float>(count);
++
++                        // 如果是水，给保底值
++                        if (type == BlockType::Water) vert.light = glm::vec4(1.0f);
++
+                         result.vertices.push_back(vert);
+                     }
+ 
+@@ -1976,6 +2042,7 @@ Eng::client::MeshHandle MyGame::BuildPlayerMesh() {
+                 v.uv = { u0 + fuv[k][0]*TILE_UV,
+                          v0 + (1.0f - fuv[k][1])*TILE_UV };
+                 v.ao = 1.0f;
++                v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+                 vertices.push_back(v);
+             }
+             indices.push_back(base+0); indices.push_back(base+1); indices.push_back(base+2);
+@@ -2141,7 +2208,7 @@ void MyGame::StopMeshWorker() {
+ 
+ void MyGame::MeshWorkerLoop() {
+     while (true) {
+-        MeshTask task;
++        std::shared_ptr<MeshTask> task; // 这里只是个指针，不占栈空间
+         {
+             std::unique_lock lk(m_meshTaskMutex);
+             m_meshTaskCv.wait(lk, [this] {
+@@ -2153,9 +2220,9 @@ void MyGame::MeshWorkerLoop() {
+         }
+ 
+         MeshResult result;
+-        result.chunkKey = task.chunkKey;
+-        // 纯数据构建，不涉及 GPU
+-        BuildChunkMeshData(task, result);
++        result.chunkKey = task->chunkKey;
++        // 传引用 *task
++        BuildChunkMeshData(*task, result);
+ 
+         {
+             std::lock_guard lk(m_meshResultMutex);
+@@ -2164,7 +2231,6 @@ void MyGame::MeshWorkerLoop() {
+     }
+ }
+ 
+-// 主线程收结果：限流，防止 Vulkan 一帧上传太多显存卡死
+ void MyGame::DrainMeshResults() {
+     constexpr int K = 4; 
+     int done = 0;
+@@ -2179,7 +2245,9 @@ void MyGame::DrainMeshResults() {
+ 
+         auto it = m_chunks.find(r.chunkKey);
+         if (it != m_chunks.end()) {
+-            // 先建新的，再删旧的
++            it->second.chunk.sky = r.sky;
++            it->second.chunk.block = r.block;
++
+             if (r.vertices.empty()) {
+                 if (it->second.mesh != 0) {
+                     renderer->DestroyMesh(it->second.mesh);
+@@ -2191,11 +2259,10 @@ void MyGame::DrainMeshResults() {
+                 data.indices  = std::move(r.indices);
+                 
+                 auto newMesh = renderer->CreateMesh(data);
+-                
+                 if (it->second.mesh != 0) {
+                     renderer->DestroyMesh(it->second.mesh);
+                 }
+-                it->second.mesh = newMesh; // 替换
++                it->second.mesh = newMesh;
+             }
+         }
+         ++done;
+@@ -2203,9 +2270,9 @@ void MyGame::DrainMeshResults() {
+ }
+ 
+ void MyGame::QueueChunkMeshTask(uint64_t key, const Chunk& chunk) {
+-    MeshTask task;
+-    task.chunkKey = key;
+-    task.chunk = chunk; // 拷贝当前块
++    auto task = std::make_shared<MeshTask>(); // 创建在堆上
++    task->chunkKey = key;
++    task->chunk = chunk;
+ 
+     int cx = chunk.chunk_x;
+     int cz = chunk.chunk_z;
+@@ -2213,21 +2280,21 @@ void MyGame::QueueChunkMeshTask(uint64_t key, const Chunk& chunk) {
+     auto fetchNeighbor = [&](int ncx, int ncz, Chunk& outChunk, bool& has) {
+         auto it = m_chunks.find(ChunkKey(ncx, ncz));
+         if (it != m_chunks.end()) {
+-            outChunk = it->second.chunk; // 拷贝邻居
++            outChunk = it->second.chunk;
+             has = true;
+         } else {
+             has = false;
+         }
+     };
+ 
+-    fetchNeighbor(cx - 1, cz, task.nXm, task.hasN[0]);
+-    fetchNeighbor(cx + 1, cz, task.nXp, task.hasN[1]);
+-    fetchNeighbor(cx, cz - 1, task.nZm, task.hasN[2]);
+-    fetchNeighbor(cx, cz + 1, task.nZp, task.hasN[3]);
++    fetchNeighbor(cx - 1, cz, task->nXm, task->hasN[0]);
++    fetchNeighbor(cx + 1, cz, task->nXp, task->hasN[1]);
++    fetchNeighbor(cx, cz - 1, task->nZm, task->hasN[2]);
++    fetchNeighbor(cx, cz + 1, task->nZp, task->hasN[3]);
+ 
+     {
+         std::lock_guard lk(m_meshTaskMutex);
+-        m_meshTaskQueue.push(std::move(task));
++        m_meshTaskQueue.push(task);
+     }
+     m_meshTaskCv.notify_one();
+ }
+@@ -2349,6 +2416,7 @@ void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
+     auto pushV = [&](const glm::vec3& p, const glm::vec3& n, const glm::vec2& uv) {
+         Eng::client::Vertex v;
+         v.position = p; v.normal = n; v.uv = uv; v.ao = 1.0f;
++        v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+         outV.push_back(v);
+         outMin = glm::min(outMin, p);
+         outMax = glm::max(outMax, p);
+diff --git a/mycraft/src/server.cpp b/mycraft/src/server.cpp
+index 19b5a1b..1c73bf1 100644
+--- a/mycraft/src/server.cpp
++++ b/mycraft/src/server.cpp
+@@ -8,6 +8,7 @@
+ #include "game/server/WorldGenerator.h"
+ #include "game/core/RayCast.h"
+ #include "game/core/Physics.h"
++#include "game/core/LightEngine.h"
+ 
+ #include <SDL3/SDL.h>
+ 
+@@ -52,10 +53,11 @@ void GameServer::WorkerLoop(uint32_t seed) {
+         ChunkResult r;
+         r.key   = task.key;
+         r.chunk = terrain.GenerateChunk(task.cx, task.cz);
++        LightEngine::InitRegion(r.chunk, nullptr, nullptr, nullptr, nullptr);
+ 
+         {
+             std::lock_guard lk(m_resultMutex);
+-            m_resultQueue.push(std::move(r));
++            m_resultQueue.push(r);
+         }
+     }
+ }
+@@ -80,7 +82,7 @@ void GameServer::DrainChunkResults() {
+         {
+             std::lock_guard lk(m_resultMutex);
+             if (m_resultQueue.empty() || sends >= kMaxSendsPerTick) break;
+-            r = std::move(m_resultQueue.front());
++            r = m_resultQueue.front();
+             m_resultQueue.pop();
+         }
+ 
+@@ -94,7 +96,7 @@ void GameServer::DrainChunkResults() {
+         }
+ 
+         // 存表
+-        m_chunks.emplace(r.key, std::move(r.chunk));
++        m_chunks.emplace(r.key, r.chunk);
+         m_inFlight.erase(r.key);
+ 
+         // 发给等待的 client
+@@ -518,16 +520,25 @@ void GameServer::HandleDig(ServerPlayer& p) {
+     if (!hit.hit) return;
+ 
+     BlockType oldBlock = GetBlockAt(hit.bx, hit.by, hit.bz);
++    if (oldBlock == BlockType::Air || oldBlock == BlockType::Void) return; // 防止挖空气
+ 
+     SetBlockAt(hit.bx, hit.by, hit.bz, BlockType::Air);
+     BroadcastBlockChange(hit.bx, hit.by, hit.bz, BlockType::Air);
+ 
+-    // 挖掉非空气方块 → 生成掉落物
+-    if (oldBlock != BlockType::Air && oldBlock != BlockType::Void) {
+-        SpawnItemDrop(
+-            glm::vec3(hit.bx + 0.5f, hit.by + 0.5f, hit.bz + 0.5f),
+-            oldBlock);
++    // 重算服务端光照
++    int cx = game::WorldToChunkX(hit.bx);
++    int cz = game::WorldToChunkZ(hit.bz);
++    int lx = game::WorldToLocalX(hit.bx);
++    int lz = game::WorldToLocalZ(hit.bz);
++    auto it = m_chunks.find(game::ChunkKey(cx, cz));
++    if (it != m_chunks.end()) {
++        game::LightEngine::OnBlockChanged(it->second, lx, hit.by, lz, oldBlock, BlockType::Air);
+     }
++
++    // 挖掉非空气方块 → 生成掉落物
++    SpawnItemDrop(
++        glm::vec3(hit.bx + 0.5f, hit.by + 0.5f, hit.bz + 0.5f),
++        oldBlock);
+ }
+ 
+ void GameServer::HandlePlace(ServerPlayer& p, BlockType type) {
+@@ -550,10 +561,22 @@ void GameServer::HandlePlace(ServerPlayer& p, BlockType type) {
+ 
+     // 别把方块放进自己身体里
+     if (IsInsidePlayer(p, px, py, pz)) return;
+-    if (GetBlockAt(px, py, pz) != BlockType::Air) return;
++    
++    BlockType oldBlock = GetBlockAt(px, py, pz);
++    if (oldBlock != BlockType::Air) return;
+ 
+     SetBlockAt(px, py, pz, type);
+     BroadcastBlockChange(px, py, pz, type);
++
++    // 重算服务端光照
++    int cx = game::WorldToChunkX(px);
++    int cz = game::WorldToChunkZ(pz);
++    int lx = game::WorldToLocalX(px);
++    int lz = game::WorldToLocalZ(pz);
++    auto it = m_chunks.find(game::ChunkKey(cx, cz));
++    if (it != m_chunks.end()) {
++        game::LightEngine::OnBlockChanged(it->second, lx, py, lz, oldBlock, type);
++    }
+ }
+ 
+ BlockType GameServer::GetBlockAt(int wx, int wy, int wz) const {

@@ -24,6 +24,38 @@
         logError(m_logger, "[GL] " << tag << " error=" << e); \
 } while(0)
 
+namespace {
+    // 读二进制文件
+    std::vector<char> ReadBinaryFile(const std::string& path) {
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        if (!f.is_open()) return {};
+        auto size = f.tellg();
+        f.seekg(0);
+        std::vector<char> buf(static_cast<size_t>(size));
+        f.read(buf.data(), size);
+        return buf;
+    }
+
+    // 从 SPIR-V 编译 shader
+    GLuint CompileShaderSPIRV(GLenum stage, const std::vector<char>& spv) {
+        GLuint shader = glCreateShader(stage);
+        glShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V,
+                    spv.data(), static_cast<GLsizei>(spv.size()));
+        glSpecializeShader(shader, "main", 0, nullptr, nullptr);
+
+        GLint ok = 0;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            char logBuf[2048];
+            glGetShaderInfoLog(shader, sizeof(logBuf), nullptr, logBuf);
+            // 通过参数把 log 传出去不太好，直接吞掉，外面只看 0
+            glDeleteShader(shader);
+            return 0;
+        }
+        return shader;
+    }
+}
+
 namespace Eng::client {
 
 // ---------- 构造函数 / 析构函数 ----------
@@ -215,6 +247,11 @@ MeshHandle OpenGLAPI::CreateMeshInternal(const MeshData& data, bool instanced) {
         glEnableVertexArrayAttrib(internal.vao, 4 + i);
     }
     glVertexArrayBindingDivisor(internal.vao, 1, 1);
+
+    // ---- 光照 VBO 属性 ----
+    glVertexArrayAttribFormat(internal.vao, 8, 4, GL_FLOAT, GL_FALSE, offsetof(Vertex, light));
+    glVertexArrayAttribBinding(internal.vao, 8, 0);
+    glEnableVertexArrayAttrib(internal.vao, 8);
 
     // ---- EBO ----
     if (!data.indices.empty()) {
@@ -428,38 +465,6 @@ TextureHandle OpenGLAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int
 
     logInfo(m_logger, "[Texture] from pixels: " << w << "x" << h);
     return handle;
-}
-
-namespace {
-    // 读二进制文件
-    std::vector<char> ReadBinaryFile(const std::string& path) {
-        std::ifstream f(path, std::ios::binary | std::ios::ate);
-        if (!f.is_open()) return {};
-        auto size = f.tellg();
-        f.seekg(0);
-        std::vector<char> buf(static_cast<size_t>(size));
-        f.read(buf.data(), size);
-        return buf;
-    }
-
-    // 从 SPIR-V 编译 shader
-    GLuint CompileShaderSPIRV(GLenum stage, const std::vector<char>& spv) {
-        GLuint shader = glCreateShader(stage);
-        glShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V,
-                    spv.data(), static_cast<GLsizei>(spv.size()));
-        glSpecializeShader(shader, "main", 0, nullptr, nullptr);
-
-        GLint ok = 0;
-        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
-        if (!ok) {
-            char logBuf[2048];
-            glGetShaderInfoLog(shader, sizeof(logBuf), nullptr, logBuf);
-            // 通过参数把 log 传出去不太好，直接吞掉，外面只看 0
-            glDeleteShader(shader);
-            return 0;
-        }
-        return shader;
-    }
 }
 
 ShaderHandle OpenGLAPI::CreateShader(const std::string& vertPath, const std::string& fragPath) {

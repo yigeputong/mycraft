@@ -9,11 +9,13 @@
 #include "game/GameServer.h"
 #include "game/core/Blocks.h"   
 #include "game/core/Physics.h"
+#include "game/core/LightEngine.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_messagebox.h>
 #include <algorithm>
+#include <cstddef>
 #include <nlohmann/json.hpp>
 #include <fstream>
 
@@ -1543,7 +1545,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             }
             break;
         }
-        case net::MessageType::PlayerId: {  // YourId
+        case net::MessageType::PlayerId: {
             m_myClientId = r.ReadU32BE();
             logInfo(logger, "[Net] My client ID: " << m_myClientId);
             break;
@@ -1596,13 +1598,16 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             int bx = r.Read<int32_t>();
             int by = r.Read<int32_t>();
             int bz = r.Read<int32_t>();
-            BlockType t = static_cast<BlockType>(r.Read<uint16_t>());
+            auto t = static_cast<BlockType>(r.Read<uint16_t>());
 
             int cx = bx >> 4, cz = bz >> 4;
             int lx = bx & 15, lz = bz & 15;
 
             auto it = m_chunks.find(ChunkKey(cx, cz));
             if (it == m_chunks.end()) break;
+
+            BlockType oldBlock = ChunkGet(it->second.chunk, lx, by, lz);
+            if (oldBlock == t) break; // 没变化就跳过
 
             ChunkSet(it->second.chunk, lx, by, lz, t);
 
@@ -1612,6 +1617,11 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
                 auto rebuild = [&](int ncx, int ncz) {
                     auto nit = m_chunks.find(ChunkKey(ncx, ncz));
                     if (nit == m_chunks.end()) return;
+                    
+                    // 注意：目前没有做“跨 Chunk 的光照 BFS 传播”，
+                    // 所以邻居 Chunk 的光照数据暂时无需重算。等以后支持跨边界光照时，
+                    // 这里也要加上 game::LightEngine::OnBlockChanged(nit->second.chunk, ...)
+                    
                     QueueChunkMeshTask(ChunkKey(ncx, ncz), nit->second.chunk);
                 };
                 if (lx == 0)  rebuild(cx - 1, cz);
@@ -1743,6 +1753,7 @@ Eng::client::MeshHandle MyGame::BuildItemCubeMesh(BlockType type) {
                 v0 + (1.0f - faceUVs[v][1]) * TILE_UV
             };
             vert.ao = 1.0f;
+            vert.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
             vertices.push_back(vert);
         }
         indices.push_back(baseIndex + 0);
@@ -1759,38 +1770,47 @@ Eng::client::MeshHandle MyGame::BuildItemCubeMesh(BlockType type) {
     return renderer->CreateMesh(data);
 }
 
-void MyGame::BuildChunkMeshData(const MeshTask& task, MeshResult& result) {
+void MyGame::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
     result.vertices.clear();
     result.indices.clear();
-    // 预估大小，避免多次扩容内存
     result.vertices.reserve(static_cast<size_t>(2000) * 4);
     result.indices.reserve(static_cast<size_t>(2000) * 6);
 
-    const Chunk& chunk = task.chunk;
+    // 1. 统一获取指针（可修改），避免后续重复定义
+    Chunk* pC = &task.chunk;
+    Chunk* pXm = task.hasN[0] ? &task.nXm : nullptr;
+    Chunk* pXp = task.hasN[1] ? &task.nXp : nullptr;
+    Chunk* pZm = task.hasN[2] ? &task.nZm : nullptr;
+    Chunk* pZp = task.hasN[3] ? &task.nZp : nullptr;
+
+    // 2. 统一初始化和传播光照
+    LightEngine::InitRegion(*pC, pXm, pXp, pZm, pZp);
+
+    // 3. 将光照结果带回主线程
+    result.sky = pC->sky;
+    result.block = pC->block;
+
+    const Chunk& chunk = *pC; // 复用指针
     const int cx = chunk.chunk_x;
     const int cz = chunk.chunk_z;
     const int baseX = cx * CHUNK_SIZE_X;
     const int baseZ = cz * CHUNK_SIZE_Z;
 
-    // 从 task 中拿邻居指针，没有则是 nullptr
-    const Chunk* nXm = task.hasN[0] ? &task.nXm : nullptr;
-    const Chunk* nXp = task.hasN[1] ? &task.nXp : nullptr;
-    const Chunk* nZm = task.hasN[2] ? &task.nZm : nullptr;
-    const Chunk* nZp = task.hasN[3] ? &task.nZp : nullptr;
-
+    // 4. 获取方块
     auto getBlock = [&](int lx, int ly, int lz) -> BlockType {
         if (ly < 0 || ly >= CHUNK_SIZE_Y) return BlockType::Air;
         if (lx >= 0 && lx < CHUNK_SIZE_X && lz >= 0 && lz < CHUNK_SIZE_Z)
             return ChunkGet(chunk, lx, ly, lz);
+        
         const Chunk* n = nullptr;
         int nlx = lx, nlz = lz;
-        if      (lx < 0)                  { n = nXm; nlx = lx + CHUNK_SIZE_X; }
-        else if (lx >= CHUNK_SIZE_X)      { n = nXp; nlx = lx - CHUNK_SIZE_X; }
-        else if (lz < 0)                  { n = nZm; nlz = lz + CHUNK_SIZE_Z; }
-        else if (lz >= CHUNK_SIZE_Z)      { n = nZp; nlz = lz - CHUNK_SIZE_Z; }
+        if      (lx < 0)             { n = pXm; nlx = lx + CHUNK_SIZE_X; }
+        else if (lx >= CHUNK_SIZE_X) { n = pXp; nlx = lx - CHUNK_SIZE_X; }
+        else if (lz < 0)             { n = pZm; nlz = lz + CHUNK_SIZE_Z; }
+        else if (lz >= CHUNK_SIZE_Z) { n = pZp; nlz = lz - CHUNK_SIZE_Z; }
+        
         if (!n) return BlockType::Air;
-        if (nlx < 0 || nlx >= CHUNK_SIZE_X) return BlockType::Air;
-        if (nlz < 0 || nlz >= CHUNK_SIZE_Z) return BlockType::Air;
+        if (nlx < 0 || nlx >= CHUNK_SIZE_X || nlz < 0 || nlz >= CHUNK_SIZE_Z) return BlockType::Air;
         return ChunkGet(*n, nlx, ly, nlz);
     };
 
@@ -1841,6 +1861,7 @@ void MyGame::BuildChunkMeshData(const MeshTask& task, MeshResult& result) {
                         Eng::client::Vertex v;
                         v.ao = 1.0f;
                         v.normal = {0, 1, 0};
+                        v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
                         v.position = p1; v.uv = {u0, v1}; result.vertices.push_back(v);
                         v.position = p2; v.uv = {u1, v1}; result.vertices.push_back(v);
                         v.position = p3; v.uv = {u1, v0}; result.vertices.push_back(v);
@@ -1918,6 +1939,51 @@ void MyGame::BuildChunkMeshData(const MeshTask& task, MeshResult& result) {
                         vert.ao = (s1 && s2) ? 0.4f : 1.0f - 0.2f * static_cast<float>(s1 + s2 + sc);
                         if (type == BlockType::Water) vert.ao = 1.0f;
 
+                                                // 获取光照（如果越界且邻居没加载，默认给满天空光防黑边）
+                        auto getLightAt = [&](int wx, int wy, int wz, glm::vec4& outLight) -> void {
+                            if (wy < 0 || wy >= CHUNK_SIZE_Y) { outLight = glm::vec4(0.0f); return; }
+                            int idx;
+                            if (wx >= 0 && wx < CHUNK_SIZE_X && wz >= 0 && wz < CHUNK_SIZE_Z) {
+                                idx = ChunkIndex(wx, wy, wz);
+                                outLight = {chunk.sky[idx] / 15.0f, chunk.block[idx].r / 15.0f, chunk.block[idx].g / 15.0f, chunk.block[idx].b / 15.0f};
+                                return;
+                            }
+                            const Chunk* n = nullptr; int nlx = wx, nlz = wz;
+                            if (wx < 0) { n = pXm; nlx = wx + CHUNK_SIZE_X; }
+                            else if (wx >= CHUNK_SIZE_X) { n = pXp; nlx = wx - CHUNK_SIZE_X; }
+                            else if (wz < 0) { n = pZm; nlz = wz + CHUNK_SIZE_Z; }
+                            else if (wz >= CHUNK_SIZE_Z) { n = pZp; nlz = wz - CHUNK_SIZE_Z; }
+                            
+                            if (n && nlx >= 0 && nlx < CHUNK_SIZE_X && nlz >= 0 && nlz < CHUNK_SIZE_Z) {
+                                idx = ChunkIndex(nlx, wy, nlz);
+                                outLight = {n->sky[idx] / 15.0f, n->block[idx].r / 15.0f, n->block[idx].g / 15.0f, n->block[idx].b / 15.0f};
+                            } else {
+                                // 邻居没加载，当作空气处理（满天空光），避免边界缩水发黑
+                                outLight = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f); 
+                            }
+                        };
+
+                        // 采样点的 4 个位置（全部位于面的外侧）
+                        glm::ivec3 P_outer = {lx + N.x, ly + N.y, lz + N.z};
+                        glm::ivec3 P_U     = {lx + N.x + U.x, ly + N.y + U.y, lz + N.z + U.z};
+                        glm::ivec3 P_V     = {lx + N.x + V.x, ly + N.y + V.y, lz + N.z + V.z};
+                        glm::ivec3 P_UV    = {lx + N.x + U.x + V.x, ly + N.y + U.y + V.y, lz + N.z + U.z + V.z};
+
+                        glm::vec4 sumLight(0.0f);
+                        glm::vec4 l;
+                        int count = 0;
+
+                        // 采样外侧 4 个点
+                        getLightAt(P_outer.x, P_outer.y, P_outer.z, l); sumLight += l; count++;
+                        getLightAt(P_U.x, P_U.y, P_U.z, l); sumLight += l; count++;
+                        getLightAt(P_V.x, P_V.y, P_V.z, l); sumLight += l; count++;
+                        getLightAt(P_UV.x, P_UV.y, P_UV.z, l); sumLight += l; count++;
+
+                        vert.light = sumLight / static_cast<float>(count);
+
+                        // 如果是水，给保底值
+                        if (type == BlockType::Water) vert.light = glm::vec4(1.0f);
+
                         result.vertices.push_back(vert);
                     }
 
@@ -1976,6 +2042,7 @@ Eng::client::MeshHandle MyGame::BuildPlayerMesh() {
                 v.uv = { u0 + fuv[k][0]*TILE_UV,
                          v0 + (1.0f - fuv[k][1])*TILE_UV };
                 v.ao = 1.0f;
+                v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
                 vertices.push_back(v);
             }
             indices.push_back(base+0); indices.push_back(base+1); indices.push_back(base+2);
@@ -2141,7 +2208,7 @@ void MyGame::StopMeshWorker() {
 
 void MyGame::MeshWorkerLoop() {
     while (true) {
-        MeshTask task;
+        std::shared_ptr<MeshTask> task; // 这里只是个指针，不占栈空间
         {
             std::unique_lock lk(m_meshTaskMutex);
             m_meshTaskCv.wait(lk, [this] {
@@ -2153,9 +2220,9 @@ void MyGame::MeshWorkerLoop() {
         }
 
         MeshResult result;
-        result.chunkKey = task.chunkKey;
-        // 纯数据构建，不涉及 GPU
-        BuildChunkMeshData(task, result);
+        result.chunkKey = task->chunkKey;
+        // 传引用 *task
+        BuildChunkMeshData(*task, result);
 
         {
             std::lock_guard lk(m_meshResultMutex);
@@ -2164,7 +2231,6 @@ void MyGame::MeshWorkerLoop() {
     }
 }
 
-// 主线程收结果：限流，防止 Vulkan 一帧上传太多显存卡死
 void MyGame::DrainMeshResults() {
     constexpr int K = 4; 
     int done = 0;
@@ -2179,7 +2245,9 @@ void MyGame::DrainMeshResults() {
 
         auto it = m_chunks.find(r.chunkKey);
         if (it != m_chunks.end()) {
-            // 先建新的，再删旧的
+            it->second.chunk.sky = r.sky;
+            it->second.chunk.block = r.block;
+
             if (r.vertices.empty()) {
                 if (it->second.mesh != 0) {
                     renderer->DestroyMesh(it->second.mesh);
@@ -2191,11 +2259,10 @@ void MyGame::DrainMeshResults() {
                 data.indices  = std::move(r.indices);
                 
                 auto newMesh = renderer->CreateMesh(data);
-                
                 if (it->second.mesh != 0) {
                     renderer->DestroyMesh(it->second.mesh);
                 }
-                it->second.mesh = newMesh; // 替换
+                it->second.mesh = newMesh;
             }
         }
         ++done;
@@ -2203,9 +2270,9 @@ void MyGame::DrainMeshResults() {
 }
 
 void MyGame::QueueChunkMeshTask(uint64_t key, const Chunk& chunk) {
-    MeshTask task;
-    task.chunkKey = key;
-    task.chunk = chunk; // 拷贝当前块
+    auto task = std::make_shared<MeshTask>(); // 创建在堆上
+    task->chunkKey = key;
+    task->chunk = chunk;
 
     int cx = chunk.chunk_x;
     int cz = chunk.chunk_z;
@@ -2213,21 +2280,21 @@ void MyGame::QueueChunkMeshTask(uint64_t key, const Chunk& chunk) {
     auto fetchNeighbor = [&](int ncx, int ncz, Chunk& outChunk, bool& has) {
         auto it = m_chunks.find(ChunkKey(ncx, ncz));
         if (it != m_chunks.end()) {
-            outChunk = it->second.chunk; // 拷贝邻居
+            outChunk = it->second.chunk;
             has = true;
         } else {
             has = false;
         }
     };
 
-    fetchNeighbor(cx - 1, cz, task.nXm, task.hasN[0]);
-    fetchNeighbor(cx + 1, cz, task.nXp, task.hasN[1]);
-    fetchNeighbor(cx, cz - 1, task.nZm, task.hasN[2]);
-    fetchNeighbor(cx, cz + 1, task.nZp, task.hasN[3]);
+    fetchNeighbor(cx - 1, cz, task->nXm, task->hasN[0]);
+    fetchNeighbor(cx + 1, cz, task->nXp, task->hasN[1]);
+    fetchNeighbor(cx, cz - 1, task->nZm, task->hasN[2]);
+    fetchNeighbor(cx, cz + 1, task->nZp, task->hasN[3]);
 
     {
         std::lock_guard lk(m_meshTaskMutex);
-        m_meshTaskQueue.push(std::move(task));
+        m_meshTaskQueue.push(task);
     }
     m_meshTaskCv.notify_one();
 }
@@ -2349,6 +2416,7 @@ void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
     auto pushV = [&](const glm::vec3& p, const glm::vec3& n, const glm::vec2& uv) {
         Eng::client::Vertex v;
         v.position = p; v.normal = n; v.uv = uv; v.ao = 1.0f;
+        v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
         outV.push_back(v);
         outMin = glm::min(outMin, p);
         outMax = glm::max(outMax, p);

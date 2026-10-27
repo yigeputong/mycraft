@@ -26,13 +26,13 @@
             "name": "windows-msvc",
             "displayName": "Windows MSVC",
             "inherits": "windows-base",
-            "binaryDir": "${sourceDir}/build/windows-msvc"
+            "binaryDir": "${sourceDir}/build/msvc"
         },
         {
             "name": "windows-msvc-asan",
             "displayName": "Windows MSVC ASan",
             "inherits": "windows-base",
-            "binaryDir": "${sourceDir}/build/windows-msvc-asan",
+            "binaryDir": "${sourceDir}/build/msvc-asan",
             "cacheVariables": {
                 "SANITIZER": "address"
             }
@@ -41,7 +41,7 @@
             "name": "windows-clang",
             "displayName": "Windows Clang",
             "inherits": "windows-base",
-            "binaryDir": "${sourceDir}/build/windows-clang",
+            "binaryDir": "${sourceDir}/build/clang",
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang-cl",
                 "CMAKE_CXX_COMPILER": "clang-cl"
@@ -51,7 +51,7 @@
             "name": "windows-clang-asan",
             "displayName": "Windows Clang ASan",
             "inherits": "windows-base",
-            "binaryDir": "${sourceDir}/build/windows-clang-asan",
+            "binaryDir": "${sourceDir}/build/clang-asan",
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang-cl",
                 "CMAKE_CXX_COMPILER": "clang-cl",
@@ -62,13 +62,13 @@
             "name": "linux-gcc",
             "displayName": "Linux GCC",
             "inherits": "linux-base",
-            "binaryDir": "${sourceDir}/build/linux-gcc"
+            "binaryDir": "${sourceDir}/build/gcc"
         },
         {
             "name": "linux-gcc-asan",
             "displayName": "Linux GCC ASan + UBSan",
             "inherits": "linux-base",
-            "binaryDir": "${sourceDir}/build/linux-gcc-asan",
+            "binaryDir": "${sourceDir}/build/gcc-asan",
             "cacheVariables": {
                 "SANITIZER": "address+undefined"
             }
@@ -77,7 +77,7 @@
             "name": "linux-gcc-tsan",
             "displayName": "Linux GCC TSan",
             "inherits": "linux-base",
-            "binaryDir": "${sourceDir}/build/linux-gcc-tsan",
+            "binaryDir": "${sourceDir}/build/gcc-tsan",
             "cacheVariables": {
                 "SANITIZER": "thread"
             }
@@ -86,7 +86,7 @@
             "name": "linux-clang",
             "displayName": "Linux Clang",
             "inherits": "linux-base",
-            "binaryDir": "${sourceDir}/build/linux-clang",
+            "binaryDir": "${sourceDir}/build/clang",
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++"

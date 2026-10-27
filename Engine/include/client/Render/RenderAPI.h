@@ -30,6 +30,7 @@ struct Vertex {
     glm::vec3 normal;
     glm::vec2 uv;
     float     ao = 1.0f;
+    glm::vec4 light; // r: 天空光, g: 方块R, b: 方块G, a: 方块B
 };
 
 struct MeshData {
@@ -167,12 +168,10 @@ public:
     virtual void DrawFullscreenQuad(TextureHandle textureID) = 0;
 
     // ==================== ImGui 后端 ====================
-    // 调用方负责 ImGui::CreateContext() 和 ImGui_ImplSDL3_InitXXX
-    // 后端负责渲染器相关的初始化和每帧绘制
-    virtual bool InitImGuiBackend()   = 0;
+    virtual bool InitImGuiBackend()     = 0;
     virtual void ShutdownImGuiBackend() = 0;
-    virtual void ImGuiNewFrame()      = 0;   // 内部调 ImGui_ImplXxx_NewFrame
-    virtual void ImGuiRenderDrawData() = 0;  // 内部调 ImGui_ImplXxx_RenderDrawData
+    virtual void ImGuiNewFrame()        = 0;   // 内部调 ImGui_ImplXxx_NewFrame
+    virtual void ImGuiRenderDrawData()  = 0;  // 内部调 ImGui_ImplXxx_RenderDrawData
 
     //其他
     [[nodiscard]] virtual DeviceInfo GetDeviceInfo() const = 0;
