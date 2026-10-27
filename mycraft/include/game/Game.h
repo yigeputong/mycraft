@@ -6,6 +6,7 @@
 #include "game/GameServer.h"
 #include "game/client/MeshManager.h"
 #include "game/client/ClientWorld.h"
+#include "game/client/ClientUI.h"
 #include "game/server/WorldGenerator.h"
 #include <cstdint>
 #include <memory>
@@ -71,7 +72,7 @@ private:
     std::unordered_map<uint32_t, net::PlayerState> m_otherPlayers;
 
     // ==================== 世界管理 ====================
-    game::client::ClientWorld m_world; // ★ 替换掉 m_chunks, m_pending 等
+    game::client::ClientWorld m_world;
     int m_renderDistance = 16;
 
     float m_timeOfDay = 8.0f;
@@ -169,7 +170,7 @@ private:
     bool m_showDebug = true;
 #endif
 
-    game::client::Frustum m_frustum; // 使用 ClientWorld.h 中定义的 Frustum
+    game::client::Frustum m_frustum;
     void  UpdateFrustum(const glm::mat4& vp);
     bool  AabbInFrustum(const glm::vec3& mn, const glm::vec3& mx) const;
 
@@ -212,6 +213,9 @@ private:
     std::array<ItemStack, 27> m_inventory{};
 
     // ==================== 状态与 UI 标志 ====================
+    friend class client::ClientUI;
+    client::ClientUI m_ui;
+    
     bool m_shouldQuit = false;
     bool m_menuOpen   = false;
     bool m_minimized  = false;
@@ -258,16 +262,8 @@ private:
     // ==================== 日志 ====================
     std::unique_ptr<Eng::Log> logger = std::make_unique<Eng::Log>();
 
-    // ==================== 方法 ====================
-    void DrawMainMenu(Eng::Engine& engine);
-    void DrawUI(Eng::Engine& engine);
-    void DrawSettingsMenu(Eng::Engine& engine);
+    // ==================== 游戏主流程方法 ====================
     void ReturnToMainMenu();
-
-    bool keyEvents(const SDL_Event& event);
-    bool resizeEvents(const SDL_Event& event);
-    bool cursorEvents(const SDL_Event& event);
-    bool scrollEvents(const SDL_Event& event);
 
     void HandleServerMessage(const std::vector<uint8_t>& data);
     bool GetInput(float dt);
@@ -277,4 +273,4 @@ private:
     bool AABBCollides(const glm::vec3& pos) const;
 };
 
-}
+} // namespace game
