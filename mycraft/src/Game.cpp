@@ -15,7 +15,6 @@
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_messagebox.h>
 #include <algorithm>
-#include <cstddef>
 #include <nlohmann/json.hpp>
 #include <fstream>
 
@@ -322,13 +321,6 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     cameraPos      += m_positionError * t;
     m_positionError *= (1.0f - t);
 
-    static int s_lastRenderDistance = m_renderDistance;
-    if (m_renderDistance != s_lastRenderDistance) {
-        s_lastRenderDistance = m_renderDistance;
-        m_lastLodPcx = INT_MIN;
-        m_lastLodPcz = INT_MIN;
-    }
-
     float hoursPerSec = 24.0f / kDayLengthSec;
     m_timeOfDay = std::fmod(m_timeOfDay + hoursPerSec * deltaTime, 24.0f);
 
@@ -400,8 +392,7 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         if (cc) QueueChunkMeshTask(key, cc->chunk);
     }
 
-    UpdateLodStreaming();
-    DrainLodResults();
+    m_lodManager.Update(cameraPos, m_world, renderer);
     DrainMeshResults();
 
     return false;
@@ -447,13 +438,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
         Eng::client::Material lodMat;
         lodMat.diffuse = m_atlasTexture;
 
-        m_visibleLodMeshes.clear();
-        m_visibleLodMeshes.reserve(m_lodUnits.size());
-        for (auto& [key, u] : m_lodUnits) {
-            if (u.mesh == 0) continue;
-            if (!AabbInFrustum(u.aabbMin, u.aabbMax)) continue;
-            m_visibleLodMeshes.push_back(u.mesh);
-        }
+        m_lodManager.CollectVisibleMeshes(m_frustum, m_visibleLodMeshes);
         if (!m_visibleLodMeshes.empty()) {
             renderer->DrawMeshBatch(m_visibleLodMeshes, m_lodShader, lodMat);
         }
@@ -524,7 +509,7 @@ void MyGame::ReturnToMainMenu() {
         m_server.reset();
     }
 
-    StopLodWorker();
+    m_lodManager.Stop();
     m_meshManager.Stop();
 
     if (renderer) {
@@ -534,10 +519,8 @@ void MyGame::ReturnToMainMenu() {
         for (auto& [type, mesh] : m_itemMeshCache) {
             if (mesh) renderer->DestroyMesh(mesh);
         }
-        for (auto& [key, u] : m_lodUnits) {
-            if (u.mesh != 0) renderer->DestroyMesh(u.mesh);
-        }
         if (m_playerMesh != 0) { renderer->DestroyMesh(m_playerMesh); m_playerMesh = 0; }
+        m_lodManager.Clear(renderer);
     }
     
     m_world.Clear();
@@ -545,23 +528,6 @@ void MyGame::ReturnToMainMenu() {
     m_itemEntities.clear();
     m_otherPlayers.clear();
     m_myClientId = 0;
-
-    m_lodUnits.clear();
-    m_lodPending.clear();
-    {
-        std::lock_guard lk(m_lodResultMutex);
-        while (!m_lodResultQueue.empty()) m_lodResultQueue.pop();
-    }
-    {
-        std::lock_guard lk(m_lodTaskMutex);
-        while (!m_lodTaskQueue.empty()) m_lodTaskQueue.pop();
-    }
-    m_lodNeedQueue.clear();
-    m_lodNeedCursor = 0;
-    m_lastLodPcx = INT_MIN;
-    m_lastLodPcz = INT_MIN;
-
-    m_lodTerrain.reset();
 
     cameraPos   = glm::vec3(0.0f, 40.0f, 0.0f);
     cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
@@ -589,20 +555,14 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
 
     auto* safeRenderer = mainWin ? mainWin->GetAPI() : nullptr;
     if (safeRenderer) {
-        StopLodWorker();
-        for (auto& [key, u] : m_lodUnits) {
-            if (u.mesh != 0) safeRenderer->DestroyMesh(u.mesh);
-        }
+        m_lodManager.Stop();
+        m_lodManager.Clear(safeRenderer);
         if (m_cubeShader) safeRenderer->DestroyShader(m_cubeShader);
         if (m_skyShader)  safeRenderer->DestroyShader(m_skyShader);
         if (m_lodShader)  safeRenderer->DestroyShader(m_lodShader);
         if (m_playerMesh != 0) { safeRenderer->DestroyMesh(m_playerMesh); m_playerMesh = 0; }
         safeRenderer->ShutdownImGuiBackend();
     }
-
-    m_lodUnits.clear();
-    m_lodPending.clear();
-    m_lodTerrain.reset();
     renderer = nullptr;
     mainWin = nullptr; 
 }
@@ -850,8 +810,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
         case game::net::MessageType::ServerInfo: {
             uint32_t seed = r.ReadU32BE();
             glm::vec3 spawn = r.ReadVec3();
-            m_lodTerrain = std::make_unique<game::server::TerrainGenerator>(seed);
-            StartLodWorker(seed);
+            m_lodManager.Start(seed);
             logInfo(logger, "[LOD] Received world seed: " << seed
                     << " spawn: " << spawn.x << "," << spawn.y << "," << spawn.z);
             break;
@@ -1079,446 +1038,6 @@ void MyGame::QueueChunkMeshTask(uint64_t key, const Chunk& chunk) {
     if (cZp) nZp = &cZp->chunk;
 
     m_meshManager.Submit(key, chunk, nXm, nXp, nZm, nZp);
-}
-
-void MyGame::StartLodWorker(uint32_t seed) {
-    unsigned hw = std::thread::hardware_concurrency();
-    unsigned n  = std::clamp(hw > 2 ? hw - 2 : 2u, 2u, 6u);
-
-    m_lodWorkerStop = false;
-    for (unsigned i = 0; i < n; ++i) {
-        m_lodWorkers.emplace_back([this, seed] { LodWorkerLoop(seed); });
-    }
-    logInfo(logger, "[LOD] Started " << n << " workers");
-}
-
-void MyGame::StopLodWorker() {
-    if (m_lodWorkers.empty()) return;
-
-    {
-        std::lock_guard lk(m_lodTaskMutex);
-        m_lodWorkerStop = true;
-        while (!m_lodTaskQueue.empty()) m_lodTaskQueue.pop();
-    }
-    m_lodTaskCv.notify_all();
-    for (auto& t : m_lodWorkers) {
-        if (t.joinable()) t.join();
-    }
-    m_lodWorkers.clear();
-}
-
-void MyGame::LodWorkerLoop(uint32_t seed) {
-    game::server::TerrainGenerator terrain(seed);
-
-    while (true) {
-        LodTask task;
-        {
-            std::unique_lock lk(m_lodTaskMutex);
-            m_lodTaskCv.wait(lk, [this] {
-                return m_lodWorkerStop.load() || !m_lodTaskQueue.empty();
-            });
-            if (m_lodWorkerStop.load()) return;
-            task = m_lodTaskQueue.front();
-            m_lodTaskQueue.pop();
-        }
-
-        LodResult r;
-        r.level = task.level;
-        r.cx = task.cx;
-        r.cz = task.cz;
-        BuildLodUnit(terrain, task.level, task.cx, task.cz,
-                     r.vertices, r.indices, r.aabbMin, r.aabbMax);
-
-        {
-            std::lock_guard lk(m_lodResultMutex);
-            m_lodResultQueue.push(std::move(r));
-        }
-    }
-}
-
-void MyGame::BuildLodUnit(const game::server::TerrainGenerator& terrain,
-                          int level, int ucx, int ucz,
-                          std::vector<Eng::client::Vertex>& outV,
-                          std::vector<uint32_t>& outI,
-                          glm::vec3& outMin, glm::vec3& outMax) const {
-    const int sampleStep = 1 << level;
-    const int unitSize   = kLodUnitSize * sampleStep;
-    constexpr int N  = kLodUnitSize;
-    constexpr int NP = N + 1;
-
-    const int baseX = ucx * unitSize;
-    const int baseZ = ucz * unitSize;
-
-    outV.clear(); outI.clear();
-    outV.reserve(static_cast<size_t>(N) * N * 16);
-    outI.reserve(static_cast<size_t>(N) * N * 24);
-    outMin = glm::vec3(1e30f);
-    outMax = glm::vec3(-1e30f);
-
-    auto tileForBiome = [](game::server::Biome bb) -> int {
-        using B = game::server::Biome;
-        switch (bb) {
-            case B::Ocean:    return 5;
-            case B::Beach:
-            case B::Desert:   return 4;
-            case B::Snow:     return 6;
-            case B::Mountain: return 0;
-            case B::Forest:
-            case B::Plains:
-            default:          return 1;
-        }
-    };
-
-    static thread_local int     hP[NP][NP];
-    static thread_local uint8_t bP[NP][NP];
-    for (int j = 0; j < NP; ++j)
-        for (int i = 0; i < NP; ++i) {
-            int wx = baseX + i * sampleStep;
-            int wz = baseZ + j * sampleStep;
-            hP[j][i] = terrain.GetSurfaceY(wx, wz);
-            bP[j][i] = (uint8_t)terrain.GetBiome(wx, wz);
-        }
-
-    auto cellY = [&](int i, int j) -> float {
-        return (float)std::max(hP[j][i] + 1, SEA_LEVEL);
-    };
-    auto cellTile = [&](int i, int j) -> int {
-        int h = hP[j][i];
-        auto b = (game::server::Biome)bP[j][i];
-        if (h < SEA_LEVEL) b = game::server::Biome::Ocean;
-        return tileForBiome(b);
-    };
-    auto pushV = [&](const glm::vec3& p, const glm::vec3& n, const glm::vec2& uv) {
-        Eng::client::Vertex v;
-        v.position = p; v.normal = n; v.uv = uv; v.ao = 1.0f;
-        v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
-        outV.push_back(v);
-        outMin = glm::min(outMin, p);
-        outMax = glm::max(outMax, p);
-    };
-
-    for (int j = 0; j < N; ++j) {
-        for (int i = 0; i < N; ++i) {
-            float ySelf = cellY(i, j);
-            int   tile  = cellTile(i, j);
-            float u = ((tile % client::ATLAS_COLS) + 0.5f) * client::TILE_UV;
-            float v = ((tile / static_cast<float>(client::ATLAS_COLS)) + 0.5f) * client::TILE_UV;
-
-            float x0 = (float)(baseX + i * sampleStep);
-            float x1 = (float)(baseX + (i + 1) * sampleStep);
-            float z0 = (float)(baseZ + j * sampleStep);
-            float z1 = (float)(baseZ + (j + 1) * sampleStep);
-
-            {
-                uint32_t base = (uint32_t)outV.size();
-                pushV({x0, ySelf, z0}, {0,1,0}, {u,v});
-                pushV({x1, ySelf, z0}, {0,1,0}, {u,v});
-                pushV({x1, ySelf, z1}, {0,1,0}, {u,v});
-                pushV({x0, ySelf, z1}, {0,1,0}, {u,v});
-                outI.push_back(base+0); outI.push_back(base+3); outI.push_back(base+2);
-                outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+1);
-            }
-
-            if (i + 1 < N) {
-                float yNb = cellY(i + 1, j);
-                if (ySelf > yNb + 0.01f) {
-                    int nt = cellTile(i + 1, j);
-                    float nu = ((nt % client::ATLAS_COLS) + 0.5f) * client::TILE_UV;
-                    float nv = ((nt / static_cast<float>(client::ATLAS_COLS)) + 0.5f) * client::TILE_UV;
-                    uint32_t base = (uint32_t)outV.size();
-                    pushV({x1, yNb,   z0}, {1,0,0}, {nu,nv});
-                    pushV({x1, ySelf, z0}, {1,0,0}, {nu,nv});
-                    pushV({x1, ySelf, z1}, {1,0,0}, {nu,nv});
-                    pushV({x1, yNb,   z1}, {1,0,0}, {nu,nv});
-                    outI.push_back(base+0); outI.push_back(base+1); outI.push_back(base+2);
-                    outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+3);
-                }
-            }
-
-            if (j + 1 < N) {
-                float yNb = cellY(i, j + 1);
-                if (ySelf > yNb + 0.01f) {
-                    int nt = cellTile(i, j + 1);
-                    float nu = ((nt % client::ATLAS_COLS) + 0.5f) * client::TILE_UV;
-                    float nv = ((nt / static_cast<float>(client::ATLAS_COLS)) + 0.5f) * client::TILE_UV;
-                    uint32_t base = (uint32_t)outV.size();
-                    pushV({x0, yNb,   z1}, {0,0,1}, {nu,nv});
-                    pushV({x1, yNb,   z1}, {0,0,1}, {nu,nv});
-                    pushV({x1, ySelf, z1}, {0,0,1}, {nu,nv});
-                    pushV({x0, ySelf, z1}, {0,0,1}, {nu,nv});
-                    outI.push_back(base+0); outI.push_back(base+1); outI.push_back(base+2);
-                    outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+3);
-                }
-            }
-        }
-    }
-}
-
-void MyGame::BuildLod1FromChunks(const LodKey& key) {
-    constexpr int CELLS = 32;
-    const int baseX = key.cx * CELLS;
-    const int baseZ = key.cz * CELLS;
-
-    auto getChunk = [this](int cx, int cz) -> const game::client::ClientChunk* {
-        auto it = m_world.GetChunks().find(ChunkKey(cx, cz));
-        return it == m_world.GetChunks().end() ? nullptr : &it->second;
-    };
-    const game::client::ClientChunk* cs[2][2] = {
-        { getChunk(key.cx*2+0, key.cz*2+0), getChunk(key.cx*2+0, key.cz*2+1) },
-        { getChunk(key.cx*2+1, key.cz*2+0), getChunk(key.cx*2+1, key.cz*2+1) },
-    };
-
-    std::vector<Eng::client::Vertex> outV;
-    std::vector<uint32_t> outI;
-    outV.reserve(static_cast<size_t>(CELLS) * CELLS * 12);
-    outI.reserve(static_cast<size_t>(CELLS) * CELLS * 18);
-    glm::vec3 aabbMin(1e30f), aabbMax(-1e30f);
-
-    auto blockToTile = [](uint8_t b) -> int {
-        using BT = BlockType;
-        switch ((BT)b) {
-            case BT::Stone:      return 0;
-            case BT::GrassBlock: return 1;
-            case BT::Dirt:       return 3;
-            case BT::Sand:       return 4;
-            case BT::Water:      return 5;
-            case BT::Snow:       return 6;
-            case BT::Sandstone:  return 8;
-            case BT::CoalOre:    return 9;
-            case BT::IronOre:    return 10;
-            case BT::Wood:       return 11;
-            case BT::Leaves:     return 12;
-            default:             return 1;
-        }
-    };
-
-    auto sample = [&](int i, int j, float& y, int& tile) {
-        int cxi = i >> 4, czi = j >> 4;
-        int lx  = i & 15, lz  = j & 15;
-        const client::ClientChunk* cc = cs[cxi][czi];
-
-        int h;
-        uint8_t tb;
-        if (cc) {
-            h  = cc->heights[lx * 16 + lz];
-            tb = cc->topBlock[lx * 16 + lz];
-        } else {
-            int wx = baseX + i, wz = baseZ + j;
-            h = m_lodTerrain ? m_lodTerrain->GetSurfaceY(wx, wz) : SEA_LEVEL;
-            auto b = m_lodTerrain ? m_lodTerrain->GetBiome(wx, wz)
-                                  : game::server::Biome::Plains;
-            using B = game::server::Biome;
-            switch (b) {
-                case B::Ocean:    tb = (uint8_t)BlockType::Water;      break;
-                case B::Beach:
-                case B::Desert:   tb = (uint8_t)BlockType::Sand;       break;
-                case B::Snow:     tb = (uint8_t)BlockType::Snow;       break;
-                case B::Mountain: tb = (uint8_t)BlockType::Stone;      break;
-                default:          tb = (uint8_t)BlockType::GrassBlock; break;
-            }
-        }
-
-        y = std::max<float>((float)(h + 1), (float)SEA_LEVEL);
-        tile = blockToTile(tb);
-    };
-
-    static thread_local float hM[CELLS][CELLS];
-    static thread_local int   tM[CELLS][CELLS];
-    for (int j = 0; j < CELLS; ++j)
-        for (int i = 0; i < CELLS; ++i)
-            sample(i, j, hM[j][i], tM[j][i]);
-
-    auto pushV = [&](glm::vec3 p, glm::vec3 n, glm::vec2 uv) {
-        Eng::client::Vertex v;
-        v.position = p; v.normal = n; v.uv = uv; v.ao = 1.0f;
-        v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
-        outV.push_back(v);
-        aabbMin = glm::min(aabbMin, p);
-        aabbMax = glm::max(aabbMax, p);
-    };
-
-    auto tileUV = [&](int t, float& u, float& v) {
-        u = ((t % client::ATLAS_COLS) + 0.5f) * client::TILE_UV;
-        v = ((t / static_cast<float>(client::ATLAS_COLS)) + 0.5f) * client::TILE_UV;
-    };
-
-    for (int j = 0; j < CELLS; ++j) {
-        for (int i = 0; i < CELLS; ++i) {
-            float ySelf = hM[j][i];
-            float u, v; tileUV(tM[j][i], u, v);
-
-            float x0 = (float)(baseX + i);
-            float x1 = x0 + 1.0f;
-            float z0 = (float)(baseZ + j);
-            float z1 = z0 + 1.0f;
-
-            {
-                uint32_t b = (uint32_t)outV.size();
-                pushV({x0, ySelf, z0}, {0,1,0}, {u,v});
-                pushV({x1, ySelf, z0}, {0,1,0}, {u,v});
-                pushV({x1, ySelf, z1}, {0,1,0}, {u,v});
-                pushV({x0, ySelf, z1}, {0,1,0}, {u,v});
-                outI.push_back(b+0); outI.push_back(b+3); outI.push_back(b+2);
-                outI.push_back(b+0); outI.push_back(b+2); outI.push_back(b+1);
-            }
-
-            if (i + 1 < CELLS) {
-                float yNb = hM[j][i+1];
-                if (ySelf > yNb + 0.01f) {
-                    float nu, nv; tileUV(tM[j][i+1], nu, nv);
-                    uint32_t b = (uint32_t)outV.size();
-                    pushV({x1, yNb,   z0}, {1,0,0}, {nu,nv});
-                    pushV({x1, ySelf, z0}, {1,0,0}, {nu,nv});
-                    pushV({x1, ySelf, z1}, {1,0,0}, {nu,nv});
-                    pushV({x1, yNb,   z1}, {1,0,0}, {nu,nv});
-                    outI.push_back(b+0); outI.push_back(b+1); outI.push_back(b+2);
-                    outI.push_back(b+0); outI.push_back(b+2); outI.push_back(b+3);
-                }
-            }
-            if (j + 1 < CELLS) {
-                float yNb = hM[j+1][i];
-                if (ySelf > yNb + 0.01f) {
-                    float nu, nv; tileUV(tM[j+1][i], nu, nv);
-                    uint32_t b = (uint32_t)outV.size();
-                    pushV({x0, yNb,   z1}, {0,0,1}, {nu,nv});
-                    pushV({x1, yNb,   z1}, {0,0,1}, {nu,nv});
-                    pushV({x1, ySelf, z1}, {0,0,1}, {nu,nv});
-                    pushV({x0, ySelf, z1}, {0,0,1}, {nu,nv});
-                    outI.push_back(b+0); outI.push_back(b+1); outI.push_back(b+2);
-                    outI.push_back(b+0); outI.push_back(b+2); outI.push_back(b+3);
-                }
-            }
-        }
-    }
-
-    if (outV.empty()) return;
-
-    Eng::client::MeshData data;
-    data.vertices = std::move(outV);
-    data.indices  = std::move(outI);
-    auto mesh = renderer->CreateMesh(data);
-
-    LodUnit u;
-    u.level = 1;
-    u.cx = key.cx; u.cz = key.cz;
-    u.mesh = mesh;
-    u.aabbMin = aabbMin; u.aabbMax = aabbMax;
-    m_lodUnits[key] = u;
-}
-
-void MyGame::UpdateLodStreaming() {
-    if (!m_lodTerrain) return;
-
-    int pcx = static_cast<int>(std::floor(cameraPos.x)) >> 4;
-    int pcz = static_cast<int>(std::floor(cameraPos.z)) >> 4;
-
-    if (pcx != m_lastLodPcx || pcz != m_lastLodPcz) {
-        m_lastLodPcx = pcx;
-        m_lastLodPcz = pcz;
-
-        std::unordered_set<LodKey, LodKeyHash> wanted;
-        struct Need { LodKey k; int d2; };
-        std::vector<Need> need;
-
-        for (int level = 1; level <= kLodLevels; ++level) {
-            int unitChunks = 1 << level;
-            constexpr int kRingInnerUnits = 8;
-            constexpr int kRingOuterUnits = 16;
-            int pu = pcx / unitChunks;
-            int pv = pcz / unitChunks;
-
-            for (int dv = -kRingOuterUnits; dv <= kRingOuterUnits; ++dv) {
-                for (int du = -kRingOuterUnits; du <= kRingOuterUnits; ++du) {
-                    int adu = std::abs(du), adv = std::abs(dv);
-                    if (adu < kRingInnerUnits && adv < kRingInnerUnits) continue;
-                    LodKey k{ (int8_t)level, pu + du, pv + dv };
-                    wanted.insert(k);
-                    if (m_lodUnits.count(k))    continue;
-                    if (m_lodPending.count(k))  continue;
-                    need.push_back({ k, adu*adu + adv*adv });
-                }
-            }
-        }
-
-        for (auto it = m_lodUnits.begin(); it != m_lodUnits.end(); ) {
-            if (!wanted.count(it->first)) {
-                if (it->second.mesh != 0) renderer->DestroyMesh(it->second.mesh);
-                it = m_lodUnits.erase(it);
-            } else ++it;
-        }
-
-        std::sort(need.begin(), need.end(),
-                  [](const Need& a, const Need& b){ return a.d2 < b.d2; });
-
-        m_lodNeedQueue.clear();
-        m_lodNeedQueue.reserve(need.size());
-        for (auto& n : need) m_lodNeedQueue.push_back(n.k);
-        m_lodNeedCursor = 0;
-    }
-
-    const float moveDist = glm::length(cameraPos - m_lastCameraPos);
-    if (moveDist < 0.02f) m_stationaryTime += 0.016f;
-    else                  m_stationaryTime = 0.0f;
-    m_lastCameraPos = cameraPos;
-
-    const bool stationary = (m_stationaryTime > 1.0f);
-
-    constexpr int K_PER_FRAME = 6;
-    int sent = 0;
-    while (m_lodNeedCursor < m_lodNeedQueue.size() && sent < K_PER_FRAME) {
-        LodKey k = m_lodNeedQueue[m_lodNeedCursor];
-        if (m_lodUnits.count(k) || m_lodPending.count(k)) { ++m_lodNeedCursor; continue; }
-
-        if (k.level > 1 && !stationary) {
-            ++m_lodNeedCursor;
-            continue;
-        }
-
-        m_lodPending.insert(k);
-        {
-            std::lock_guard lk(m_lodTaskMutex);
-            m_lodTaskQueue.push({ k.level, k.cx, k.cz });
-        }
-        m_lodTaskCv.notify_one();
-
-        ++m_lodNeedCursor;
-        ++sent;
-    }
-}
-
-void MyGame::DrainLodResults() {
-    constexpr int K = 4;
-    int done = 0;
-    for (;;) {
-        LodResult r;
-        {
-            std::lock_guard lk(m_lodResultMutex);
-            if (m_lodResultQueue.empty() || done >= K) break;
-            r = std::move(m_lodResultQueue.front());
-            m_lodResultQueue.pop();
-        }
-
-        LodKey k{ r.level, r.cx, r.cz };
-        m_lodPending.erase(k);
-
-        if (r.vertices.empty()) continue;
-
-        Eng::client::MeshData data;
-        data.vertices = std::move(r.vertices);
-        data.indices  = std::move(r.indices);
-        auto mesh = renderer->CreateMesh(data);
-
-        LodUnit u;
-        u.level = r.level;
-        u.cx = r.cx;
-        u.cz = r.cz;
-        u.mesh = mesh;
-        u.aabbMin = r.aabbMin;
-        u.aabbMax = r.aabbMax;
-        m_lodUnits[k] = u;
-
-        ++done;
-    }
 }
 
 void MyGame::UpdateFrustum(const glm::mat4& vp) {

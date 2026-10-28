@@ -7,16 +7,9 @@
 #include "game/client/MeshManager.h"
 #include "game/client/ClientWorld.h"
 #include "game/client/ClientUI.h"
-#include "game/server/WorldGenerator.h"
-#include <cstdint>
+#include "game/client/LODManager.h"
 #include <memory>
 #include <unordered_map>
-#include <unordered_set>
-#include <queue>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
-#include <atomic>
 
 namespace game {
 
@@ -85,70 +78,7 @@ private:
     void DrainMeshResults();
 
     // ==================== LOD 系统 ====================
-    std::unique_ptr<game::server::TerrainGenerator> m_lodTerrain;
-    struct LodKey {
-        int8_t  level;
-        int32_t cx, cz;
-        bool operator==(const LodKey&) const = default;
-    };
-    struct LodKeyHash {
-        size_t operator()(const LodKey& k) const {
-            size_t h = (size_t)(uint8_t)k.level;
-            h = h * 31 + (size_t)(uint32_t)k.cx;
-            h = h * 31 + (size_t)(uint32_t)k.cz;
-            return h;
-        }
-    };
-
-    struct LodUnit {
-        int8_t  level = 1;
-        int32_t cx = 0, cz = 0;
-        Eng::client::MeshHandle mesh = 0;
-        glm::vec3 aabbMin{0.0f};
-        glm::vec3 aabbMax{0.0f};
-    };
-    std::unordered_map<LodKey, LodUnit, LodKeyHash> m_lodUnits;
-    std::unordered_set<LodKey, LodKeyHash>          m_lodPending;
-
-    struct LodTask   { int8_t level; int32_t cx, cz; };
-    struct LodResult {
-        int8_t  level;
-        int32_t cx, cz;
-        glm::vec3 aabbMin{0.0f};
-        glm::vec3 aabbMax{0.0f};
-        std::vector<Eng::client::Vertex> vertices;
-        std::vector<uint32_t>            indices;
-    };
-
-    std::vector<std::thread>      m_lodWorkers;
-    std::mutex                    m_lodTaskMutex;
-    std::condition_variable       m_lodTaskCv;
-    std::queue<LodTask>           m_lodTaskQueue;
-    std::atomic<bool>             m_lodWorkerStop{false};
-
-    std::mutex                    m_lodResultMutex;
-    std::queue<LodResult>         m_lodResultQueue;
-    std::vector<LodKey>           m_lodNeedQueue;
-    size_t                        m_lodNeedCursor = 0;
-
-    static constexpr int kLodLevels   = 3;
-    static constexpr int kLodUnitSize = 16;
-
-    void StartLodWorker(uint32_t seed);
-    void StopLodWorker();
-    void LodWorkerLoop(uint32_t seed);
-    void UpdateLodStreaming();
-    void DrainLodResults();
-    void BuildLodUnit(const game::server::TerrainGenerator& terrain,
-                    int level, int ucx, int ucz,
-                    std::vector<Eng::client::Vertex>& outV,
-                    std::vector<uint32_t>& outI,
-                    glm::vec3& outMin, glm::vec3& outMax) const;
-    int m_lastLodPcx = INT_MIN;
-    int m_lastLodPcz = INT_MIN;
-    void BuildLod1FromChunks(const LodKey& key);
-    glm::vec3 m_lastCameraPos{0.0f};
-    float     m_stationaryTime = 0.0f;
+    client::LodManager m_lodManager;
 
     // ==================== 相机与物理 ====================
     std::vector<Eng::client::MeshHandle> m_visibleChunkMeshes;
@@ -171,10 +101,8 @@ private:
 #endif
 
     game::client::Frustum m_frustum;
-    void  UpdateFrustum(const glm::mat4& vp);
-    bool  AabbInFrustum(const glm::vec3& mn, const glm::vec3& mx) const;
-
-    char m_nameBuffer[32] = "player";
+    void UpdateFrustum(const glm::mat4& vp);
+    bool AabbInFrustum(const glm::vec3& mn, const glm::vec3& mx) const;
 
     // ==================== 渲染实体 ====================
     Eng::client::MeshHandle m_playerMesh = 0;

@@ -24,6 +24,7 @@ add_executable(mycraft
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/TextureAtlas.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/ClientWorld.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/ClientUI.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/LODManager.cpp
 )
 target_include_directories(mycraft PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
