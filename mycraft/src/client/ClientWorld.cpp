@@ -1,6 +1,7 @@
 #include "game/client/ClientWorld.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace game::client {
 
@@ -19,13 +20,14 @@ static bool AabbInFrustum(const Frustum& f, const glm::vec3& mn, const glm::vec3
     return true;
 }
 
-void ClientWorld::AddChunk(int cx, int cz, const std::vector<uint8_t>& blocksData, Eng::client::MeshHandle mesh) {
+void ClientWorld::AddChunk(int cx, int cz, const std::vector<uint8_t>& blocksData,
+                           Eng::client::MeshPtr mesh) {
     ClientChunk cc;
-    cc.chunk = std::make_shared<Chunk>(); // ★ 分配
+    cc.chunk = std::make_shared<Chunk>();
     cc.chunk->chunk_x = cx;
     cc.chunk->chunk_z = cz;
     std::memcpy(cc.chunk->blocks.data(), blocksData.data(), CHUNK_VOLUME);
-    cc.mesh = mesh;
+    cc.mesh = std::move(mesh);                // 直接接管，可能是 nullptr
 
     // 计算高度图和 AABB
     for (int lx = 0; lx < 16; ++lx) {
@@ -33,7 +35,7 @@ void ClientWorld::AddChunk(int cx, int cz, const std::vector<uint8_t>& blocksDat
             int topY = 0;
             uint8_t topB = 0;
             for (int y = CHUNK_SIZE_Y - 1; y >= 0; --y) {
-                BlockType b = ChunkGet(*cc.chunk, lx, y, lz); // ★ 解引用
+                BlockType b = ChunkGet(*cc.chunk, lx, y, lz);
                 if (b != BlockType::Air && b != BlockType::Water) {
                     topY = y;
                     topB = (uint8_t)b;
@@ -47,7 +49,7 @@ void ClientWorld::AddChunk(int cx, int cz, const std::vector<uint8_t>& blocksDat
     cc.aabbMin = glm::vec3(cx * CHUNK_SIZE_X, 0.0f, cz * CHUNK_SIZE_Z);
     cc.aabbMax = cc.aabbMin + glm::vec3(CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z);
 
-    m_chunks[ChunkKey(cx, cz)] = cc;
+    m_chunks[ChunkKey(cx, cz)] = std::move(cc);
     m_pending.erase(ChunkKey(cx, cz));
 }
 
@@ -94,32 +96,34 @@ std::vector<uint64_t> ClientWorld::FetchDirtyChunks(size_t maxCount) {
     return result;
 }
 
-void ClientWorld::CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::client::MeshHandle>& outMeshes) const {
+void ClientWorld::CollectVisibleMeshes(const Frustum& frustum,
+                                       std::vector<Eng::client::MeshPtr>& outMeshes) const {
     outMeshes.clear();
     outMeshes.reserve(m_chunks.size());
     for (const auto& [key, cc] : m_chunks) {
-        if (cc.mesh == 0) continue;
+        if (!cc.mesh) continue;                                    // ← 空指针判断
         if (!AabbInFrustum(frustum, cc.aabbMin, cc.aabbMax)) continue;
         outMeshes.push_back(cc.mesh);
     }
 }
 
-void ClientWorld::UpdateStreaming(const glm::vec3& cameraPos, int renderDistance, std::function<void(int, int)>&& sendRequest, std::function<void(Eng::client::MeshHandle)>&& destroyMesh) {
+void ClientWorld::UpdateStreaming(const glm::vec3& cameraPos, int renderDistance,
+                                  std::function<void(int, int)>&& sendRequest) {
     int pcx = static_cast<int>(std::floor(cameraPos.x)) >> 4;
     int pcz = static_cast<int>(std::floor(cameraPos.z)) >> 4;
 
     const int unloadR = renderDistance + 2;
-    
+
     // 1. 只有在玩家跨区块时，才进行卸载检查
     if (pcx != m_lastPlayerChunkX || pcz != m_lastPlayerChunkZ) {
         m_lastPlayerChunkX = pcx;
         m_lastPlayerChunkZ = pcz;
-        
+
         for (auto it = m_chunks.begin(); it != m_chunks.end(); ) {
             int cx = static_cast<int>(static_cast<int32_t>(it->first & 0xFFFFFFFFu));
             int cz = static_cast<int>(static_cast<int32_t>(it->first >> 32));
             if (std::abs(cx - pcx) > unloadR || std::abs(cz - pcz) > unloadR) {
-                if (it->second.mesh != 0) destroyMesh(it->second.mesh);
+                // 直接 erase：it->second 里的 MeshPtr 出作用域自动 DestroyMeshInternal
                 m_pending.erase(it->first);
                 m_dirtyChunks.erase(it->first);
                 it = m_chunks.erase(it);
@@ -132,8 +136,6 @@ void ClientWorld::UpdateStreaming(const glm::vec3& cameraPos, int renderDistance
     // 2. 无论玩家是否跨区块，每帧都要去请求缺失的区块
     struct Need { int cx, cz, d2; };
     std::vector<Need> need;
-    // 性能提示：这里遍历了半径内的所有区块，16视距大约1000个。
-    // C++ 里这只要 0.1ms，完全不用担心。如果嫌慢，可以在跨区块时才重新生成列表。
     for (int dz = -renderDistance; dz <= renderDistance; ++dz) {
         for (int dx = -renderDistance; dx <= renderDistance; ++dx) {
             int cx = pcx + dx;
@@ -145,11 +147,10 @@ void ClientWorld::UpdateStreaming(const glm::vec3& cameraPos, int renderDistance
     }
 
     std::sort(need.begin(), need.end(), [](const Need& a, const Need& b) { return a.d2 < b.d2; });
-    
-    // 每帧限制发送数量
+
     int sent = 0;
     for (const auto& n : need) {
-        if (sent++ >= 2) break; // 每帧请求 2 个（可根据网络情况调到 4 或 8）
+        if (sent++ >= 2) break;
         sendRequest(n.cx, n.cz);
         m_pending.insert(ChunkKey(n.cx, n.cz));
     }
@@ -161,6 +162,7 @@ ClientChunk* ClientWorld::GetChunk(uint64_t key) {
 }
 
 void ClientWorld::Clear() {
+    // m_chunks.clear() 会让所有 MeshPtr 析构，触发 GPU 资源释放
     m_chunks.clear();
     m_pending.clear();
     m_dirtyChunks.clear();

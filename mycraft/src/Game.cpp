@@ -7,7 +7,7 @@
 #include "core/NetworkTransport.h"
 #include "game/Protocol.h"
 #include "game/GameServer.h"
-#include "game/core/Blocks.h"   
+#include "game/core/Blocks.h"
 #include "game/core/Physics.h"
 #include "game/client/TextureAtlas.h"
 #include "game/client/MeshBuilderUtils.h"
@@ -16,6 +16,7 @@
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_messagebox.h>
 #include <algorithm>
+#include <cmath>
 #include <nlohmann/json.hpp>
 #include <fstream>
 
@@ -55,7 +56,7 @@ namespace {
                 v.position = corners[faces[f][k]];
                 v.normal   = normals[f];
                 v.uv = { u0 + fuv[k][0]*client::TILE_UV,
-                        v0 + (1.0f - fuv[k][1])*client::TILE_UV };
+                         v0 + (1.0f - fuv[k][1])*client::TILE_UV };
                 v.ao = 1.0f;
                 v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
                 vertices.push_back(v);
@@ -67,7 +68,7 @@ namespace {
 }
 
 // ============================================================
-// OnStart 分阶段
+// 设置持久化
 // ============================================================
 void MyGame::LoadSettings(Eng::Engine& engine) {
     std::ifstream f("settings.json");
@@ -76,14 +77,14 @@ void MyGame::LoadSettings(Eng::Engine& engine) {
         json j;
         f >> j;
         auto& wcfg = engine.GetConfig().window;
-        
+
         if (j.contains("apitype")) {
             int v = j["apitype"];
             if (v >= 0 && v <= 2) {
                 wcfg.apitype = static_cast<Eng::client::RenderAPItype>(v);
             }
         }
-        
+
         auto& rcfg = engine.GetConfig().render;
         if (j.contains("renderDistance")) m_renderDistance = j["renderDistance"];
         if (j.contains("fov")) rcfg.fov = j["fov"];
@@ -96,16 +97,19 @@ void MyGame::LoadSettings(Eng::Engine& engine) {
 void MyGame::SaveSettings(Eng::Engine& engine) {
     json j;
     j["apitype"] = static_cast<int>(engine.GetConfig().window.apitype);
-    
+
     auto& rcfg = engine.GetConfig().render;
     j["renderDistance"] = m_renderDistance;
     j["fov"] = rcfg.fov;
     j["aoStrength"] = rcfg.m_aoStrength;
-    
+
     std::ofstream f("settings.json");
     if (f.is_open()) f << j.dump(4);
 }
 
+// ============================================================
+// 网络启动
+// ============================================================
 bool MyGame::StartLocalServer(bool useMemory, bool createClient) {
     if (m_server) return true;
 
@@ -141,6 +145,9 @@ bool MyGame::ConnectToServer(const std::string& host, uint16_t port) {
     return true;
 }
 
+// ============================================================
+// 窗口 & 渲染器
+// ============================================================
 bool MyGame::SetupWindow(Eng::Engine& engine) {
     Eng::client::WindowConfig windowConfig = {
         .apitype      = engine.GetConfig().window.apitype,
@@ -159,8 +166,13 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
         Eng::client::Input::Get().ProcessEvent(e);
         switch (e.type) {
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-                renderer->DestroyFramebuffer(fbo);
-                fbo = renderer->CreateFramebuffer(e.window.data1, e.window.data2);
+                // 直接覆盖：旧 fbo 在赋值瞬间析构，无需手动 Destroy
+                if (renderer) {
+                    fbo = renderer->CreateFramebuffer({
+                        .width  = e.window.data1,
+                        .height = e.window.data2
+                    });
+                }
                 break;
             case SDL_EVENT_WINDOW_MINIMIZED:
                 m_minimized = true;
@@ -213,8 +225,7 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
         logError(logger, "[Game] ImGui backend init failed");
         return false;
     }
-    
-    // ImGui 全局样式设置保留在此处（引擎级 UI 初始化）
+
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = 0.0f;
     style.FrameRounding = 0.0f;
@@ -222,7 +233,7 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
     style.WindowBorderSize = 0.0f;
     style.FrameBorderSize = 0.0f;
     style.ItemSpacing = ImVec2(10, 10);
-    
+
     ImVec4* colors = style.Colors;
     colors[ImGuiCol_WindowBg]       = ImVec4(0.08f, 0.08f, 0.09f, 0.95f);
     colors[ImGuiCol_ChildBg]        = ImVec4(0.12f, 0.12f, 0.13f, 0.60f);
@@ -240,48 +251,50 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
     if (dpiScale <= 0.0f) dpiScale = 1.0f;
     m_uiScale = dpiScale;
 
-        style.ScaleAllSizes(m_uiScale);
+    style.ScaleAllSizes(m_uiScale);
     ImGuiIO& io = ImGui::GetIO();
-    
-    // 移除全局缩放，改为直接在加载时指定缩放尺寸，保证像素字体清晰
-    // io.FontGlobalScale = m_uiScale; 
 
-    // 配置所有字形（BMP 平面：0x0020 到 0xFFFF）
     static const ImWchar allGlyphs[] = {
-        0x0020, 0xFFFF, // 包含所有基本字符、中文、符号
+        0x0020, 0xFFFF,
         0
     };
 
     ImFontConfig fontConfig;
-    fontConfig.OversampleH = 1;   // 位图字体不需要过度采样
+    fontConfig.OversampleH = 1;
     fontConfig.OversampleV = 1;
-    fontConfig.PixelSnapH = true; // 强制像素对齐，保持边缘锐利
+    fontConfig.PixelSnapH = true;
 
-    // 按照 DPI 缩放后的实际尺寸加载 (Unifont 原生高度是 16)
     float scaledFontSize = 16.0f * m_uiScale;
 
     ImFont* unifont = io.Fonts->AddFontFromFileTTF(
-        "./assets/fonts/unifont-18.0.01.otf", 
-        scaledFontSize, 
-        &fontConfig, 
+        "./assets/fonts/unifont-18.0.01.otf",
+        scaledFontSize,
+        &fontConfig,
         allGlyphs
     );
 
     if (!unifont) {
         logError(logger, "[Game] Failed to load Unifont, falling back to default font.");
-        io.Fonts->AddFontDefault(); // 如果没找到字体文件，至少保证游戏不崩
+        io.Fonts->AddFontDefault();
     } else {
         logInfo(logger, "[Game] Loaded Unifont with all BMP glyphs at size " << scaledFontSize);
     }
 
-    // 图集纹理从 TextureAtlas.h 获取
+    // —— 图集纹理（TexturePtr）——
     auto pixels = client::GenerateAtlasPixels();
     m_atlasTexture = renderer->CreateTextureFromPixels(pixels.data(), client::ATLAS_W, client::ATLAS_H);
+    if (!m_atlasTexture) {
+        logError(logger, "[MyGame] Failed to create atlas texture");
+        return false;
+    }
     logInfo(logger, "[MyGame] atlas texture created");
 
-    fbo = renderer->CreateFramebuffer(mainWin->GetConfigs().windowWidth,
-                                       mainWin->GetConfigs().windowHeight);
-    if (!fbo.isValid()) {
+    // —— FBO（FramebufferPtr）——
+    fbo = renderer->CreateFramebuffer({
+        .width  = mainWin->GetConfigs().windowWidth,
+        .height = mainWin->GetConfigs().windowHeight
+    });
+    if (!fbo || !fbo->GetColorTexture()) {
         logError(logger, "[Game] FBO creation failed!");
         return false;
     }
@@ -289,21 +302,41 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
     return true;
 }
 
+// ============================================================
+// Shader
+// ============================================================
 void MyGame::SetupShaders() {
     m_cubeShader = CreateShaderByName("mesh", false);
     m_skyShader  = CreateShaderByName("sky",  true);
-    m_lodShader = CreateShaderByName("lod", false);
+    m_lodShader  = CreateShaderByName("lod",  false);
 }
 
-Eng::client::ShaderHandle MyGame::CreateShaderByName(const std::string& name, bool isSky) {
+Eng::client::ShaderPtr MyGame::CreateShaderByName(const std::string& name, bool isSky) {
     const std::string ext  = m_useVulkan ? ".vk.spv" : ".gl.spv";
     const std::string base = "./assets/shaders/build/" + name + "/";
-    const std::string vp   = base + "vert" + ext;
-    const std::string fp   = base + "frag" + ext;
-    return isSky ? renderer->CreateSkybox(vp, fp)
-                 : renderer->CreateShader(vp, fp);
+
+    Eng::client::ShaderCreateInfo ci;
+    ci.vertPath = base + "vert" + ext;
+    ci.fragPath = base + "frag" + ext;
+    ci.isSky    = isSky;
+
+    if (isSky) {
+        // 天空盒：不写深度，避免污染后续手部渲染
+        ci.depthTest    = true;
+        ci.depthWrite   = false;
+        ci.blendEnabled = false;
+    } else {
+        // 地形 / LOD / 手部：标准深度配置
+        ci.depthTest    = true;
+        ci.depthWrite   = true;
+        ci.blendEnabled = false;
+    }
+    return renderer->CreateShader(ci);
 }
 
+// ============================================================
+// OnStart
+// ============================================================
 void MyGame::OnStart(Eng::Engine& engine) {
     if (!logger) logger = std::make_unique<Eng::Log>();
 
@@ -320,7 +353,7 @@ void MyGame::OnStart(Eng::Engine& engine) {
     LoadSettings(engine);
 
     try {
-        if (!SetupWindow(engine))   return;
+        if (!SetupWindow(engine)) return;
         if (!mainWin->GetFallbackReason().empty()) {
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "图形 API 降级", mainWin->GetFallbackReason().c_str(), nullptr);
         }
@@ -338,6 +371,9 @@ void MyGame::OnStart(Eng::Engine& engine) {
     m_state = GameState::MainMenu;
 }
 
+// ============================================================
+// OnUpdate
+// ============================================================
 bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     if (m_minimized) {
         SDL_Delay(16);
@@ -377,6 +413,7 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         return m_shouldQuit;
     }
 
+    // —— 物理步进 ——
     game::PlayerMotion m;
     m.position = cameraPos;
     m.velocity = m_playerVelocity;
@@ -395,6 +432,7 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     cameraPos      += m_positionError * t;
     m_positionError *= (1.0f - t);
 
+    // —— 时间 & 光照（写入 GlobalState，OnRender 之前生效）——
     float hoursPerSec = 24.0f / kDayLengthSec;
     m_timeOfDay = std::fmod(m_timeOfDay + hoursPerSec * deltaTime, 24.0f);
 
@@ -405,19 +443,25 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     float sunI = glm::clamp(sunH * 4.0f, 0.0f, 1.0f);
     float warm = 1.0f - glm::clamp(sunH * 3.0f, 0.0f, 1.0f);
     glm::vec3 sunColor = glm::mix(glm::vec3(1.0f, 1.0f, 1.0f), glm::vec3(1.0f, 0.5f, 0.2f), warm);
-    glm::vec3 ambient = glm::mix(glm::vec3(0.10f, 0.12f, 0.20f), glm::vec3(0.55f, 0.60f, 0.70f), glm::clamp(sunH * 2.0f, 0.0f, 1.0f));
+    glm::vec3 ambient  = glm::mix(glm::vec3(0.10f, 0.12f, 0.20f), glm::vec3(0.55f, 0.60f, 0.70f),
+                                  glm::clamp(sunH * 2.0f, 0.0f, 1.0f));
 
-    renderer->SetLightPosition(sunDir);
-    renderer->SetLightColor(sunColor, sunI);
-    renderer->SetLightAmbient(ambient);
+    m_globalState.lightDir       = sunDir;
+    m_globalState.lightColor     = sunColor;
+    m_globalState.lightIntensity = sunI;
+    m_globalState.lightAmbient   = ambient;
+    m_globalState.timeOfDay      = m_timeOfDay;
 
+    // —— 输入 ——
     if (GetInput(deltaTime)) return true;
 
+    // —— 网络收包 ——
     std::vector<uint8_t> data;
     while (m_client->Receive(data)) {
         HandleServerMessage(data);
     }
 
+    // —— 掉落物插值 / 拾取动画 ——
     constexpr float PICKUP_TIME = 0.2f;
     for (auto it = m_itemEntities.begin(); it != m_itemEntities.end(); ) {
         auto& e = it->second;
@@ -425,9 +469,7 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         if (e.pickingUp) {
             e.pickupT += deltaTime / PICKUP_TIME;
             if (e.pickupT >= 1.0f) {
-                if (e.pickerId == m_myClientId) {
-                    AddToInventory(e.itemType, 1);
-                }
+                if (e.pickerId == m_myClientId) AddToInventory(e.itemType, 1);
                 it = m_itemEntities.erase(it);
                 continue;
             }
@@ -447,16 +489,15 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         ++it;
     }
 
-    m_world.UpdateStreaming(cameraPos, m_renderDistance, 
-        [this](int cx, int cz) { 
+    // —— 区块流式 ——
+    // 注意：新版 UpdateStreaming 不再需要 destroy 回调，ClientWorld 内部靠 MeshPtr 自动释放
+    m_world.UpdateStreaming(cameraPos, m_renderDistance,
+        [this](int cx, int cz) {
             Eng::MessageWriter w;
             w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkRequest));
             w.Write<int32_t>(cx);
             w.Write<int32_t>(cz);
             m_client->Send(w.GetBuffer());
-        },
-        [this](Eng::client::MeshHandle mesh) { 
-            renderer->DestroyMesh(mesh);
         }
     );
 
@@ -472,6 +513,9 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     return false;
 }
 
+// ============================================================
+// OnRender
+// ============================================================
 void MyGame::OnRender(Eng::Engine& engine) {
     if (m_minimized) return;
 
@@ -479,175 +523,170 @@ void MyGame::OnRender(Eng::Engine& engine) {
         renderer->ApplySettings(mainWin->GetConfigs(), engine.GetConfig().render);
         m_applyPending = false;
     }
+
+    // 1) 计算 view / projection（仅 Playing 状态更新）
+    if (m_state == GameState::Playing) {
+        glm::vec3 eye = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
+        view = glm::lookAt(eye, eye + cameraFront, cameraUp);
+        projection = glm::perspective(glm::radians(engine.GetConfig().render.fov),
+                                mainWin->GetAspectRatio(),
+                                engine.GetConfig().render.zNear,
+                                engine.GetConfig().render.zFar);
+        UpdateFrustum(projection * view);
+    }
+
+    // 2) 组装 GlobalState（必须在 BeginFrame 之前）
+    m_globalState.view        = view;
+    m_globalState.projection  = projection;
+    m_globalState.viewPos     = cameraPos;
+    m_globalState.aoStrength  = engine.GetConfig().render.m_aoStrength;
+    renderer->SetGlobalState(m_globalState);
+
+    // 3) 帧开始
     renderer->BeginFrame();
 
     // ==========================================
-    // Pass 1: 渲染主世界到 FBO
+    // Pass 1: 主世界 → FBO
     // ==========================================
     renderer->BindFramebuffer(fbo);
     renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     renderer->Clear();
 
     if (m_state == GameState::Playing) {
-        glm::vec3 eye = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
-        view = glm::lookAt(eye, eye + cameraFront, cameraUp);
-        projection = glm::perspective(glm::radians(engine.GetConfig().render.fov), 
-                                mainWin->GetAspectRatio(), 
-                                engine.GetConfig().render.zNear, 
-                                engine.GetConfig().render.zFar);
-        glm::mat4 vp = projection * view;
-        UpdateFrustum(vp);
+        Eng::client::Material mat; mat.diffuse = m_atlasTexture;
 
-        renderer->SetViewMatrix(view);
-        renderer->SetProjectionMatrix(projection);
-        renderer->SetViewPosition(cameraPos);
-
-        Eng::client::Material mat;
-        mat.diffuse = m_atlasTexture;
-
-        renderer->SetUniform(m_cubeShader, "uAOStrength", engine.GetConfig().render.m_aoStrength);
-        
-        // 1~4 渲染世界、LOD、玩家、掉落物
         m_world.CollectVisibleMeshes(m_frustum, m_visibleChunkMeshes);
-        if (!m_visibleChunkMeshes.empty()) renderer->DrawMeshBatch(m_visibleChunkMeshes, m_cubeShader, mat);
+        if (!m_visibleChunkMeshes.empty())
+            renderer->DrawMeshBatch(m_visibleChunkMeshes, m_cubeShader, mat);
 
         Eng::client::Material lodMat; lodMat.diffuse = m_atlasTexture;
         m_lodManager.CollectVisibleMeshes(m_frustum, m_visibleLodMeshes);
-        if (!m_visibleLodMeshes.empty()) renderer->DrawMeshBatch(m_visibleLodMeshes, m_lodShader, lodMat);
+        if (!m_visibleLodMeshes.empty())
+            renderer->DrawMeshBatch(m_visibleLodMeshes, m_lodShader, lodMat);
 
-        if (m_playerMesh == 0) m_playerMesh = BuildPlayerMesh();
+        // 其他玩家
+        if (!m_playerMesh) m_playerMesh = BuildPlayerMesh();
         Eng::client::Material playerMat; playerMat.diffuse = m_atlasTexture;
         for (auto& [id, ps] : m_otherPlayers) {
             glm::mat4 model = glm::translate(glm::mat4(1.0f), ps.position);
             model = glm::rotate(model, ps.yaw, glm::vec3(0, 1, 0));
-            renderer->SetModelMatrix(model);
-            renderer->DrawMesh(m_playerMesh, m_cubeShader, playerMat);
+            renderer->DrawMesh(m_playerMesh, m_cubeShader, playerMat, model);
         }
 
-        // 5. 渲染天空盒
-        renderer->SetUniform(m_skyShader, "uTimeOfDay", m_timeOfDay);
+        // 实例化渲染掉落物
+        if (!m_itemEntities.empty()) {
+            std::unordered_map<BlockType, std::vector<glm::mat4>> instances;
+            for (const auto& [id, e] : m_itemEntities) {
+                glm::mat4 model = glm::translate(glm::mat4(1.0f), e.renderPos);
+                // 缓慢旋转
+                model = glm::rotate(model, m_animTime * 2.0f, glm::vec3(0, 1, 0));
+                // 上下浮动 + 一个基础偏移（防止贴着地面）
+                model = glm::translate(model, glm::vec3(0.0f, std::sin(m_animTime * 3.0f + e.id * 0.5f) * 0.1f + 0.1f, 0.0f));
+                // 掉落物缩放
+                model = glm::scale(model, glm::vec3(0.25f));
+                
+                instances[e.itemType].push_back(model);
+            }
+
+            Eng::client::Material itemMat; itemMat.diffuse = m_atlasTexture;
+            for (const auto& [type, transforms] : instances) {
+                auto mesh = GetOrCreateItemMesh(type);
+                if (mesh) {
+                    renderer->DrawMeshInstanced(mesh, m_cubeShader, itemMat, transforms);
+                }
+            }
+        }
+
+        // 天空盒
         renderer->DrawSkybox(m_skyShader);
 
-        // 6. 渲染第一人称手臂（彻底固定，不随视角转动）
-        renderer->Clear(Eng::client::ClearFlag::Depth); 
-        if (m_handMesh == 0) m_handMesh = BuildHandMesh();
-        
-        // 保存主矩阵
-        glm::mat4 mainView = view;
-        glm::mat4 mainProj = projection;
-        glm::mat4 mainModel = glm::mat4(1.0f);
+        // 手部
+        renderer->Clear(Eng::client::ClearFlag::Depth);
+        if (!m_handMesh) m_handMesh = BuildHandMesh();
 
-        // 1. 构建相机局部空间下的手部模型（固定在右下方）
-        glm::vec3 basePos(0.5f, -0.5f, -1.0f); // X偏右, Y偏下, Z向前(负方向)
-        
-        // 走路摇晃
+        glm::vec3 basePos(0.5f, -0.5f, -1.0f);
         if (m_walkDist > 0.0f) {
             basePos.x += std::sin(m_walkDist) * 0.03f;
             basePos.y -= std::abs(std::cos(m_walkDist)) * 0.03f;
         }
-        // 挖掘挥手
         if (m_swingProgress > 0.0f) {
             float swing = std::sin(m_swingProgress * 3.14159f);
-            basePos.x -= swing * 0.15f; 
-            basePos.y -= swing * 0.15f; 
-            basePos.z += swing * 0.1f; 
+            basePos.x -= swing * 0.15f;
+            basePos.y -= swing * 0.15f;
+            basePos.z += swing * 0.1f;
         }
 
-        // 这里的局部模型只包含手自己的旋转，绝对不要加 yaw 和 pitch
         glm::mat4 handLocalModel = glm::mat4(1.0f);
         handLocalModel = glm::translate(handLocalModel, basePos);
         handLocalModel = glm::rotate(handLocalModel, glm::radians(15.0f), glm::vec3(0, 1, 0));
         handLocalModel = glm::rotate(handLocalModel, glm::radians(-20.0f), glm::vec3(1, 0, 0));
         handLocalModel = glm::scale(handLocalModel, glm::vec3(0.5f));
 
-        // ★ 核心魔法：左乘 view 的逆矩阵，把手从相机空间“拉回”世界空间
-        // 此时引擎计算 projection * view * model，就变成了 projection * handLocalModel
+        // inverse(view) * localModel：把手从相机空间拉回世界空间，绕开 Vulkan Y 翻转
         glm::mat4 handModel = glm::inverse(view) * handLocalModel;
 
-        // 使用主相机矩阵渲染！
-        renderer->SetViewMatrix(view);
-        renderer->SetProjectionMatrix(projection);
-        renderer->SetModelMatrix(handModel);
-
-        Eng::client::Material handMat;
-        handMat.diffuse = m_atlasTexture;
-        renderer->DrawMesh(m_handMesh, m_cubeShader, handMat);
+        Eng::client::Material handMat; handMat.diffuse = m_atlasTexture;
+        renderer->DrawMesh(m_handMesh, m_cubeShader, handMat, handModel);
 
         // 手持物品
         auto& curSlot = m_hotbar[m_hotbarIndex];
         if (!curSlot.isEmpty()) {
             auto itemMesh = GetOrCreateItemMesh(curSlot.type);
-            if (itemMesh != 0) {
+            if (itemMesh) {
                 glm::mat4 itemLocalModel = handLocalModel;
-                itemLocalModel = glm::translate(itemLocalModel, glm::vec3(0.0f, 0.2f, -0.5f)); 
+                itemLocalModel = glm::translate(itemLocalModel, glm::vec3(0.0f, 0.2f, -0.5f));
                 itemLocalModel = glm::scale(itemLocalModel, glm::vec3(0.5f));
-                
-                // 同样左乘逆矩阵
                 glm::mat4 itemModel = glm::inverse(view) * itemLocalModel;
-                
-                renderer->SetModelMatrix(itemModel);
-                renderer->DrawMesh(itemMesh, m_cubeShader, handMat);
+                renderer->DrawMesh(itemMesh, m_cubeShader, handMat, itemModel);
             }
         }
-
-        // 恢复主世界矩阵
-        renderer->SetViewMatrix(mainView);
-        renderer->SetProjectionMatrix(mainProj);
-        renderer->SetModelMatrix(mainModel);
     }
 
     renderer->UnbindFramebuffer();
-    
+
     // ==========================================
-    // Pass 2: 后处理 & UI -> 屏幕
+    // Pass 2: 后处理 & UI → 屏幕
     // ==========================================
     renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     renderer->Clear(Eng::client::ClearFlag::Color | Eng::client::ClearFlag::Depth);
 
-    // 先把 FBO 的结果画到屏幕上
-    renderer->DrawFullscreenQuad(renderer->GetFramebufferTexture(fbo));
+    renderer->DrawFullscreenQuad(fbo->GetColorTexture());
 
-    // 最后画 ImGui UI
     m_ui.Draw(engine, *this);
 
     renderer->EndFrame();
 }
 
+// ============================================================
+// 返回主菜单
+// ============================================================
 void MyGame::ReturnToMainMenu() {
     if (renderer) renderer->WaitIdle();
 
     if (m_client) m_client.reset();
-    if (m_server) {
-        m_server->Stop();
-        m_server.reset();
-    }
+    if (m_server) { m_server->Stop(); m_server.reset(); }
 
     m_lodManager.Stop();
     m_meshManager.Stop();
 
-    if (renderer) {
-        for (auto& [key, cc] : m_world.GetChunks()) {
-            if (cc.mesh) renderer->DestroyMesh(cc.mesh);
-        }
-        for (auto& [type, mesh] : m_itemMeshCache) {
-            if (mesh) renderer->DestroyMesh(mesh);
-        }
-        if (m_playerMesh != 0) { renderer->DestroyMesh(m_playerMesh); m_playerMesh = 0; }
-        m_lodManager.Clear(renderer);
-    }
-    
-    m_world.Clear();
+    // 智能指针自动释放，无需手动 Destroy
+    m_playerMesh.reset();
+    m_handMesh.reset();
     m_itemMeshCache.clear();
+
+    m_world.Clear();     // ClientWorld 内部 reset 所有 chunk mesh
     m_itemEntities.clear();
     m_otherPlayers.clear();
     m_myClientId = 0;
+
+    m_lodManager.Clear();   // 若 LodManager 已内部改为 MeshPtr，可去掉 renderer 参数
 
     cameraPos   = glm::vec3(0.0f, 40.0f, 0.0f);
     cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
     yaw   = -90.0f;
     pitch = 0.0f;
-    m_playerVelocity   = glm::vec3(0.0f);
-    m_positionError    = glm::vec3(0.0f);
+    m_playerVelocity = glm::vec3(0.0f);
+    m_positionError  = glm::vec3(0.0f);
 
     m_menuOpen = false;
     m_state    = GameState::MainMenu;
@@ -656,30 +695,46 @@ void MyGame::ReturnToMainMenu() {
     logInfo(logger, "[Game] Returned to main menu");
 }
 
+// ============================================================
+// OnShutdown
+// ============================================================
 void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
-    if (m_client) {
-        m_client->Disconnect();
-        m_client.reset();
-    }
-    if (m_server) { 
-        m_server->Stop(); 
-        m_server.reset(); 
-    }
+    if (m_client) { m_client->Disconnect(); m_client.reset(); }
+    if (m_server) { m_server->Stop(); m_server.reset(); }
 
     auto* safeRenderer = mainWin ? mainWin->GetAPI() : nullptr;
     if (safeRenderer) {
         m_lodManager.Stop();
-        m_lodManager.Clear(safeRenderer);
-        if (m_cubeShader) safeRenderer->DestroyShader(m_cubeShader);
-        if (m_skyShader)  safeRenderer->DestroyShader(m_skyShader);
-        if (m_lodShader)  safeRenderer->DestroyShader(m_lodShader);
-        if (m_playerMesh != 0) { safeRenderer->DestroyMesh(m_playerMesh); m_playerMesh = 0; }
+        m_lodManager.Clear();
         safeRenderer->ShutdownImGuiBackend();
     }
+
+    // 必须在 renderer 销毁前，强制清理所有 MeshPtr
+    // 否则 MyGame 析构时会触发悬空指针的 DestroyMeshInternal
+    m_visibleChunkMeshes.clear();
+    m_visibleLodMeshes.clear();
+    m_playerMesh.reset();
+    m_handMesh.reset();
+    m_itemMeshCache.clear();
+    m_world.Clear();         // 清理 ClientWorld 内的 chunk->mesh
+    m_itemEntities.clear();
+    m_otherPlayers.clear();
+    m_meshManager.Stop();
+
+    // 清理其他资源
+    m_cubeShader.reset();
+    m_skyShader.reset();
+    m_lodShader.reset();
+    m_atlasTexture.reset();
+    fbo.reset();
+
     renderer = nullptr;
-    mainWin = nullptr; 
+    mainWin = nullptr;
 }
 
+// ============================================================
+// 输入
+// ============================================================
 bool MyGame::GetInput(float dt) {
     using namespace Eng::client;
 
@@ -698,10 +753,12 @@ bool MyGame::GetInput(float dt) {
         auto& configs = mainWin->GetConfigs();
         configs.fullscreen = !configs.fullscreen;
         mainWin->SetFullscreen(configs.fullscreen);
-        renderer->DestroyFramebuffer(fbo);
-        fbo = renderer->CreateFramebuffer(
-            mainWin->GetConfigs().windowPixelWidth,
-            mainWin->GetConfigs().windowPixelHeight);
+
+        // 直接覆盖：旧 FBO 在赋值瞬间析构
+        fbo = renderer->CreateFramebuffer({
+            .width  = mainWin->GetConfigs().windowPixelWidth,
+            .height = mainWin->GetConfigs().windowPixelHeight
+        });
     }
 
     if (Input::IsKeyPressed(KeyCode::F3)) {
@@ -715,12 +772,13 @@ bool MyGame::GetInput(float dt) {
         pitch -= mouseDelta.y * 0.1f;
         pitch = glm::clamp(pitch, -89.0f, 89.0f);
     }
-    
+
     glm::vec3 mousefront;
     mousefront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
     mousefront.y = sin(glm::radians(pitch));
     mousefront.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
     cameraFront = glm::normalize(mousefront);
+
     glm::vec3 forward = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
     glm::vec3 right   = glm::normalize(glm::cross(forward, glm::vec3(0, 1, 0)));
     glm::vec3 moveDir = glm::vec3(0.0f);
@@ -732,15 +790,13 @@ bool MyGame::GetInput(float dt) {
         if (Input::IsKeyDown(KeyCode::Space))  moveDir.y += 1.0f;
         if (Input::IsKeyDown(KeyCode::LShift)) moveDir.y -= 1.0f;
     }
-    if (glm::length(moveDir) > 0.001f) {
-        moveDir = glm::normalize(moveDir);
-    }
+    if (glm::length(moveDir) > 0.001f) moveDir = glm::normalize(moveDir);
 
     game::net::PlayerInput input;
     input.moveDir = moveDir;
     m_lastMoveDir = moveDir;
-    input.look    = glm::vec2(glm::radians(yaw), glm::radians(pitch));
-    
+    input.look = glm::vec2(glm::radians(yaw), glm::radians(pitch));
+
     if (Input::IsKeyDown(KeyCode::Space)) {
         m_jumpHoldTimer = 0.2f;
     }
@@ -762,15 +818,14 @@ bool MyGame::GetInput(float dt) {
     float scroll = Input::GetScrollDelta();
     if (scroll > 0) m_hotbarIndex = (m_hotbarIndex - 1 + kHotbarSize) % kHotbarSize;
     if (scroll < 0) m_hotbarIndex = (m_hotbarIndex + 1) % kHotbarSize;
-    
+
     if (Input::IsKeyPressed(KeyCode::Num1)) m_hotbarIndex = 0;
     if (Input::IsKeyPressed(KeyCode::Num2)) m_hotbarIndex = 1;
     if (Input::IsKeyPressed(KeyCode::Num3)) m_hotbarIndex = 2;
     if (Input::IsKeyPressed(KeyCode::Num4)) m_hotbarIndex = 3;
-    
-    if (m_hotbarIndex < 0 || m_hotbarIndex >= kHotbarSize) {
-        m_hotbarIndex = 0;
-    }
+
+    if (m_hotbarIndex < 0 || m_hotbarIndex >= kHotbarSize) m_hotbarIndex = 0;
+
     auto& curSlot = m_hotbar[m_hotbarIndex];
     if (curSlot.isEmpty()) {
         input.placeBlock = 0;
@@ -794,14 +849,12 @@ bool MyGame::GetInput(float dt) {
     w.Write(static_cast<uint8_t>(input.fly ? 1 : 0));
     m_client->Send(w.GetBuffer());
 
-    // 走路时累积步数
     if (glm::length(moveDir) > 0.1f && m_playerOnGround) {
         m_walkDist += dt * 10.0f;
     } else {
         m_walkDist = 0.0f;
     }
 
-    // 挖掘挥手进度
     if (wantDig && m_digCooldown > 0.0f) {
         m_swingProgress += dt * 4.0f;
         if (m_swingProgress > 1.0f) m_swingProgress = 0.0f;
@@ -812,6 +865,9 @@ bool MyGame::GetInput(float dt) {
     return m_shouldQuit;
 }
 
+// ============================================================
+// 服务端消息处理
+// ============================================================
 void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
     if (data.empty()) return;
 
@@ -870,13 +926,10 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             m_world.AddChunk(cx, cz, blockData, 0);
 
             m_world.MarkDirty(key);
-            
-            // 邻居也打上脏标记
             m_world.MarkDirty(ChunkKey(cx - 1, cz));
             m_world.MarkDirty(ChunkKey(cx + 1, cz));
             m_world.MarkDirty(ChunkKey(cx, cz - 1));
             m_world.MarkDirty(ChunkKey(cx, cz + 1));
-
             break;
         }
 
@@ -885,7 +938,6 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             int by = r.Read<int32_t>();
             int bz = r.Read<int32_t>();
             auto t = static_cast<BlockType>(r.Read<uint16_t>());
-
             m_world.SetBlock(bx, by, bz, t);
             break;
         }
@@ -918,7 +970,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             }
             break;
         }
-        
+
         case game::net::MessageType::EntityDestroy: {
             uint32_t id       = r.Read<uint32_t>();
             uint8_t  reason   = r.Read<uint8_t>();
@@ -937,7 +989,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             }
             break;
         }
-        
+
         case game::net::MessageType::ServerInfo: {
             uint32_t seed = r.ReadU32BE();
             glm::vec3 spawn = r.ReadVec3();
@@ -946,7 +998,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
                     << " spawn: " << spawn.x << "," << spawn.y << "," << spawn.z);
             break;
         }
-        
+
         case game::net::MessageType::PlayerInput:
         case game::net::MessageType::ChunkRequest:
         case game::net::MessageType::ClientHello:
@@ -954,7 +1006,10 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
     }
 }
 
-Eng::client::MeshHandle MyGame::GetOrCreateItemMesh(BlockType type) {
+// ============================================================
+// Mesh 构建
+// ============================================================
+Eng::client::MeshPtr MyGame::GetOrCreateItemMesh(BlockType type) {
     auto it = m_itemMeshCache.find(type);
     if (it != m_itemMeshCache.end()) return it->second;
 
@@ -963,22 +1018,21 @@ Eng::client::MeshHandle MyGame::GetOrCreateItemMesh(BlockType type) {
     return mesh;
 }
 
-Eng::client::MeshHandle MyGame::BuildItemCubeMesh(BlockType type) {
+Eng::client::MeshPtr MyGame::BuildItemCubeMesh(BlockType type) {
     Eng::client::MeshData data = client::MeshBuilderUtils::BuildItemMeshData(type);
     return renderer->CreateMesh(data);
 }
 
-Eng::client::MeshHandle MyGame::BuildPlayerMesh() {
+Eng::client::MeshPtr MyGame::BuildPlayerMesh() {
     std::vector<Eng::client::Vertex> vertices;
     std::vector<uint32_t> indices;
 
-    // 直接复用 AppendBoxToMesh
-    AppendBoxToMesh({0.0f, 1.55f, 0.0f}, {0.5f, 0.5f, 0.5f}, 13, vertices, indices); // 头
-    AppendBoxToMesh({0.0f, 1.05f, 0.0f}, {0.5f, 0.5f, 0.25f}, 14, vertices, indices); // 身体
-    AppendBoxToMesh({-0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, 14, vertices, indices); // 左臂
-    AppendBoxToMesh({ 0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, 14, vertices, indices); // 右臂
-    AppendBoxToMesh({-0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, 15, vertices, indices); // 左腿
-    AppendBoxToMesh({ 0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, 15, vertices, indices); // 右腿
+    AppendBoxToMesh({0.0f, 1.55f, 0.0f}, {0.5f, 0.5f, 0.5f}, 13, vertices, indices);       // 头
+    AppendBoxToMesh({0.0f, 1.05f, 0.0f}, {0.5f, 0.5f, 0.25f}, 14, vertices, indices);      // 身体
+    AppendBoxToMesh({-0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, 14, vertices, indices);  // 左臂
+    AppendBoxToMesh({ 0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, 14, vertices, indices);  // 右臂
+    AppendBoxToMesh({-0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, 15, vertices, indices);   // 左腿
+    AppendBoxToMesh({ 0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, 15, vertices, indices);   // 右腿
 
     Eng::client::MeshData data;
     data.vertices = std::move(vertices);
@@ -986,7 +1040,7 @@ Eng::client::MeshHandle MyGame::BuildPlayerMesh() {
     return renderer->CreateMesh(data);
 }
 
-Eng::client::MeshHandle MyGame::BuildHandMesh() {
+Eng::client::MeshPtr MyGame::BuildHandMesh() {
     std::vector<Eng::client::Vertex> vertices;
     std::vector<uint32_t> indices;
 
@@ -999,6 +1053,9 @@ Eng::client::MeshHandle MyGame::BuildHandMesh() {
     return renderer->CreateMesh(data);
 }
 
+// ============================================================
+// 世界查询
+// ============================================================
 BlockType MyGame::GetBlockAt(int wx, int wy, int wz) const {
     return m_world.GetBlockAt(wx, wy, wz);
 }
@@ -1022,6 +1079,9 @@ bool MyGame::AABBCollides(const glm::vec3& pos) const {
     return false;
 }
 
+// ============================================================
+// 背包
+// ============================================================
 void MyGame::AddToInventory(BlockType type, int count) {
     if (type == BlockType::Air || count <= 0) return;
 
@@ -1031,7 +1091,6 @@ void MyGame::AddToInventory(BlockType type, int count) {
             return;
         }
     }
-
     for (auto& slot : m_hotbar) {
         if (slot.isEmpty()) {
             slot.type  = type;
@@ -1041,29 +1100,24 @@ void MyGame::AddToInventory(BlockType type, int count) {
     }
 }
 
+// ============================================================
+// Mesh 结果汇聚
+// ============================================================
 void MyGame::DrainMeshResults() {
     m_meshManager.DrainResults([this](game::client::MeshResult&& r) {
         auto* cc = m_world.GetChunk(r.chunkKey);
-        if (cc && cc->chunk) {
-            cc->chunk->sky = r.sky;
-            cc->chunk->block = r.block;
+        if (!cc || !cc->chunk) return;
 
-            if (r.vertices.empty()) {
-                if (cc->mesh != 0) {
-                    renderer->DestroyMesh(cc->mesh);
-                    cc->mesh = 0;
-                }
-            } else {
-                Eng::client::MeshData data;
-                data.vertices = std::move(r.vertices);
-                data.indices  = std::move(r.indices);
+        cc->chunk->sky   = r.sky;
+        cc->chunk->block = r.block;
 
-                auto newMesh = renderer->CreateMesh(data);
-                if (cc->mesh != 0) {
-                    renderer->DestroyMesh(cc->mesh);
-                }
-                cc->mesh = newMesh;
-            }
+        if (r.vertices.empty()) {
+            cc->mesh.reset();
+        } else {
+            Eng::client::MeshData data;
+            data.vertices = std::move(r.vertices);
+            data.indices  = std::move(r.indices);
+            cc->mesh = renderer->CreateMesh(data);
         }
     });
 }
@@ -1080,17 +1134,19 @@ void MyGame::QueueChunkMeshTask(uint64_t key) {
     auto* cZm = m_world.GetChunk(ChunkKey(cx, cz - 1));
     auto* cZp = m_world.GetChunk(ChunkKey(cx, cz + 1));
 
-    // 直接传智能指针，不拷贝数据
     m_meshManager.Submit(
-        key, 
-        pC->chunk, 
-        cXm ? cXm->chunk : nullptr, 
-        cXp ? cXp->chunk : nullptr, 
-        cZm ? cZm->chunk : nullptr, 
+        key,
+        pC->chunk,
+        cXm ? cXm->chunk : nullptr,
+        cXp ? cXp->chunk : nullptr,
+        cZm ? cZm->chunk : nullptr,
         cZp ? cZp->chunk : nullptr
     );
 }
 
+// ============================================================
+// 视锥
+// ============================================================
 void MyGame::UpdateFrustum(const glm::mat4& vp) {
     auto row = [&](int r) { return glm::vec4(vp[0][r], vp[1][r], vp[2][r], vp[3][r]); };
     glm::vec4 r0=row(0), r1=row(1), r2=row(2), r3=row(3);

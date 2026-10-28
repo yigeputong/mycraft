@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <queue>
 #include <atomic>
+#include <memory>
 
 namespace game::client {
 
@@ -31,7 +32,7 @@ struct LodKeyHash {
 struct LodUnit {
     int8_t  level = 1;
     int32_t cx = 0, cz = 0;
-    Eng::client::MeshHandle mesh = 0;
+    Eng::client::MeshPtr mesh;                   // ← MeshPtr，默认空
     glm::vec3 aabbMin{0.0f};
     glm::vec3 aabbMax{0.0f};
 };
@@ -45,10 +46,10 @@ public:
     void Update(const glm::vec3& cameraPos, const ClientWorld& world, Eng::client::IRenderAPI* renderer);
 
     // 收集可见的 LOD Mesh
-    void CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::client::MeshHandle>& outMeshes) const;
+    void CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::client::MeshPtr>& outMeshes) const;
 
-    // 退出时清空所有 LOD 资源
-    void Clear(Eng::client::IRenderAPI* renderer);
+    // 退出时清空所有 LOD 资源（MeshPtr 自动释放，无 renderer 参数）
+    void Clear();
 
 private:
     struct LodTask   { int8_t level; int32_t cx, cz; };
@@ -66,12 +67,12 @@ private:
                       std::vector<Eng::client::Vertex>& outV,
                       std::vector<uint32_t>& outI,
                       glm::vec3& outMin, glm::vec3& outMax) const;
-    
+
     void BuildLod1FromChunks(const LodKey& key, const ClientWorld& world,
                              std::vector<Eng::client::Vertex>& outV,
                              std::vector<uint32_t>& outI,
                              glm::vec3& outMin, glm::vec3& outMax);
-                             
+
     void DrainResults(Eng::client::IRenderAPI* renderer);
 
     std::unique_ptr<game::server::TerrainGenerator> m_terrain;

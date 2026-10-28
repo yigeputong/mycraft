@@ -6,8 +6,6 @@
 #include <string>
 #include <memory>
 
-#define GL(func) func;OpenGLAPI::glCheckErr()
-
 namespace Eng::client {
 
 class OpenGLAPI final : public IRenderAPI {
@@ -24,55 +22,37 @@ public:
     void SetClearColor(float r, float g, float b, float a) override;
     void Clear(ClearFlag flag = ClearFlag::All) override;
 
-    // 矩阵设置
-    void SetViewMatrix(const glm::mat4& view) override;
-    void SetProjectionMatrix(const glm::mat4& proj) override;
-    void SetModelMatrix(const glm::mat4& model) override;
-    void SetLightPosition(const glm::vec3& pos) override;
-    void SetLightColor(const glm::vec3& color, const float intensity) override;
-    void SetLightAmbient(const glm::vec3& amb) override;
-    void SetViewPosition(const glm::vec3& pos) override;
+    // 全局状态
+    void SetGlobalState(const GlobalState& state) override;
 
-    // 资源创建（返回句柄）
-    MeshHandle CreateMesh(const MeshData& data) override;
-    MeshHandle CreateMeshInstance(const MeshData& data) override;
-    TextureHandle CreateTexture(const std::string& path) override;
-    TextureHandle CreateTextureFromMemory(const aiTexture* embedded) override;
-    TextureHandle CreateTextureFromPixels(const uint8_t* rgba, int w, int h) override;
-    ShaderHandle CreateShader(const std::string& vertPath, const std::string& fragPath) override;
-    ShaderHandle CreateSkybox(const std::string& vertPath, const std::string& fragPath) override;
+    // 资源创建
+    MeshPtr CreateMesh(const MeshData& data) override;
+    TexturePtr CreateTexture(const std::string& path) override;
+    TexturePtr CreateTextureFromPixels(const uint8_t* rgba, int w, int h) override;
+    ShaderPtr CreateShader(const ShaderCreateInfo& info) override;
+    FramebufferPtr CreateFramebuffer(const FramebufferCreateInfo& info) override;
     Model LoadModel(const std::string& path, bool flipUV = false) override;
 
-    // 资源销毁
-    void DestroyMesh(MeshHandle handle) override;
-    void DestroyTexture(TextureHandle handle) override;
-    void DestroyShader(ShaderHandle handle) override;
-
-    Framebuffer CreateFramebuffer(int width, int height) override;
-    void DestroyFramebuffer(const Framebuffer& fb) override;
-    void BindFramebuffer(const Framebuffer& fb) override;
+    // FBO
+    void BindFramebuffer(const FramebufferPtr& fb) override;
     void UnbindFramebuffer() override;
-    TextureHandle GetFramebufferTexture(const Framebuffer& fb) const override;
-
-    // Uniform 设置
-    void SetUniform(ShaderHandle shader, const std::string& name, const glm::mat4& value) override;
-    void SetUniform(ShaderHandle shader, const std::string& name, const glm::vec3& value) override;
-    void SetUniform(ShaderHandle shader, const std::string& name, float value) override;
-    void SetUniform(ShaderHandle shader, const std::string& name, int value) override;
 
     // 绘制
     void BeginFrame() override;
-    void DrawMesh(MeshHandle mesh, ShaderHandle shader, const Material& material) override;
-    void DrawMeshInstanced(MeshHandle mesh,
-                                   ShaderHandle shader,
-                                   const Material& material,
-                                   const std::vector<glm::mat4>& transforms) override;
-    void DrawMeshBatch(const std::vector<MeshHandle>& meshes, ShaderHandle shader, const Material& mat) override;
-
-    void DrawSkybox(ShaderHandle shader) override;
-    void DrawFullscreenQuad(TextureHandle textureID) override;
     void EndFrame() override;
+    void DrawMesh(const MeshPtr& mesh, const ShaderPtr& shader, const Material& material, const glm::mat4& model = glm::mat4(1.0f)) override;
+    void DrawMeshInstanced(const MeshPtr& mesh, const ShaderPtr& shader, const Material& material, const std::vector<glm::mat4>& transforms) override;
+    void DrawMeshBatch(const std::vector<MeshPtr>& meshes, const ShaderPtr& shader, const Material& mat) override;
+    void DrawSkybox(const ShaderPtr& shader) override;
+    void DrawFullscreenQuad(const TexturePtr& texture) override;
 
+    // Uniform
+    void SetUniform(const ShaderPtr& shader, const std::string& name, const glm::mat4& value) override;
+    void SetUniform(const ShaderPtr& shader, const std::string& name, const glm::vec3& value) override;
+    void SetUniform(const ShaderPtr& shader, const std::string& name, float value) override;
+    void SetUniform(const ShaderPtr& shader, const std::string& name, int value) override;
+
+    // ImGui
     bool InitImGuiBackend() override;
     void ShutdownImGuiBackend() override;
     void ImGuiNewFrame() override;
@@ -85,17 +65,15 @@ public:
 
     static constexpr int api_major = 4;
     static constexpr int api_minor = 6;
+
 private:
-    // 状态
     bool m_initialized = false;
 
-    // 资源句柄生成器
     MeshHandle m_nextMeshHandle = 1;
     TextureHandle m_nextTextureHandle = 1;
     ShaderHandle m_nextShaderHandle = 1;
     FramebufferHandle m_nextFramebufferHandle = 1;
 
-    // 内部数据结构
     struct MeshDataInternal {
         GLuint vao = 0;
         GLuint vbo = 0;
@@ -123,7 +101,6 @@ private:
         int    height   = 0;
     };
 
-    // 资源表
     std::unordered_map<MeshHandle,        MeshDataInternal>    m_meshes;
     std::unordered_map<TextureHandle,     TextureDataInternal> m_textures;
     std::unordered_map<std::string,       TextureHandle>       m_textureCache;
@@ -131,61 +108,52 @@ private:
     std::unordered_map<FramebufferHandle, FramebufferInternal> m_framebuffers;
     std::unordered_map<FramebufferHandle, TextureHandle>       m_fbColorHandles;
 
-    // 默认纹理
     TextureHandle m_defaultTexture = 0;
     GLuint m_defaultTexID = 0;
 
-    // 变换矩阵
-    glm::mat4 m_viewMatrix       = glm::mat4(1.0f);
-    glm::mat4 m_projectionMatrix = glm::mat4(1.0f);
-    glm::mat4 m_modelMatrix      = glm::mat4(1.0f);
+    GlobalState m_globalState{};
 
-    // 相机/光源参数
-    glm::vec3 m_viewPos        = glm::vec3(0.0f);
-    glm::vec3 m_lightDir       = glm::vec3(0.5f, -1.0f, 0.3f);  // 斜向下照
-    glm::vec3 m_lightColor     = glm::vec3(1.0f, 0.98f, 0.9f);    // 略暖的白
-    glm::vec3 m_lightAmbient   = glm::vec3(0.3f);
-    float     m_lightIntensity = 1.0f;
-    float     m_aoStrength = 1.0f;
-    float     m_timeOfDay  = 0.25f;
+    GLuint m_globalUBO   = 0;
+    GLuint m_materialUBO = 0;
 
-    // UBO
-    GLuint m_globalUBO   = 0;   // binding = 0，存相机 + 光源
-    GLuint m_materialUBO = 0;   // binding = 1，存材质
+    MeshPtr m_skyCubeMesh = nullptr;
 
-    // 天空盒
-    MeshHandle m_skyCubeMesh = 0;
-
-    // 全屏四边形
     GLuint m_fullscreenVAO = 0;
     GLuint m_fullscreenVBO = 0;
-    ShaderHandle m_fullscreenShader = 0;
+    ShaderPtr m_fullscreenShader = nullptr;
 
-    // 记录日志
     std::unique_ptr<Log> m_logger = std::make_unique<Log>();
     DeviceInfo m_deviceInfo;
 
-    // 视口和清屏
     Window* m_window;
     int m_viewportX = 0, m_viewportY = 0;
     int m_viewportWidth = 0, m_viewportHeight = 0;
     float m_clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 
-    // 辅助函数
-    MeshHandle GetSkyCubeMesh();
-    void UpdateGlobalUBO();
-    void UpdateMaterialUBO(float shininess);
+    // 内部辅助
+    MeshHandle CreateMeshInternal(const MeshData& data);
+    TextureHandle CreateTextureInternal(const std::string& path);
+    TextureHandle CreateTextureFromPixelsInternal(const uint8_t* rgba, int w, int h);
+    ShaderHandle CreateShaderInternal(const ShaderCreateInfo& info);
+    FramebufferHandle CreateFramebufferInternal(int width, int height);
+
+    void DestroyMeshInternal(MeshHandle handle);
+    void DestroyTextureInternal(TextureHandle handle);
+    void DestroyShaderInternal(ShaderHandle handle);
+    void DestroyFramebufferInternal(FramebufferHandle handle);
+
+    void InitSkyCubeMesh();
     GLuint CompileShader(GLenum type, const std::string& source);
     GLuint LinkProgram(GLuint vertexShader, GLuint fragmentShader);
     std::string ReadFile(const std::string& path);
-    MeshHandle CreateMeshInternal(const MeshData& data, bool instanced);
-    GLuint ResolveTexture(TextureHandle h) const {
-        if (h == 0) return m_defaultTexID;
-        auto it = m_textures.find(h);
+    
+    GLuint ResolveTexture(const TexturePtr& tex) const {
+        if (!tex) return m_defaultTexID;
+        auto it = m_textures.find(tex->GetHandle());
         if (it == m_textures.end() || it->second.textureID == 0)
             return m_defaultTexID;
         return it->second.textureID;
     }
 };
-    
+
 }

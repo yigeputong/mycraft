@@ -30,7 +30,7 @@ private:
     bool SetupWindow(Eng::Engine& engine);
     bool SetupRenderer(Eng::Engine& engine);
     void SetupShaders();
-    Eng::client::ShaderHandle CreateShaderByName(const std::string& name, bool isSky);
+    Eng::client::ShaderPtr CreateShaderByName(const std::string& name, bool isSky);
 
     // ==================== 核心对象 ====================
     Eng::client::WindowManager* winMgr = nullptr;
@@ -38,12 +38,16 @@ private:
     Eng::client::IRenderAPI*   renderer = nullptr;
     uint32_t m_win = 0;
 
-    Eng::client::ShaderHandle   m_cubeShader;
-    Eng::client::TextureHandle  m_atlasTexture;
-    Eng::client::Framebuffer    fbo;
-    Eng::client::ShaderHandle   m_skyShader;
-    Eng::client::ShaderHandle   m_lodShader;
+    // —— 资源全部改成智能指针，生命周期自动管理 ——
+    Eng::client::ShaderPtr      m_cubeShader;
+    Eng::client::TexturePtr     m_atlasTexture;
+    Eng::client::FramebufferPtr fbo;
+    Eng::client::ShaderPtr      m_skyShader;
+    Eng::client::ShaderPtr      m_lodShader;
     Eng::client::DeviceInfo     m_deviceInfo;
+
+    // —— 全局渲染状态聚合（替代旧 SetViewMatrix/SetProjectionMatrix/SetLight* 系列）——
+    Eng::client::GlobalState    m_globalState;
 
     enum class GameState : std::uint8_t {
         MainMenu,
@@ -81,8 +85,9 @@ private:
     client::LodManager m_lodManager;
 
     // ==================== 相机与物理 ====================
-    std::vector<Eng::client::MeshHandle> m_visibleChunkMeshes;
-    std::vector<Eng::client::MeshHandle> m_visibleLodMeshes;
+    // 可见集合改为持有 MeshPtr，直接喂给 DrawMeshBatch
+    std::vector<Eng::client::MeshPtr> m_visibleChunkMeshes;
+    std::vector<Eng::client::MeshPtr> m_visibleLodMeshes;
 
     glm::vec3 cameraPos{0.0f, 40.0f, 0.0f};
     glm::vec3 cameraFront{0.0f, 0.0f, -1.0f};
@@ -105,12 +110,12 @@ private:
     bool AabbInFrustum(const glm::vec3& mn, const glm::vec3& mx) const;
 
     // ==================== 渲染实体 ====================
-    Eng::client::MeshHandle m_playerMesh = 0;
-    Eng::client::MeshHandle BuildPlayerMesh();
-    Eng::client::MeshHandle m_handMesh = 0;
-    Eng::client::MeshHandle BuildHandMesh();
-    float m_swingProgress = 0.0f;   // 挖掘挥手进度 (0.0 到 1.0)
-    float m_walkDist = 0.0f;        // 步数累积，用于走路摇晃
+    Eng::client::MeshPtr m_playerMesh;
+    Eng::client::MeshPtr BuildPlayerMesh();
+    Eng::client::MeshPtr m_handMesh;
+    Eng::client::MeshPtr BuildHandMesh();
+    float m_swingProgress = 0.0f;
+    float m_walkDist = 0.0f;
 
     struct ClientItemEntity : game::PointEntity {
         uint32_t  id          = 0;
@@ -125,9 +130,9 @@ private:
         uint32_t  pickerId    = 0;
     };
     std::unordered_map<uint32_t, ClientItemEntity> m_itemEntities;
-    std::unordered_map<BlockType, Eng::client::MeshHandle> m_itemMeshCache;
-    Eng::client::MeshHandle GetOrCreateItemMesh(BlockType type);
-    Eng::client::MeshHandle BuildItemCubeMesh(BlockType type);
+    std::unordered_map<BlockType, Eng::client::MeshPtr> m_itemMeshCache;
+    Eng::client::MeshPtr GetOrCreateItemMesh(BlockType type);
+    Eng::client::MeshPtr BuildItemCubeMesh(BlockType type);
 
     // ==================== Hotbar 与物品 ====================
     static constexpr int kHotbarSize = 4;
@@ -140,14 +145,13 @@ private:
     }};
     void AddToInventory(BlockType type, int count);
 
-    // 背包与 UI 状态
     bool m_inventoryOpen = false;
     std::array<ItemStack, 27> m_inventory{};
 
     // ==================== 状态与 UI 标志 ====================
     friend class client::ClientUI;
     client::ClientUI m_ui;
-    
+
     bool m_shouldQuit = false;
     bool m_menuOpen   = false;
     bool m_minimized  = false;
@@ -187,7 +191,7 @@ private:
     // ==================== 配置持久化 ====================
     static constexpr const char* SETTINGS_FILE = "settings.json";
     bool m_apiChanged = false;
-    
+
     void LoadSettings(Eng::Engine& engine);
     void SaveSettings(Eng::Engine& engine);
 

@@ -88,10 +88,10 @@ void LodManager::Update(const glm::vec3& cameraPos, [[maybe_unused]] const Clien
             }
         }
 
-        // 卸载
+        // 卸载：erase 会让 LodUnit 析构，进而让 MeshPtr 析构
+        // 旧版的 renderer->DestroyMesh(it->second.mesh) 全部删掉
         for (auto it = m_units.begin(); it != m_units.end(); ) {
             if (!wanted.count(it->first)) {
-                if (it->second.mesh != 0) renderer->DestroyMesh(it->second.mesh);
                 it = m_units.erase(it);
             } else ++it;
         }
@@ -110,7 +110,7 @@ void LodManager::Update(const glm::vec3& cameraPos, [[maybe_unused]] const Clien
     m_lastCameraPos = cameraPos;
     const bool stationary = (m_stationaryTime > 1.0f);
 
-    // 下发任务
+    // 下发任务（原样）
     constexpr int K_PER_FRAME = 6;
     int sent = 0;
     while (m_needCursor < m_needQueue.size() && sent < K_PER_FRAME) {
@@ -128,7 +128,6 @@ void LodManager::Update(const glm::vec3& cameraPos, [[maybe_unused]] const Clien
         ++sent;
     }
 
-    // 收集结果
     DrainResults(renderer);
 }
 
@@ -152,26 +151,26 @@ void LodManager::DrainResults(Eng::client::IRenderAPI* renderer) {
         Eng::client::MeshData data;
         data.vertices = std::move(r.vertices);
         data.indices  = std::move(r.indices);
-        auto mesh = renderer->CreateMesh(data);
+        auto mesh = renderer->CreateMesh(data);         // 返回 MeshPtr
 
         LodUnit u;
-        u.level = r.level;
-        u.cx = r.cx;
-        u.cz = r.cz;
-        u.mesh = mesh;
+        u.level   = r.level;
+        u.cx      = r.cx;
+        u.cz      = r.cz;
+        u.mesh    = std::move(mesh);                    // ← 直接接管
         u.aabbMin = r.aabbMin;
         u.aabbMax = r.aabbMax;
-        m_units[k] = u;
+        m_units[k] = std::move(u);
         ++done;
     }
 }
 
-void LodManager::CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::client::MeshHandle>& outMeshes) const {
+void LodManager::CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::client::MeshPtr>& outMeshes) const {
     outMeshes.clear();
     outMeshes.reserve(m_units.size());
     for (const auto& [key, u] : m_units) {
-        if (u.mesh == 0) continue;
-        
+        if (!u.mesh) continue;                          // ← MeshPtr 空判断
+
         bool visible = true;
         for (const auto& p : frustum.planes) {
             glm::vec3 n = glm::vec3(p);
@@ -185,12 +184,8 @@ void LodManager::CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::c
     }
 }
 
-void LodManager::Clear(Eng::client::IRenderAPI* renderer) {
-    if (renderer) {
-        for (auto& [key, u] : m_units) {
-            if (u.mesh != 0) renderer->DestroyMesh(u.mesh);
-        }
-    }
+void LodManager::Clear() {
+    // m_units.clear() 会析构所有 MeshPtr → 触发 DestroyMeshInternal
     m_units.clear();
     m_pending.clear();
     {
