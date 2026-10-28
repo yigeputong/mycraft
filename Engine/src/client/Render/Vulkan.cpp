@@ -747,9 +747,53 @@ void VulkanAPI::SetClearColor(float r, float g, float b, float a) {
     m_clearColor[0] = r; m_clearColor[1] = g; m_clearColor[2] = b; m_clearColor[3] = a;
 }
 
-void VulkanAPI::Clear() {
-    m_clearPending = true;
-    ensureRenderPassActive();
+void VulkanAPI::Clear(ClearFlag flags) {
+    // 记录这次需要清理的 flags
+    m_clearPendingFlags |= static_cast<uint32_t>(flags);
+
+    if (m_renderPassActive) {
+        // 如果在渲染中途清理（比如画手之前清深度），使用 vkCmdClearAttachments
+        auto& cmd = m_commandBuffers[m_frameIndex];
+        vk::ClearAttachment clearAtts[2];
+        uint32_t count = 0;
+
+        if (static_cast<uint32_t>(flags) & static_cast<uint32_t>(ClearFlag::Color)) {
+            clearAtts[count].aspectMask = vk::ImageAspectFlagBits::eColor;
+            clearAtts[count].colorAttachment = 0;
+            clearAtts[count].clearValue.color = vk::ClearColorValue(m_clearColor[0], m_clearColor[1], m_clearColor[2], m_clearColor[3]);
+            count++;
+        }
+        if (static_cast<uint32_t>(flags) & static_cast<uint32_t>(ClearFlag::Depth)) {
+            clearAtts[count].aspectMask = vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+            clearAtts[count].colorAttachment = 0; 
+            clearAtts[count].clearValue.depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+            count++;
+        }
+
+        if (count > 0) {
+            // 构建要清理的附件数组（最多2个：Color 和 Depth）
+            std::array<vk::ClearAttachment, 2> attArray = { clearAtts[0], clearAtts[1] };
+            
+            // 构建清理区域
+            std::array<vk::ClearRect, 1> rectArray = {
+                vk::ClearRect{
+                    .rect = { .offset={.x=0, .y=0}, .extent=getCurrentRenderExtent() },
+                    .baseArrayLayer = 0,
+                    .layerCount = 1
+                }
+            };
+
+            // 使用 ArrayProxy 截断，只传有效的那几个附件（count 个）
+            cmd.clearAttachments(
+                vk::ArrayProxy<const vk::ClearAttachment>(count, attArray.data()), 
+                rectArray
+            );
+        }
+        
+        m_clearPendingFlags &= ~static_cast<uint32_t>(flags);
+    } else {
+        ensureRenderPassActive();
+    }
 }
 
 void VulkanAPI::SetViewMatrix(const glm::mat4& v)   { m_globalUBOData.view = v; }
@@ -797,7 +841,16 @@ void VulkanAPI::BeginFrame() {
 
     m_frameStarted     = true;
     m_renderPassActive = false;
-    m_clearPending     = true;
+}
+
+vk::Extent2D VulkanAPI::getCurrentRenderExtent() const {
+    if (m_pendingFramebuffer.handle != 0) {
+        auto fit = m_framebuffers.find(m_pendingFramebuffer.handle);
+        if (fit != m_framebuffers.end()) {
+            return vk::Extent2D{ static_cast<uint32_t>(fit->second.width), static_cast<uint32_t>(fit->second.height) };
+        }
+    }
+    return m_swapChainExtent;
 }
 
 void VulkanAPI::ensureRenderPassActive() {
@@ -836,7 +889,7 @@ void VulkanAPI::ensureRenderPassActive() {
         depthView = *m_depthImageView;
         extent    = m_swapChainExtent;
 
-        // ★ swapchain image：首次 Undefined，之后 PresentSrcKHR
+        // swapchain image：首次 Undefined，之后 PresentSrcKHR
         vk::ImageLayout oldLayout = m_swapChainFirstUse[m_imageIndex]
             ? vk::ImageLayout::eUndefined
             : vk::ImageLayout::ePresentSrcKHR;
@@ -848,28 +901,30 @@ void VulkanAPI::ensureRenderPassActive() {
             vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             vk::ImageAspectFlagBits::eColor);
-
-        // ★ depth 已经在 DepthAttachmentOptimal —— 无需 barrier
     }
 
-    vk::ClearValue clearColor{};
-    clearColor.color = vk::ClearColorValue(m_clearColor[0], m_clearColor[1],
+    // 根据位掩码判断是否需要清理颜色/深度
+    bool clearColor = (m_clearPendingFlags & static_cast<uint32_t>(ClearFlag::Color)) != 0;
+    bool clearDepth = (m_clearPendingFlags & static_cast<uint32_t>(ClearFlag::Depth)) != 0;
+
+    vk::ClearValue clearColorValue{};
+    clearColorValue.color = vk::ClearColorValue(m_clearColor[0], m_clearColor[1],
                                             m_clearColor[2], m_clearColor[3]);
-    vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
+    vk::ClearValue clearDepthValue = vk::ClearDepthStencilValue(1.0f, 0);
 
     vk::RenderingAttachmentInfo colorAtt{
         .imageView = colorView,
         .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .loadOp = m_clearPending ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
+        .loadOp = clearColor ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
         .storeOp = vk::AttachmentStoreOp::eStore,
-        .clearValue = clearColor
+        .clearValue = clearColorValue
     };
     vk::RenderingAttachmentInfo depthAtt{
         .imageView = depthView,
         .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eClear,
+        .loadOp = clearDepth ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
         .storeOp = vk::AttachmentStoreOp::eDontCare,
-        .clearValue = clearDepth
+        .clearValue = clearDepthValue
     };
     vk::RenderingInfo ri{
         .renderArea = { {0,0}, extent },
@@ -884,7 +939,11 @@ void VulkanAPI::ensureRenderPassActive() {
     cmd.setScissor(0, vk::Rect2D({0,0}, extent));
 
     m_renderPassActive = true;
-    m_clearPending = false;
+
+    // ★ 核心修改：清除已经被 loadOp 消耗掉的标志位
+    // 如果 Color/Depth 已清理，就把对应的位抹掉；Stencil 暂时不在这里处理
+    m_clearPendingFlags &= ~static_cast<uint32_t>(ClearFlag::Color);
+    m_clearPendingFlags &= ~static_cast<uint32_t>(ClearFlag::Depth);
 }
 
 void VulkanAPI::EndFrame() {
@@ -1061,13 +1120,11 @@ void VulkanAPI::DestroyMesh(MeshHandle h) {
     m_meshes.erase(it);
 }
 
-ShaderHandle VulkanAPI::CreateShader(const std::string& vertPath,
-                                      const std::string& fragPath) {
+ShaderHandle VulkanAPI::CreateShader(const std::string& vertPath, const std::string& fragPath) {
     return createShaderInternal(vertPath, fragPath, /*isSky=*/false);
 }
 
-ShaderHandle VulkanAPI::CreateSkybox(const std::string& vertPath,
-                                      const std::string& fragPath) {
+ShaderHandle VulkanAPI::CreateSkybox(const std::string& vertPath, const std::string& fragPath) {
     return createShaderInternal(vertPath, fragPath, /*isSky=*/true,
                                 "main", "main");
 }
@@ -2054,8 +2111,7 @@ void VulkanAPI::SetUniform(ShaderHandle, const std::string&, int) {}
 // ImGui 后端（动态渲染）
 // ============================================================
 
-bool VulkanAPI::InitImGuiBackend()
-{
+bool VulkanAPI::InitImGuiBackend() {
     if (m_imguiInitialized)
         return true;
 

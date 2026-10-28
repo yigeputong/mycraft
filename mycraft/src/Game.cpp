@@ -23,6 +23,49 @@ using json = nlohmann::json;
 
 namespace game {
 
+namespace {
+    void AppendBoxToMesh(glm::vec3 c, glm::vec3 size, int tile,
+                        std::vector<Eng::client::Vertex>& vertices,
+                        std::vector<uint32_t>& indices) {
+        const float x0 = c.x - size.x*0.5f, x1 = c.x + size.x*0.5f;
+        const float y0 = c.y - size.y*0.5f, y1 = c.y + size.y*0.5f;
+        const float z0 = c.z - size.z*0.5f, z1 = c.z + size.z*0.5f;
+
+        int tileRow = tile / client::ATLAS_COLS;
+        int tileCol = tile % client::ATLAS_COLS;
+        float u0 = tileCol * client::TILE_UV;
+        float v0 = tileRow * client::TILE_UV;
+
+        const glm::vec3 corners[8] = {
+            {x0,y0,z0},{x1,y0,z0},{x1,y0,z1},{x0,y0,z1},
+            {x0,y1,z0},{x1,y1,z0},{x1,y1,z1},{x0,y1,z1},
+        };
+        const int faces[6][4] = {
+            {1,5,6,2}, {3,7,4,0}, {7,6,5,4}, {0,1,2,3}, {3,2,6,7}, {0,4,5,1}
+        };
+        const glm::vec3 normals[6] = {
+            {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}
+        };
+        static constexpr float fuv[4][2] = {{0,0},{1,0},{1,1},{0,1}};
+
+        for (int f = 0; f < 6; ++f) {
+            uint32_t base = (uint32_t)vertices.size();
+            for (int k = 0; k < 4; ++k) {
+                Eng::client::Vertex v;
+                v.position = corners[faces[f][k]];
+                v.normal   = normals[f];
+                v.uv = { u0 + fuv[k][0]*client::TILE_UV,
+                        v0 + (1.0f - fuv[k][1])*client::TILE_UV };
+                v.ao = 1.0f;
+                v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+                vertices.push_back(v);
+            }
+            indices.push_back(base+0); indices.push_back(base+1); indices.push_back(base+2);
+            indices.push_back(base+2); indices.push_back(base+3); indices.push_back(base+0);
+        }
+    }
+}
+
 // ============================================================
 // OnStart 分阶段
 // ============================================================
@@ -438,6 +481,9 @@ void MyGame::OnRender(Eng::Engine& engine) {
     }
     renderer->BeginFrame();
 
+    // ==========================================
+    // Pass 1: 渲染主世界到 FBO
+    // ==========================================
     renderer->BindFramebuffer(fbo);
     renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     renderer->Clear();
@@ -461,71 +507,107 @@ void MyGame::OnRender(Eng::Engine& engine) {
 
         renderer->SetUniform(m_cubeShader, "uAOStrength", engine.GetConfig().render.m_aoStrength);
         
+        // 1~4 渲染世界、LOD、玩家、掉落物
         m_world.CollectVisibleMeshes(m_frustum, m_visibleChunkMeshes);
-        if (!m_visibleChunkMeshes.empty()) {
-            renderer->DrawMeshBatch(m_visibleChunkMeshes, m_cubeShader, mat);
-        }
+        if (!m_visibleChunkMeshes.empty()) renderer->DrawMeshBatch(m_visibleChunkMeshes, m_cubeShader, mat);
 
-        Eng::client::Material lodMat;
-        lodMat.diffuse = m_atlasTexture;
-
+        Eng::client::Material lodMat; lodMat.diffuse = m_atlasTexture;
         m_lodManager.CollectVisibleMeshes(m_frustum, m_visibleLodMeshes);
-        if (!m_visibleLodMeshes.empty()) {
-            renderer->DrawMeshBatch(m_visibleLodMeshes, m_lodShader, lodMat);
-        }
+        if (!m_visibleLodMeshes.empty()) renderer->DrawMeshBatch(m_visibleLodMeshes, m_lodShader, lodMat);
 
         if (m_playerMesh == 0) m_playerMesh = BuildPlayerMesh();
-        Eng::client::Material playerMat;
-        playerMat.diffuse = m_atlasTexture;
+        Eng::client::Material playerMat; playerMat.diffuse = m_atlasTexture;
         for (auto& [id, ps] : m_otherPlayers) {
-            glm::mat4 model = glm::mat4(1.0f);
-            model = glm::translate(model, ps.position);
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), ps.position);
             model = glm::rotate(model, ps.yaw, glm::vec3(0, 1, 0));
             renderer->SetModelMatrix(model);
             renderer->DrawMesh(m_playerMesh, m_cubeShader, playerMat);
         }
 
-        Eng::client::Material itemMat;
-        itemMat.diffuse = m_atlasTexture;
+        // 5. 渲染天空盒
+        renderer->SetUniform(m_skyShader, "uTimeOfDay", m_timeOfDay);
+        renderer->DrawSkybox(m_skyShader);
 
-        constexpr float BOUNCE_FREQ = 1.0f / 0.4f;
-        constexpr float BOUNCE_AMP  = 0.45f;
-        constexpr float XZ_RATIO    = 0.8f;
-        float t = m_animTime * BOUNCE_FREQ * 6.2831853f;
-        float sY  = 1.0f + BOUNCE_AMP * std::sin(t);
-        float sXZ = 1.0f - BOUNCE_AMP * XZ_RATIO * std::sin(t);
+        // 6. 渲染第一人称手臂（彻底固定，不随视角转动）
+        renderer->Clear(Eng::client::ClearFlag::Depth); 
+        if (m_handMesh == 0) m_handMesh = BuildHandMesh();
+        
+        // 保存主矩阵
+        glm::mat4 mainView = view;
+        glm::mat4 mainProj = projection;
+        glm::mat4 mainModel = glm::mat4(1.0f);
 
-        std::unordered_map<BlockType, std::vector<glm::mat4>> itemTransforms;
-        itemTransforms.reserve(m_itemEntities.size());
-
-        for (auto& [id, e] : m_itemEntities) {
-            glm::mat4 model = glm::mat4(1.0f);
-            model = glm::translate(model, e.renderPos);
-            model = model * glm::rotate(glm::mat4(1.0f), m_animTime * 2.0f, glm::vec3(0, 1, 0));
-            model = glm::scale(model, glm::vec3(sXZ * 0.3f, sY * 0.3f, sXZ * 0.3f));
-            itemTransforms[e.itemType].push_back(model);
+        // 1. 构建相机局部空间下的手部模型（固定在右下方）
+        glm::vec3 basePos(0.5f, -0.5f, -1.0f); // X偏右, Y偏下, Z向前(负方向)
+        
+        // 走路摇晃
+        if (m_walkDist > 0.0f) {
+            basePos.x += std::sin(m_walkDist) * 0.03f;
+            basePos.y -= std::abs(std::cos(m_walkDist)) * 0.03f;
+        }
+        // 挖掘挥手
+        if (m_swingProgress > 0.0f) {
+            float swing = std::sin(m_swingProgress * 3.14159f);
+            basePos.x -= swing * 0.15f; 
+            basePos.y -= swing * 0.15f; 
+            basePos.z += swing * 0.1f; 
         }
 
-        for (auto& [type, transforms] : itemTransforms) {
-            if (transforms.empty()) continue;
-            auto mesh = GetOrCreateItemMesh(type);
-            if (mesh != 0) {
-                renderer->DrawMeshInstanced(mesh, m_cubeShader, itemMat, transforms);
+        // 这里的局部模型只包含手自己的旋转，绝对不要加 yaw 和 pitch
+        glm::mat4 handLocalModel = glm::mat4(1.0f);
+        handLocalModel = glm::translate(handLocalModel, basePos);
+        handLocalModel = glm::rotate(handLocalModel, glm::radians(15.0f), glm::vec3(0, 1, 0));
+        handLocalModel = glm::rotate(handLocalModel, glm::radians(-20.0f), glm::vec3(1, 0, 0));
+        handLocalModel = glm::scale(handLocalModel, glm::vec3(0.5f));
+
+        // ★ 核心魔法：左乘 view 的逆矩阵，把手从相机空间“拉回”世界空间
+        // 此时引擎计算 projection * view * model，就变成了 projection * handLocalModel
+        glm::mat4 handModel = glm::inverse(view) * handLocalModel;
+
+        // 使用主相机矩阵渲染！
+        renderer->SetViewMatrix(view);
+        renderer->SetProjectionMatrix(projection);
+        renderer->SetModelMatrix(handModel);
+
+        Eng::client::Material handMat;
+        handMat.diffuse = m_atlasTexture;
+        renderer->DrawMesh(m_handMesh, m_cubeShader, handMat);
+
+        // 手持物品
+        auto& curSlot = m_hotbar[m_hotbarIndex];
+        if (!curSlot.isEmpty()) {
+            auto itemMesh = GetOrCreateItemMesh(curSlot.type);
+            if (itemMesh != 0) {
+                glm::mat4 itemLocalModel = handLocalModel;
+                itemLocalModel = glm::translate(itemLocalModel, glm::vec3(0.0f, 0.2f, -0.5f)); 
+                itemLocalModel = glm::scale(itemLocalModel, glm::vec3(0.5f));
+                
+                // 同样左乘逆矩阵
+                glm::mat4 itemModel = glm::inverse(view) * itemLocalModel;
+                
+                renderer->SetModelMatrix(itemModel);
+                renderer->DrawMesh(itemMesh, m_cubeShader, handMat);
             }
         }
 
-        renderer->SetUniform(m_skyShader, "uTimeOfDay", m_timeOfDay);
-        renderer->DrawSkybox(m_skyShader);
+        // 恢复主世界矩阵
+        renderer->SetViewMatrix(mainView);
+        renderer->SetProjectionMatrix(mainProj);
+        renderer->SetModelMatrix(mainModel);
     }
 
     renderer->UnbindFramebuffer();
     
+    // ==========================================
+    // Pass 2: 后处理 & UI -> 屏幕
+    // ==========================================
     renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    renderer->Clear();
+    renderer->Clear(Eng::client::ClearFlag::Color | Eng::client::ClearFlag::Depth);
 
+    // 先把 FBO 的结果画到屏幕上
     renderer->DrawFullscreenQuad(renderer->GetFramebufferTexture(fbo));
 
-    // ★ 完全交由 ClientUI 接管渲染
+    // 最后画 ImGui UI
     m_ui.Draw(engine, *this);
 
     renderer->EndFrame();
@@ -712,6 +794,21 @@ bool MyGame::GetInput(float dt) {
     w.Write(static_cast<uint8_t>(input.fly ? 1 : 0));
     m_client->Send(w.GetBuffer());
 
+    // 走路时累积步数
+    if (glm::length(moveDir) > 0.1f && m_playerOnGround) {
+        m_walkDist += dt * 10.0f;
+    } else {
+        m_walkDist = 0.0f;
+    }
+
+    // 挖掘挥手进度
+    if (wantDig && m_digCooldown > 0.0f) {
+        m_swingProgress += dt * 4.0f;
+        if (m_swingProgress > 1.0f) m_swingProgress = 0.0f;
+    } else {
+        m_swingProgress = 0.0f;
+    }
+
     return m_shouldQuit;
 }
 
@@ -875,52 +972,26 @@ Eng::client::MeshHandle MyGame::BuildPlayerMesh() {
     std::vector<Eng::client::Vertex> vertices;
     std::vector<uint32_t> indices;
 
-    auto addBox = [&](glm::vec3 c, glm::vec3 size, int tile) {
-        const float x0 = c.x - size.x*0.5f, x1 = c.x + size.x*0.5f;
-        const float y0 = c.y - size.y*0.5f, y1 = c.y + size.y*0.5f;
-        const float z0 = c.z - size.z*0.5f, z1 = c.z + size.z*0.5f;
+    // 直接复用 AppendBoxToMesh
+    AppendBoxToMesh({0.0f, 1.55f, 0.0f}, {0.5f, 0.5f, 0.5f}, 13, vertices, indices); // 头
+    AppendBoxToMesh({0.0f, 1.05f, 0.0f}, {0.5f, 0.5f, 0.25f}, 14, vertices, indices); // 身体
+    AppendBoxToMesh({-0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, 14, vertices, indices); // 左臂
+    AppendBoxToMesh({ 0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, 14, vertices, indices); // 右臂
+    AppendBoxToMesh({-0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, 15, vertices, indices); // 左腿
+    AppendBoxToMesh({ 0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, 15, vertices, indices); // 右腿
 
-        int tileRow = tile / client::ATLAS_COLS;
-        int tileCol = tile % client::ATLAS_COLS;
-        float u0 = tileCol * client::TILE_UV;
-        float v0 = tileRow * client::TILE_UV;
+    Eng::client::MeshData data;
+    data.vertices = std::move(vertices);
+    data.indices  = std::move(indices);
+    return renderer->CreateMesh(data);
+}
 
-        const glm::vec3 corners[8] = {
-            {x0,y0,z0},{x1,y0,z0},{x1,y0,z1},{x0,y0,z1},
-            {x0,y1,z0},{x1,y1,z0},{x1,y1,z1},{x0,y1,z1},
-        };
-        const int faces[6][4] = {
-            {1,5,6,2}, {3,7,4,0}, {7,6,5,4}, {0,1,2,3}, {3,2,6,7}, {0,4,5,1}
-        };
-        const glm::vec3 normals[6] = {
-            {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}
-        };
+Eng::client::MeshHandle MyGame::BuildHandMesh() {
+    std::vector<Eng::client::Vertex> vertices;
+    std::vector<uint32_t> indices;
 
-        static constexpr float fuv[4][2] = {{0,0},{1,0},{1,1},{0,1}};
-
-        for (int f = 0; f < 6; ++f) {
-            uint32_t base = (uint32_t)vertices.size();
-            for (int k = 0; k < 4; ++k) {
-                Eng::client::Vertex v;
-                v.position = corners[faces[f][k]];
-                v.normal   = normals[f];
-                v.uv = { u0 + fuv[k][0]*client::TILE_UV,
-                         v0 + (1.0f - fuv[k][1])*client::TILE_UV };
-                v.ao = 1.0f;
-                v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
-                vertices.push_back(v);
-            }
-            indices.push_back(base+0); indices.push_back(base+1); indices.push_back(base+2);
-            indices.push_back(base+2); indices.push_back(base+3); indices.push_back(base+0);
-        }
-    };
-
-    addBox({0.0f, 1.55f, 0.0f}, {0.5f, 0.5f, 0.5f}, 13);
-    addBox({0.0f, 1.05f, 0.0f}, {0.5f, 0.5f, 0.25f}, 14);
-    addBox({-0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, 14);
-    addBox({ 0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, 14);
-    addBox({-0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, 15);
-    addBox({ 0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, 15);
+    AppendBoxToMesh({0.0f, 0.0f, 0.0f}, {0.25f, 0.25f, 0.6f}, 14, vertices, indices);
+    AppendBoxToMesh({0.0f, 0.0f, -0.35f}, {0.25f, 0.25f, 0.2f}, 13, vertices, indices);
 
     Eng::client::MeshData data;
     data.vertices = std::move(vertices);

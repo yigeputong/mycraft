@@ -22,7 +22,7 @@ public:
     // 视口与清屏
     void SetViewport(int x, int y, int w, int h) override;
     void SetClearColor(float r, float g, float b, float a) override;
-    void Clear() override;
+    void Clear(ClearFlag flag = ClearFlag::All) override;
 
     // 矩阵设置
     void SetViewMatrix(const glm::mat4& view) override;

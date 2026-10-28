@@ -39,7 +39,7 @@ public:
     // ---- 视口 / 清屏 ----
     void SetViewport(int x, int y, int w, int h) override;
     void SetClearColor(float r, float g, float b, float a) override;
-    void Clear() override;
+    void Clear(ClearFlag flag = ClearFlag::All) override;
 
     // ---- 矩阵 / 光照 ----
     void SetViewMatrix(const glm::mat4& view) override;
@@ -234,7 +234,7 @@ private:
     GlobalUBOData m_globalUBOData{};
     glm::mat4     m_modelMatrix{ 1.0f };
     float         m_clearColor[4]    = { 0.0f, 0.0f, 0.0f, 1.0f };
-    bool          m_clearPending     = true;
+    uint32_t      m_clearPendingFlags = static_cast<uint32_t>(ClearFlag::All);
     bool          m_renderPassActive = false;
 
     Framebuffer m_pendingFramebuffer{};
@@ -301,6 +301,7 @@ private:
     void createGlobalDescriptors();
 
     // --- 渲染 ---
+    vk::Extent2D getCurrentRenderExtent() const;
     void ensureRenderPassActive();
 
     // --- Shader 工具 ---

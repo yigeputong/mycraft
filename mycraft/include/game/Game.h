@@ -107,6 +107,10 @@ private:
     // ==================== 渲染实体 ====================
     Eng::client::MeshHandle m_playerMesh = 0;
     Eng::client::MeshHandle BuildPlayerMesh();
+    Eng::client::MeshHandle m_handMesh = 0;
+    Eng::client::MeshHandle BuildHandMesh();
+    float m_swingProgress = 0.0f;   // 挖掘挥手进度 (0.0 到 1.0)
+    float m_walkDist = 0.0f;        // 步数累积，用于走路摇晃
 
     struct ClientItemEntity : game::PointEntity {
         uint32_t  id          = 0;

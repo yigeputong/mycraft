@@ -102,6 +102,20 @@ struct MaterialUBOData {
 };
 static_assert(sizeof(MaterialUBOData) == 16, "MaterialUBO size mismatch");
 
+enum class ClearFlag : std::uint32_t {
+    None    = 0,
+    Color   = 1 << 0,
+    Depth   = 1 << 1,
+    Stencil = 1 << 2,
+    All     = Color | Depth | Stencil
+};
+
+// 重载 | 运算符，方便组合
+inline ClearFlag operator|(ClearFlag a, ClearFlag b) {
+    return static_cast<ClearFlag>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
+
+
 class IRenderAPI {
 public:
     virtual ~IRenderAPI() = default;
@@ -113,7 +127,7 @@ public:
     // 视口与清屏
     virtual void SetViewport(int x, int y, int w, int h) = 0;
     virtual void SetClearColor(float r, float g, float b, float a) = 0;
-    virtual void Clear() = 0;
+    virtual void Clear(ClearFlag flag = ClearFlag::All) = 0;
 
     // 矩阵设置
     virtual void SetViewMatrix(const glm::mat4& view) = 0;

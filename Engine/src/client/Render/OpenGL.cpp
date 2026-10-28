@@ -159,8 +159,12 @@ void OpenGLAPI::SetClearColor(float r, float g, float b, float a) {
     glClearColor(r, g, b, a);
 }
 
-void OpenGLAPI::Clear() {
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+void OpenGLAPI::Clear(ClearFlag flags) {
+    GLbitfield mask = 0;
+    if (static_cast<uint32_t>(flags) & static_cast<uint32_t>(ClearFlag::Color))   mask |= GL_COLOR_BUFFER_BIT;
+    if (static_cast<uint32_t>(flags) & static_cast<uint32_t>(ClearFlag::Depth))   mask |= GL_DEPTH_BUFFER_BIT;
+    if (static_cast<uint32_t>(flags) & static_cast<uint32_t>(ClearFlag::Stencil)) mask |= GL_STENCIL_BUFFER_BIT;
+    glClear(mask);
 }
 
 // ---------- 矩阵设置 ----------
