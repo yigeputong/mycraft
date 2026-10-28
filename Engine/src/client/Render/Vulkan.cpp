@@ -2337,36 +2337,37 @@ void VulkanAPI::WaitIdle() {
 Eng::client::BackendAvailability VulkanAPI::Probe() {
     Eng::client::BackendAvailability r;
 
-    const char* dllName = "vulkan-1.dll";
-#ifdef __linux__
-    dllName = "libvulkan.so.1";
-#elif defined(__APPLE__)
-    dllName = "libvulkan.dylib";
-#endif
-
-    SDL_SharedObject* hMod = SDL_LoadObject(dllName);
-    if (!hMod) {
-        r.reason = std::format("Vulkan Runtime not installed ({} not found)", dllName);
+    // 使用 SDL 动态加载 Vulkan 运行库
+    if (!SDL_Vulkan_LoadLibrary(nullptr)) {
+        r.reason = std::string("Vulkan library not found: ") + SDL_GetError();
         return r;
     }
 
-    auto pfnEnum = (PFN_vkEnumerateInstanceVersion)SDL_LoadFunction(hMod, "vkEnumerateInstanceVersion");
+    // 获取函数指针查询 API 版本
+    auto getInstanceProcAddr = (PFN_vkGetInstanceProcAddr)SDL_Vulkan_GetVkGetInstanceProcAddr();
+    if (!getInstanceProcAddr) {
+        SDL_Vulkan_UnloadLibrary();
+        r.reason = "Failed to get vkGetInstanceProcAddr";
+        return r;
+    }
+
+    auto pfnEnum = (PFN_vkEnumerateInstanceVersion)getInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion");
     uint32_t apiVer = VK_API_VERSION_1_0;
     if (pfnEnum) pfnEnum(&apiVer);
-    
-    SDL_UnloadObject(hMod);
 
     uint32_t requiredMajor = VulkanAPI::api_major;
     uint32_t requiredMinor = VulkanAPI::api_minor;
     uint32_t requiredVersion = VK_MAKE_API_VERSION(0, requiredMajor, requiredMinor, 0);
 
     if (apiVer < requiredVersion) {
+        SDL_Vulkan_UnloadLibrary();
         r.reason = std::format("Vulkan Runtime too old ({}.{}.{}), need {}.{}",
             VK_VERSION_MAJOR(apiVer), VK_VERSION_MINOR(apiVer), VK_VERSION_PATCH(apiVer),
             requiredMajor, requiredMinor);
         return r;
     }
 
+    SDL_Vulkan_UnloadLibrary(); // 探测完毕，卸载
     r.available = true;
     return r;
 }
