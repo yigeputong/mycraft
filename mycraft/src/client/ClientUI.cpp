@@ -276,6 +276,7 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
     {
         auto& wcfg = game.mainWin->GetConfigs();
         auto& rcfg = engine.GetConfig().render;
+        auto& ecfg = engine.GetConfig().window;
 
         if (game.m_settingsTab == 0) {
             ImGui::Spacing();
@@ -317,7 +318,7 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
             // 图形 API 设置
             const char* apiDesc = "选择渲染使用的图形API。除非有特殊需求需要更改，否则请维持此设置为默认不变！";
             ImVec4 descColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f); 
-            if (wcfg.apitype == Eng::client::RenderAPItype::VULKAN) {
+            if (ecfg.apitype == Eng::client::RenderAPItype::VULKAN) {
                 apiDesc = "实验性设置。在部分系统上使用可能会降低性能或导致不稳定。";
                 descColor = ImVec4(1.0f, 0.6f, 0.2f, 1.0f);
             }
@@ -328,11 +329,12 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
             ImGui::Spacing();
 
             ImGui::Text("图形 API"); ImGui::SameLine(leftWidth * 1.2f);
-            ImGui::SetNextItemWidth(200.0f);
-            int currentApi = static_cast<int>(wcfg.apitype);
+            ImGui::SetNextItemWidth(300.0f);
+            int currentApi = static_cast<int>(ecfg.apitype);
             const char* apiItems[] = { "默认", "优先使用 OpenGL", "优先使用 Vulkan" };
             if (ImGui::Combo("##api", &currentApi, apiItems, IM_ARRAYSIZE(apiItems))) {
                 wcfg.apitype = static_cast<Eng::client::RenderAPItype>(currentApi);
+                engine.GetConfig().window.apitype = wcfg.apitype;
                 game.m_apiChanged = true;
             }
 
@@ -413,7 +415,6 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
     float startX = (io.DisplaySize.x - totalW) * 0.5f;
     float y = io.DisplaySize.y - SLOT - 20.0f;
     
-    // ★ 删掉这行：ImTextureID texId = game.renderer->GetImGuiTextureID(game.m_atlasTexture);
 
     for (int i = 0; i < MyGame::kHotbarSize; ++i) {
         float x = startX + i * (SLOT + GAP_ITEM);
@@ -426,9 +427,6 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         const auto& slot = game.m_hotbar[i];
         if (slot.isEmpty()) continue;
 
-        // ★ 删掉这里的 DrawIsometricBlock(...)
-        
-        // ★ 临时替代方案：画个带颜色的背景块 + 文字
         ImU32 itemColor = IM_COL32(150, 150, 150, 255); // 默认灰色
         if (slot.type == BlockType::Dirt) itemColor = IM_COL32(110, 75, 50, 255);
         else if (slot.type == BlockType::GrassBlock) itemColor = IM_COL32(88, 160, 70, 255);

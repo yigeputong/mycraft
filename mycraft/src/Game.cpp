@@ -197,9 +197,39 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
     if (dpiScale <= 0.0f) dpiScale = 1.0f;
     m_uiScale = dpiScale;
 
-    style.ScaleAllSizes(m_uiScale);
+        style.ScaleAllSizes(m_uiScale);
     ImGuiIO& io = ImGui::GetIO();
-    io.FontGlobalScale = m_uiScale;
+    
+    // 移除全局缩放，改为直接在加载时指定缩放尺寸，保证像素字体清晰
+    // io.FontGlobalScale = m_uiScale; 
+
+    // 配置所有字形（BMP 平面：0x0020 到 0xFFFF）
+    static const ImWchar allGlyphs[] = {
+        0x0020, 0xFFFF, // 包含所有基本字符、中文、符号
+        0
+    };
+
+    ImFontConfig fontConfig;
+    fontConfig.OversampleH = 1;   // 位图字体不需要过度采样
+    fontConfig.OversampleV = 1;
+    fontConfig.PixelSnapH = true; // 强制像素对齐，保持边缘锐利
+
+    // 按照 DPI 缩放后的实际尺寸加载 (Unifont 原生高度是 16)
+    float scaledFontSize = 16.0f * m_uiScale;
+
+    ImFont* unifont = io.Fonts->AddFontFromFileTTF(
+        "./assets/fonts/unifont-18.0.01.otf", 
+        scaledFontSize, 
+        &fontConfig, 
+        allGlyphs
+    );
+
+    if (!unifont) {
+        logError(logger, "[Game] Failed to load Unifont, falling back to default font.");
+        io.Fonts->AddFontDefault(); // 如果没找到字体文件，至少保证游戏不崩
+    } else {
+        logInfo(logger, "[Game] Loaded Unifont with all BMP glyphs at size " << scaledFontSize);
+    }
 
     // 图集纹理从 TextureAtlas.h 获取
     auto pixels = client::GenerateAtlasPixels();
