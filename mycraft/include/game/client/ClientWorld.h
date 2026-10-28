@@ -5,6 +5,7 @@
 #include <unordered_set>
 #include <vector>
 #include <functional>
+#include <memory>
 
 namespace game::client {
 
@@ -14,7 +15,7 @@ struct Frustum {
 };
 
 struct ClientChunk {
-    Chunk chunk;
+    std::shared_ptr<Chunk> chunk;
     Eng::client::MeshHandle mesh = 0;
     std::array<int16_t, 256> heights{};
     std::array<uint8_t, 256> topBlock{};

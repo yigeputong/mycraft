@@ -49,21 +49,20 @@ void MeshManager::Stop() {
     m_workers.clear();
 }
 
-void MeshManager::Submit(uint64_t key, const Chunk& chunk, const Chunk* nXm, const Chunk* nXp, const Chunk* nZm, const Chunk* nZp) {
+void MeshManager::Submit(uint64_t key, std::shared_ptr<Chunk> chunk, std::shared_ptr<Chunk> nXm, std::shared_ptr<Chunk> nXp, std::shared_ptr<Chunk> nZm, std::shared_ptr<Chunk> nZp) {
     {
         std::lock_guard lk(m_taskMutex);
-        // 如果已经在队列里了，直接抛弃，防止内存爆炸
         if (m_inflightTasks.count(key)) return; 
         m_inflightTasks.insert(key);
     }
     
     auto task = std::make_shared<MeshTask>();
     task->chunkKey = key;
-    task->chunk = chunk;
-    if (nXm) { task->nXm = *nXm; task->hasN[0] = true; }
-    if (nXp) { task->nXp = *nXp; task->hasN[1] = true; }
-    if (nZm) { task->nZm = *nZm; task->hasN[2] = true; }
-    if (nZp) { task->nZp = *nZp; task->hasN[3] = true; }
+    task->chunk = std::move(chunk);
+    task->nXm   = std::move(nXm);
+    task->nXp   = std::move(nXp);
+    task->nZm   = std::move(nZm);
+    task->nZp   = std::move(nZp);
 
     {
         std::lock_guard lk(m_taskMutex);
@@ -124,13 +123,17 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
     result.vertices.reserve(10000);
     result.indices.reserve(15000);
 
-    Chunk* pC  = &task.chunk;
-    Chunk* pXm = task.hasN[0] ? &task.nXm : nullptr;
-    Chunk* pXp = task.hasN[1] ? &task.nXp : nullptr;
-    Chunk* pZm = task.hasN[2] ? &task.nZm : nullptr;
-    Chunk* pZp = task.hasN[3] ? &task.nZp : nullptr;
+    // 使用 unique_ptr 在堆上分配局部副本，避免 1.6MB 对象撑爆线程栈
+    auto pC  = std::make_unique<Chunk>(*task.chunk);
+    auto pXm = task.nXm ? std::make_unique<Chunk>(*task.nXm) : nullptr;
+    auto pXp = task.nXp ? std::make_unique<Chunk>(*task.nXp) : nullptr;
+    auto pZm = task.nZm ? std::make_unique<Chunk>(*task.nZm) : nullptr;
+    auto pZp = task.nZp ? std::make_unique<Chunk>(*task.nZp) : nullptr;
 
-    LightEngine::InitRegion(*pC, pXm, pXp, pZm, pZp);
+    // 传 get() 拿到底层裸指针
+    LightEngine::InitRegion(*pC, pXm.get(), pXp.get(), pZm.get(), pZp.get());
+    
+    // 将算好的光照带回结果
     result.sky = pC->sky;
     result.block = pC->block;
 
@@ -143,18 +146,16 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
     auto getBlock = [&](int lx, int ly, int lz) -> BlockType {
         if (ly < 0 || ly >= CHUNK_SIZE_Y) return BlockType::Air;
         if (lx >= 0 && lx < CHUNK_SIZE_X && lz >= 0 && lz < CHUNK_SIZE_Z) return ChunkGet(chunk, lx, ly, lz);
-        const Chunk* n = nullptr; int nlx = lx, nlz = lz;
-        if      (lx < 0)             { n = pXm; nlx = lx + CHUNK_SIZE_X; }
-        else if (lx >= CHUNK_SIZE_X) { n = pXp; nlx = lx - CHUNK_SIZE_X; }
-        else if (lz < 0)             { n = pZm; nlz = lz + CHUNK_SIZE_Z; }
-        else if (lz >= CHUNK_SIZE_Z) { n = pZp; nlz = lz - CHUNK_SIZE_Z; }
+        
+        const Chunk* n = nullptr; 
+        int nlx = lx, nlz = lz;
+        if      (lx < 0)             { n = pXm.get(); nlx = lx + CHUNK_SIZE_X; }
+        else if (lx >= CHUNK_SIZE_X) { n = pXp.get(); nlx = lx - CHUNK_SIZE_X; }
+        else if (lz < 0)             { n = pZm.get(); nlz = lz + CHUNK_SIZE_Z; }
+        else if (lz >= CHUNK_SIZE_Z) { n = pZp.get(); nlz = lz - CHUNK_SIZE_Z; }
+        
         if (!n || nlx < 0 || nlx >= CHUNK_SIZE_X || nlz < 0 || nlz >= CHUNK_SIZE_Z) return BlockType::Air;
         return ChunkGet(*n, nlx, ly, nlz);
-    };
-
-    auto isSolidAt = [&](int lx, int ly, int lz) -> bool {
-        BlockType b = getBlock(lx, ly, lz);
-        return IsSolid(b);
     };
 
     auto getLightAt = [&](int wx, int wy, int wz) -> glm::vec4 {
@@ -164,16 +165,24 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
             idx = ChunkIndex(wx, wy, wz);
             return { chunk.sky[idx] / 15.0f, chunk.block[idx].r / 15.0f, chunk.block[idx].g / 15.0f, chunk.block[idx].b / 15.0f };
         }
-        const Chunk* n = nullptr; int nlx = wx, nlz = wz;
-        if (wx < 0) { n = pXm; nlx = wx + CHUNK_SIZE_X; }
-        else if (wx >= CHUNK_SIZE_X) { n = pXp; nlx = wx - CHUNK_SIZE_X; }
-        else if (wz < 0) { n = pZm; nlz = wz + CHUNK_SIZE_Z; }
-        else if (wz >= CHUNK_SIZE_Z) { n = pZp; nlz = wz - CHUNK_SIZE_Z; }
+        
+        const Chunk* n = nullptr; 
+        int nlx = wx, nlz = wz;
+        if (wx < 0) { n = pXm.get(); nlx = wx + CHUNK_SIZE_X; }
+        else if (wx >= CHUNK_SIZE_X) { n = pXp.get(); nlx = wx - CHUNK_SIZE_X; }
+        else if (wz < 0) { n = pZm.get(); nlz = wz + CHUNK_SIZE_Z; }
+        else if (wz >= CHUNK_SIZE_Z) { n = pZp.get(); nlz = wz - CHUNK_SIZE_Z; }
+        
         if (n && nlx >= 0 && nlx < CHUNK_SIZE_X && nlz >= 0 && nlz < CHUNK_SIZE_Z) {
             idx = ChunkIndex(nlx, wy, nlz);
             return { n->sky[idx] / 15.0f, n->block[idx].r / 15.0f, n->block[idx].g / 15.0f, n->block[idx].b / 15.0f };
         }
         return glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+    };
+
+    auto isSolidAt = [&](int lx, int ly, int lz) -> bool {
+        BlockType b = getBlock(lx, ly, lz);
+        return IsSolid(b);
     };
 
     for (int lx = 0; lx < CHUNK_SIZE_X; ++lx) {

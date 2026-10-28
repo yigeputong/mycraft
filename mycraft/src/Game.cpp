@@ -420,7 +420,7 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     auto dirtyKeys = m_world.FetchDirtyChunks(2);
     for (uint64_t key : dirtyKeys) {
         auto* cc = m_world.GetChunk(key);
-        if (cc) QueueChunkMeshTask(key, cc->chunk);
+        if (cc) QueueChunkMeshTask(key);
     }
 
     m_lodManager.Update(cameraPos, m_world, renderer);
@@ -973,9 +973,9 @@ void MyGame::AddToInventory(BlockType type, int count) {
 void MyGame::DrainMeshResults() {
     m_meshManager.DrainResults([this](game::client::MeshResult&& r) {
         auto* cc = m_world.GetChunk(r.chunkKey);
-        if (cc) {
-            cc->chunk.sky = r.sky;
-            cc->chunk.block = r.block;
+        if (cc && cc->chunk) {
+            cc->chunk->sky = r.sky;
+            cc->chunk->block = r.block;
 
             if (r.vertices.empty()) {
                 if (cc->mesh != 0) {
@@ -997,25 +997,27 @@ void MyGame::DrainMeshResults() {
     });
 }
 
-void MyGame::QueueChunkMeshTask(uint64_t key, const Chunk& chunk) {
-    int cx = chunk.chunk_x;
-    int cz = chunk.chunk_z;
+void MyGame::QueueChunkMeshTask(uint64_t key) {
+    auto* pC = m_world.GetChunk(key);
+    if (!pC || !pC->chunk) return;
 
-    const Chunk* nXm = nullptr;
-    const Chunk* nXp = nullptr;
-    const Chunk* nZm = nullptr;
-    const Chunk* nZp = nullptr;
+    int cx = pC->chunk->chunk_x;
+    int cz = pC->chunk->chunk_z;
 
     auto* cXm = m_world.GetChunk(ChunkKey(cx - 1, cz));
-    if (cXm) nXm = &cXm->chunk;
     auto* cXp = m_world.GetChunk(ChunkKey(cx + 1, cz));
-    if (cXp) nXp = &cXp->chunk;
     auto* cZm = m_world.GetChunk(ChunkKey(cx, cz - 1));
-    if (cZm) nZm = &cZm->chunk;
     auto* cZp = m_world.GetChunk(ChunkKey(cx, cz + 1));
-    if (cZp) nZp = &cZp->chunk;
 
-    m_meshManager.Submit(key, chunk, nXm, nXp, nZm, nZp);
+    // 直接传智能指针，不拷贝数据
+    m_meshManager.Submit(
+        key, 
+        pC->chunk, 
+        cXm ? cXm->chunk : nullptr, 
+        cXp ? cXp->chunk : nullptr, 
+        cZm ? cZm->chunk : nullptr, 
+        cZp ? cZp->chunk : nullptr
+    );
 }
 
 void MyGame::UpdateFrustum(const glm::mat4& vp) {

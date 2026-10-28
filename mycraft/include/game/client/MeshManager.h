@@ -14,9 +14,8 @@ namespace game::client {
 
 struct MeshTask {
     uint64_t chunkKey;
-    Chunk chunk;
-    Chunk nXm, nXp, nZm, nZp;
-    bool hasN[4] = {false, false, false, false};
+    std::shared_ptr<Chunk> chunk;
+    std::shared_ptr<Chunk> nXm, nXp, nZm, nZp;
 };
 
 struct MeshResult {
@@ -32,8 +31,9 @@ public:
     void Start();
     void Stop();
 
-    void Submit(uint64_t key, const Chunk& chunk, 
-                const Chunk* nXm, const Chunk* nXp, const Chunk* nZm, const Chunk* nZp);
+    void Submit(uint64_t key, std::shared_ptr<Chunk> chunk, 
+                         std::shared_ptr<Chunk> nXm, std::shared_ptr<Chunk> nXp, 
+                         std::shared_ptr<Chunk> nZm, std::shared_ptr<Chunk> nZp);
 
     void DrainResults(std::function<void(MeshResult&&)>&& onComplete);
 

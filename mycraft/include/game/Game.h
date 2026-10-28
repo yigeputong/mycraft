@@ -74,7 +74,7 @@ private:
 
     // ==================== 多线程 Mesh ====================
     client::MeshManager m_meshManager;
-    void QueueChunkMeshTask(uint64_t key, const Chunk& chunk);
+    void QueueChunkMeshTask(uint64_t key);
     void DrainMeshResults();
 
     // ==================== LOD 系统 ====================

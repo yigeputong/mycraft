@@ -21,9 +21,10 @@ static bool AabbInFrustum(const Frustum& f, const glm::vec3& mn, const glm::vec3
 
 void ClientWorld::AddChunk(int cx, int cz, const std::vector<uint8_t>& blocksData, Eng::client::MeshHandle mesh) {
     ClientChunk cc;
-    cc.chunk.chunk_x = cx;
-    cc.chunk.chunk_z = cz;
-    std::memcpy(cc.chunk.blocks.data(), blocksData.data(), CHUNK_VOLUME);
+    cc.chunk = std::make_shared<Chunk>(); // ★ 分配
+    cc.chunk->chunk_x = cx;
+    cc.chunk->chunk_z = cz;
+    std::memcpy(cc.chunk->blocks.data(), blocksData.data(), CHUNK_VOLUME);
     cc.mesh = mesh;
 
     // 计算高度图和 AABB
@@ -32,7 +33,7 @@ void ClientWorld::AddChunk(int cx, int cz, const std::vector<uint8_t>& blocksDat
             int topY = 0;
             uint8_t topB = 0;
             for (int y = CHUNK_SIZE_Y - 1; y >= 0; --y) {
-                BlockType b = ChunkGet(cc.chunk, lx, y, lz);
+                BlockType b = ChunkGet(*cc.chunk, lx, y, lz); // ★ 解引用
                 if (b != BlockType::Air && b != BlockType::Water) {
                     topY = y;
                     topB = (uint8_t)b;
@@ -56,7 +57,7 @@ void ClientWorld::SetBlock(int wx, int wy, int wz, BlockType type) {
     int lx = wx & 15, lz = wz & 15;
     auto it = m_chunks.find(ChunkKey(cx, cz));
     if (it != m_chunks.end()) {
-        ChunkSet(it->second.chunk, lx, wy, lz, type);
+        ChunkSet(*it->second.chunk, lx, wy, lz, type);
         MarkDirty(ChunkKey(cx, cz));
         if (lx == 0)  MarkDirty(ChunkKey(cx - 1, cz));
         if (lx == 15) MarkDirty(ChunkKey(cx + 1, cz));
@@ -71,7 +72,7 @@ BlockType ClientWorld::GetBlockAt(int wx, int wy, int wz) const {
     int lx = wx & 15, lz = wz & 15;
     auto it = m_chunks.find(ChunkKey(cx, cz));
     if (it == m_chunks.end()) return BlockType::Air;
-    return ChunkGet(it->second.chunk, lx, wy, lz);
+    return ChunkGet(*it->second.chunk, lx, wy, lz);
 }
 
 bool ClientWorld::IsSolidAt(int wx, int wy, int wz) const {
