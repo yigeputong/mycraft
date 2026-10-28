@@ -17,7 +17,7 @@ constexpr auto HashNoise = [](int x, int y, uint32_t seed) -> uint8_t {
 };
 
 struct TileSpec { uint8_t r, g, b; int noise; };
-constexpr std::array<TileSpec, 19> kTiles = {{
+constexpr std::array<TileSpec, 20> kTiles = {{
     {.r=128, .g=128, .b=128, .noise=30},    // 0 stone
     {.r= 88, .g=160, .b= 70, .noise=20},    // 1 grass_top
     {.r= 88, .g=160, .b= 70, .noise=20},    // 2 grass_side
@@ -36,7 +36,8 @@ constexpr std::array<TileSpec, 19> kTiles = {{
     {.r= 45, .g= 55, .b=110, .noise=20},    // 15 pants
     {.r= 88, .g=160, .b= 70, .noise=20},    // 16 TallGrass
     {.r=220, .g= 40, .b= 40, .noise=10},    // 17 FlowerRed
-    {.r=220, .g=200, .b= 40, .noise=10}     // 18 FlowerYellow
+    {.r=220, .g=200, .b= 40, .noise=10},    // 18 FlowerYellow
+    {.r=255, .g=200, .b= 50, .noise=10}     // 19 Torch
 }};
 
 std::vector<uint8_t> GenerateAtlasPixels() {
@@ -115,6 +116,13 @@ std::vector<uint8_t> GenerateAtlasPixels() {
                             px[i + 2] = 40; 
                             px[i + 3] = 255;
                         }
+                    } else if (t == 19) { // 火把
+                        // 简单画个居中的小木棍和火焰
+                        if (x >= 7 && x <= 8 && y >= 8) { // 木棍
+                            px[i + 0] = 139; px[i + 1] = 90; px[i + 2] = 43; px[i + 3] = 255;
+                        } else if (y < 8 && x >= 6 && x <= 9) { // 火焰
+                            px[i + 0] = 255; px[i + 1] = 200; px[i + 2] = 50; px[i + 3] = 255;
+                        }
                     }
                     continue; // 跳过下面的默认不透明赋值
                 }
@@ -132,46 +140,47 @@ std::vector<uint8_t> GenerateAtlasPixels() {
 
 // 方块 + 面朝向 -> 图集 tile 索引
 // face: 0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z
-int TileForBlock(game::BlockType b, int face) {
+int TileForBlock(BlockType b, int face) {
     switch (b) {
-        case game::BlockType::Stone:        return 0;
-        case game::BlockType::GrassBlock:
+        case BlockType::Stone:        return 0;
+        case BlockType::GrassBlock:
             if (face == 2) return 1;
             if (face == 3) return 3;
             return 2;
-        case game::BlockType::Dirt:         return 3;
-        case game::BlockType::Sand:         return 4;
-        case game::BlockType::Water:        return 5;
-        case game::BlockType::Snow:
+        case BlockType::Dirt:         return 3;
+        case BlockType::Sand:         return 4;
+        case BlockType::Water:        return 5;
+        case BlockType::Snow:
             // 顶=6（纯白）、底=3（土）、侧面=7
             if (face == 2) return 6;
             if (face == 3) return 3;
             return 7;
 
-        case game::BlockType::Sandstone:    return 8;
-        case game::BlockType::CoalOre:      return 9;
-        case game::BlockType::IronOre:      return 10;
-        case game::BlockType::Wood:         return 11;
-        case game::BlockType::Leaves:       return 12;
-        case game::BlockType::TallGrass:    return 16;
-        case game::BlockType::FlowerRed:    return 17;
-        case game::BlockType::FlowerYellow: return 18;
-        default:                            return 0;
+        case BlockType::Sandstone:    return 8;
+        case BlockType::CoalOre:      return 9;
+        case BlockType::IronOre:      return 10;
+        case BlockType::Wood:         return 11;
+        case BlockType::Leaves:       return 12;
+        case BlockType::TallGrass:    return 16;
+        case BlockType::FlowerRed:    return 17;
+        case BlockType::FlowerYellow: return 18;
+        case BlockType::Torch:        return 19;
+        default:                      return 0;
     }
 }
 
-const char* BlockName(game::BlockType t) {
+const char* BlockName(BlockType t) {
     switch (t) {
-        case game::BlockType::Stone:      return "Stone";
-        case game::BlockType::Dirt:       return "Dirt";
-        case game::BlockType::GrassBlock: return "Grass";
-        case game::BlockType::Sand:       return "Sand";
-        case game::BlockType::Water:      return "Water";
-        case game::BlockType::Snow:       return "Snow";
-        case game::BlockType::Wood:       return "Wood";
-        case game::BlockType::Leaves:     return "Leaves";
+        case BlockType::Stone:      return "Stone";
+        case BlockType::Dirt:       return "Dirt";
+        case BlockType::GrassBlock: return "Grass";
+        case BlockType::Sand:       return "Sand";
+        case BlockType::Water:      return "Water";
+        case BlockType::Snow:       return "Snow";
+        case BlockType::Wood:       return "Wood";
+        case BlockType::Leaves:     return "Leaves";
         default:                          return "Unknown";
     }
 }
 
-} // namespace game::client
+} // namespace client

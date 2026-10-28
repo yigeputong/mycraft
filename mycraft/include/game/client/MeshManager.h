@@ -8,6 +8,7 @@
 #include <memory>
 #include <atomic>
 #include <functional>
+#include <unordered_set>
 
 namespace game::client {
 
@@ -49,6 +50,8 @@ private:
 
     std::mutex                            m_resultMutex;
     std::queue<MeshResult>                m_resultQueue;
+
+    std::unordered_set<uint64_t>          m_inflightTasks;
 };
 
 } // namespace game::client

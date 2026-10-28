@@ -129,7 +129,7 @@ private:
     static constexpr int kHotbarSize = 4;
     int m_hotbarIndex = 0;
     std::array<game::ItemStack, kHotbarSize> m_hotbar = {{
-        game::MakeItemStack(BlockType::Stone,      64),
+        game::MakeItemStack(BlockType::Torch,      64),
         game::MakeItemStack(BlockType::Dirt,       64),
         game::MakeItemStack(BlockType::GrassBlock, 64),
         game::MakeItemStack(BlockType::Sand,       64),

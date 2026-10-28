@@ -10,6 +10,7 @@
 #include "game/core/Blocks.h"   
 #include "game/core/Physics.h"
 #include "game/client/TextureAtlas.h"
+#include "game/client/MeshBuilderUtils.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include <SDL3/SDL_timer.h>
@@ -733,11 +734,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             int cx = r.Read<int>();
             int cz = r.Read<int>();
             uint16_t sy = r.Read<uint16_t>();
-            if (sy != CHUNK_SIZE_Y) {
-                logInfo(logger, "[client] server CHUNK_SIZE_Y=" << static_cast<int>(sy)
-                        << " client=" << static_cast<int>(CHUNK_SIZE_Y) << ", reject chunk");
-                return;
-            }
+            if (sy != CHUNK_SIZE_Y) return;
 
             auto bytes = r.ReadBytes(CHUNK_VOLUME);
             std::vector<uint8_t> blockData(bytes.begin(), bytes.end());
@@ -745,7 +742,14 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             uint64_t key = ChunkKey(cx, cz);
             m_world.AddChunk(cx, cz, blockData, 0);
 
-            QueueChunkMeshTask(key, m_world.GetChunk(key)->chunk);
+            m_world.MarkDirty(key);
+            
+            // 邻居也打上脏标记
+            m_world.MarkDirty(ChunkKey(cx - 1, cz));
+            m_world.MarkDirty(ChunkKey(cx + 1, cz));
+            m_world.MarkDirty(ChunkKey(cx, cz - 1));
+            m_world.MarkDirty(ChunkKey(cx, cz + 1));
+
             break;
         }
 
@@ -833,63 +837,7 @@ Eng::client::MeshHandle MyGame::GetOrCreateItemMesh(BlockType type) {
 }
 
 Eng::client::MeshHandle MyGame::BuildItemCubeMesh(BlockType type) {
-    std::vector<Eng::client::Vertex> vertices;
-    std::vector<uint32_t> indices;
-
-    static constexpr float faceOffsets[6][4][3] = {
-        {{ 0.5f,-0.5f,-0.5f},{ 0.5f, 0.5f,-0.5f},{ 0.5f, 0.5f, 0.5f},{ 0.5f,-0.5f, 0.5f}},
-        {{-0.5f,-0.5f, 0.5f},{-0.5f, 0.5f, 0.5f},{-0.5f, 0.5f,-0.5f},{-0.5f,-0.5f,-0.5f}},
-        {{-0.5f, 0.5f, 0.5f},{ 0.5f, 0.5f, 0.5f},{ 0.5f, 0.5f,-0.5f},{-0.5f, 0.5f,-0.5f}},
-        {{-0.5f,-0.5f,-0.5f},{ 0.5f,-0.5f,-0.5f},{ 0.5f,-0.5f, 0.5f},{-0.5f,-0.5f, 0.5f}},
-        {{ 0.5f,-0.5f, 0.5f},{ 0.5f, 0.5f, 0.5f},{-0.5f, 0.5f, 0.5f},{-0.5f,-0.5f, 0.5f}},
-        {{-0.5f,-0.5f,-0.5f},{-0.5f, 0.5f,-0.5f},{ 0.5f, 0.5f,-0.5f},{ 0.5f,-0.5f,-0.5f}},
-    };
-    static constexpr int faceNormals[6][3] = {
-        { 1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}
-    };
-    static constexpr float faceUVs[4][2] = {
-        {0,0},{0,1},{1,1},{1,0}
-    };
-
-    for (int f = 0; f < 6; ++f) {
-        int tile = client::TileForBlock(type, f);
-        int tileRow = tile / client::ATLAS_COLS;
-        int tileCol = tile % client::ATLAS_COLS;
-        float u0 = tileCol * client::TILE_UV;
-        float v0 = tileRow * client::TILE_UV;
-
-        uint32_t baseIndex = (uint32_t)vertices.size();
-        for (int v = 0; v < 4; ++v) {
-            Eng::client::Vertex vert;
-            vert.position = {
-                (float)faceOffsets[f][v][0],
-                (float)faceOffsets[f][v][1],
-                (float)faceOffsets[f][v][2]
-            };
-            vert.normal = {
-                (float)faceNormals[f][0],
-                (float)faceNormals[f][1],
-                (float)faceNormals[f][2]
-            };
-            vert.uv = {
-                u0 + faceUVs[v][0] * client::TILE_UV,
-                v0 + (1.0f - faceUVs[v][1]) * client::TILE_UV
-            };
-            vert.ao = 1.0f;
-            vert.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
-            vertices.push_back(vert);
-        }
-        indices.push_back(baseIndex + 0);
-        indices.push_back(baseIndex + 1);
-        indices.push_back(baseIndex + 2);
-        indices.push_back(baseIndex + 2);
-        indices.push_back(baseIndex + 3);
-        indices.push_back(baseIndex + 0);
-    }
-
-    Eng::client::MeshData data;
-    data.vertices = vertices;
-    data.indices  = indices;
+    Eng::client::MeshData data = client::MeshBuilderUtils::BuildItemMeshData(type);
     return renderer->CreateMesh(data);
 }
 

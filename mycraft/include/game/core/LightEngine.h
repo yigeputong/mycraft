@@ -5,10 +5,11 @@
 namespace game {
 
 struct LightEmission { uint8_t r = 0, g = 0, b = 0; };
-inline LightEmission GetLightEmission(BlockType b) { 
-    (void)b;
+
+inline LightEmission GetLightEmission(BlockType b) {
+    if (b == BlockType::Torch) return {14, 10, 6}; // 暖色火把光
     return {0, 0, 0}; 
-} // 后续加火把在这里填
+}
 
 class LightEngine {
 public:

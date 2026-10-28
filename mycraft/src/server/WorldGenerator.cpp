@@ -433,14 +433,6 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
         }
     }
 
-    constexpr auto HashNoise = [](int x, int y, uint32_t seed) -> uint8_t {
-        uint32_t h = static_cast<uint32_t>(x) * 374761393u
-                + static_cast<uint32_t>(y) * 668265263u
-                + seed * 2246822519u;
-        h = (h ^ (h >> 13)) * 1274126177u;
-        return static_cast<uint8_t>((h ^ (h >> 16)) & 0xFF);
-    };
-
     // ---- 缓存每列 params（填充循环用）----
     static thread_local std::array<std::array<DensityParams, 16>, 16> params;
     for (int lx = 0; lx < 16; ++lx)
@@ -475,7 +467,6 @@ Chunk TerrainGenerator::GenerateChunk(int cx, int cz) const {
     };
 
     auto sampleDensity = [&](int lx, int ly, int lz) { return trilinear(grid,     lx, ly, lz); };
-    auto sampleCave    = [&](int lx, int ly, int lz) { return trilinear(caveGrid, lx, ly, lz); };
 
     // ---- 整列 density 缓存 ----
     static thread_local float colDensity[CHUNK_SIZE_Y];

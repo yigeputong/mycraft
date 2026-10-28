@@ -7,22 +7,34 @@ namespace game {
 enum BlockType : uint8_t {
     Air = 0,
     Stone, GrassBlock, Dirt, Sand, Water,
-    Snow,           // ★ 雪地顶层
-    Sandstone,      // ★ 砂岩
-    CoalOre,        // ★ 煤矿
-    IronOre,        // ★ 铁矿
-    Wood,           // ★ 木头
-    Leaves,         // ★ 树叶
-    TallGrass,      // ★ 高草丛
-    FlowerRed,      // ★ 红花
-    FlowerYellow,   // ★ 黄花
+    Snow,           // 雪地顶层
+    Sandstone,      // 砂岩
+    CoalOre,        // 煤矿
+    IronOre,        // 铁矿
+    Wood,           // 木头
+    Leaves,         // 树叶
+    TallGrass,      // 高草丛
+    FlowerRed,      // 红花
+    FlowerYellow,   // 黄花
+    Torch,          // 火把
     Void
 };
 
-inline bool IsSolid(BlockType t) {
+inline bool IsSolid(BlockType b) {
     // 草丛和花不是固体（允许玩家穿过，不遮挡相邻面）
-    return t != BlockType::Air && t != BlockType::Void && t != BlockType::Water &&
-           t != BlockType::TallGrass && t != BlockType::FlowerRed && t != BlockType::FlowerYellow;
+    return  b != BlockType::Air && b != BlockType::Water && b != BlockType::Void &&
+            b != BlockType::TallGrass && b != BlockType::FlowerRed && b != BlockType::FlowerYellow &&
+            b != BlockType::Torch;
+}
+
+inline bool IsPhysicsSolid(BlockType b) {
+    return b != BlockType::Air 
+        && b != BlockType::Water 
+        && b != BlockType::Void 
+        && b != BlockType::TallGrass 
+        && b != BlockType::FlowerRed 
+        && b != BlockType::FlowerYellow 
+        && b != BlockType::Torch;
 }
 
 struct Block {
@@ -30,7 +42,7 @@ struct Block {
 };
 
 // ==================== 组件类型 ====================
-enum class DataComponentType : std::uint16_t {
+enum class DataComponentType : std::uint8_t {
     MaxStackSize,   // int, 默认 64
     // 未来: Damage, MaxDamage, ToolType, AttackDamage, ...
 };

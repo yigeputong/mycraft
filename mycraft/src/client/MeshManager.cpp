@@ -1,5 +1,5 @@
 #include "game/client/MeshManager.h"
-#include "game/client/TextureAtlas.h"
+#include "game/client/MeshBuilderUtils.h"
 #include "game/core/LightEngine.h"
 #include <algorithm>
 
@@ -9,10 +9,6 @@ namespace game::client {
 // 内部辅助工具（消灭重复的 push_back）
 // ==========================================
 namespace {
-    Eng::client::Vertex MakeVertex(glm::vec3 pos, glm::vec3 normal, glm::vec2 uv, float ao, glm::vec4 light) {
-        return { pos, normal, uv, ao, light };
-    }
-
     void PushQuad(std::vector<Eng::client::Vertex>& vertices, std::vector<uint32_t>& indices,
                   const Eng::client::Vertex& v0, const Eng::client::Vertex& v1,
                   const Eng::client::Vertex& v2, const Eng::client::Vertex& v3,
@@ -25,22 +21,6 @@ namespace {
             indices.insert(indices.end(), { base+0, base+2, base+1, base+3, base+2, base+0 });
         }
     }
-
-    constexpr int faceNormals[6][3] = {
-        { 1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}
-    };
-    constexpr int faceOffsets[6][4][3] = {
-        {{1,0,0},{1,1,0},{1,1,1},{1,0,1}},
-        {{0,0,1},{0,1,1},{0,1,0},{0,0,0}},
-        {{0,1,1},{1,1,1},{1,1,0},{0,1,0}},
-        {{0,0,0},{1,0,0},{1,0,1},{0,0,1}},
-        {{1,0,1},{1,1,1},{0,1,1},{0,0,1}},
-        {{0,0,0},{0,1,0},{1,1,0},{1,0,0}},
-    };
-
-    constexpr float faceUVs[4][2] = {
-        {0,0},{0,1},{1,1},{1,0}
-    };
 } // namespace
 
 // ==========================================
@@ -69,8 +49,14 @@ void MeshManager::Stop() {
     m_workers.clear();
 }
 
-void MeshManager::Submit(uint64_t key, const Chunk& chunk,
-                         const Chunk* nXm, const Chunk* nXp, const Chunk* nZm, const Chunk* nZp) {
+void MeshManager::Submit(uint64_t key, const Chunk& chunk, const Chunk* nXm, const Chunk* nXp, const Chunk* nZm, const Chunk* nZp) {
+    {
+        std::lock_guard lk(m_taskMutex);
+        // 如果已经在队列里了，直接抛弃，防止内存爆炸
+        if (m_inflightTasks.count(key)) return; 
+        m_inflightTasks.insert(key);
+    }
+    
     auto task = std::make_shared<MeshTask>();
     task->chunkKey = key;
     task->chunk = chunk;
@@ -121,6 +107,11 @@ void MeshManager::WorkerLoop() {
             std::lock_guard lk(m_resultMutex);
             m_resultQueue.push(std::move(result));
         }
+        
+        {
+            std::lock_guard lk(m_taskMutex);
+            m_inflightTasks.erase(task->chunkKey);
+        }
     }
 }
 
@@ -163,8 +154,7 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
 
     auto isSolidAt = [&](int lx, int ly, int lz) -> bool {
         BlockType b = getBlock(lx, ly, lz);
-        return b != BlockType::Air && b != BlockType::Water && b != BlockType::Void &&
-               b != BlockType::TallGrass && b != BlockType::FlowerRed && b != BlockType::FlowerYellow;
+        return IsSolid(b);
     };
 
     auto getLightAt = [&](int wx, int wy, int wz) -> glm::vec4 {
@@ -192,71 +182,52 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                 BlockType type = ChunkGet(chunk, lx, ly, lz);
                 if (type == BlockType::Air || type == BlockType::Void) continue;
 
-                // --- 1. 十字植物 ---
-                if (type == BlockType::TallGrass || type == BlockType::FlowerRed || type == BlockType::FlowerYellow) {
-                    int tile = TileForBlock(type, 0);
-                    float u0 = (tile % ATLAS_COLS) * TILE_UV;
-                    float v0 = (tile / static_cast<float>(ATLAS_COLS)) * TILE_UV;
-                    float u1 = u0 + TILE_UV;
-                    float v1 = v0 + TILE_UV;
+                // --- 1.火把和植物 ---
+                if (type == BlockType::Torch || type == BlockType::TallGrass || type == BlockType::FlowerRed || type == BlockType::FlowerYellow) {
+                    glm::vec4 light;
+                    if (type == BlockType::Torch) {
+                        light = glm::vec4(0.0f, 1.0f, 0.6f, 0.2f); // 火把自发光
+                    } else {
+                        light = getLightAt(lx, ly, lz);             // 植物吃环境光
+                    }
+                    glm::vec3 center = { baseX + lx + 0.5f, (float)ly + 0.5f, baseZ + lz + 0.5f };
                     
-                    float x0 = baseX + lx + 0.15f, x1 = baseX + lx + 0.85f;
-                    float z0 = baseZ + lz + 0.15f, z1 = baseZ + lz + 0.85f;
-                    float y0 = (float)ly, y1 = (float)ly + 1.0f;
-                    glm::vec4 light(1.0f, 0.0f, 0.0f, 0.0f);
-
-                    // 原版 UV 直接对应坐标（左下、右下、右上、左上）
-                    PushQuad(result.vertices, result.indices,
-                        MakeVertex({x0, y0, z0}, {0,1,0}, {u0, v1}, 1.0f, light),
-                        MakeVertex({x1, y0, z1}, {0,1,0}, {u1, v1}, 1.0f, light),
-                        MakeVertex({x1, y1, z1}, {0,1,0}, {u1, v0}, 1.0f, light),
-                        MakeVertex({x0, y1, z0}, {0,1,0}, {u0, v0}, 1.0f, light), true);
-                    
-                    PushQuad(result.vertices, result.indices,
-                        MakeVertex({x0, y0, z1}, {0,1,0}, {u0, v1}, 1.0f, light),
-                        MakeVertex({x1, y0, z0}, {0,1,0}, {u1, v1}, 1.0f, light),
-                        MakeVertex({x1, y1, z0}, {0,1,0}, {u1, v0}, 1.0f, light),
-                        MakeVertex({x0, y1, z1}, {0,1,0}, {u0, v0}, 1.0f, light), true);
+                    MeshBuilderUtils::AppendSprite(type, center, light, result.vertices, result.indices);
                     continue;
                 }
 
                 // --- 2. 普通方块 ---
+                glm::vec3 center = { baseX + lx + 0.5f, ly + 0.5f, baseZ + lz + 0.5f };
+                auto faces = MeshBuilderUtils::GetBlockFaces(type, center);
+
                 for (int f = 0; f < 6; ++f) {
-                    int nx = lx + faceNormals[f][0];
-                    int ny = ly + faceNormals[f][1];
-                    int nz = lz + faceNormals[f][2];
+                    glm::ivec3 N = faces[f].normal;
+                    int nx = lx + N.x;
+                    int ny = ly + N.y;
+                    int nz = lz + N.z;
                     BlockType neighbor = getBlock(nx, ny, nz);
 
                     if (IsSolid(neighbor)) continue;
                     if (type == BlockType::Water && neighbor == BlockType::Water) continue;
 
-                    int N_axis = (faceNormals[f][0] != 0) ? 0 : (faceNormals[f][1] != 0) ? 1 : 2;
-                    int U_axis = (N_axis + 1) % 3;
-                    int V_axis = (N_axis + 2) % 3;
-                    glm::ivec3 N(faceNormals[f][0], faceNormals[f][1], faceNormals[f][2]);
-                    
-                    int tile = TileForBlock(type, f);
-                    int tileRow = tile / ATLAS_COLS;
-                    int tileCol = tile % ATLAS_COLS;
-                    float u0 = static_cast<float>(tileCol) * TILE_UV;
-                    float v0 = static_cast<float>(tileRow) * TILE_UV;
-
-                    Eng::client::Vertex verts[4];
-
                     for (int v = 0; v < 4; ++v) {
-                        float yPos = (float)ly + faceOffsets[f][v][1];
-                        if (type == BlockType::Water && faceOffsets[f][v][1] == 1) yPos = (float)ly + 0.9f;
+                        // 处理水面高度
+                        if (type == BlockType::Water && faces[f].verts[v].position.y > ly + 0.01f) {
+                            faces[f].verts[v].position.y = (float)ly + 0.9f;
+                        }
+
+                        // 拿回 U、V 轴
+                        glm::ivec3 U(0), V(0);
+                        U[faces[f].u_axis] = faces[f].du[v]; 
+                        V[faces[f].v_axis] = faces[f].dv[v];
 
                         // AO 计算
-                        int du = (faceOffsets[f][v][U_axis] == 0) ? -1 : +1;
-                        int dv = (faceOffsets[f][v][V_axis] == 0) ? -1 : +1;
-                        glm::ivec3 U(0), V(0);
-                        U[U_axis] = du; V[V_axis] = dv;
                         int s1 = isSolidAt(lx + N.x + U.x, ly + N.y + U.y, lz + N.z + U.z) ? 1 : 0;
                         int s2 = isSolidAt(lx + N.x + V.x, ly + N.y + V.y, lz + N.z + V.z) ? 1 : 0;
                         int sc = isSolidAt(lx + N.x + U.x + V.x, ly + N.y + U.y + V.y, lz + N.z + U.z + V.z) ? 1 : 0;
                         float ao = (s1 && s2) ? 0.4f : 1.0f - 0.2f * static_cast<float>(s1 + s2 + sc);
                         if (type == BlockType::Water) ao = 1.0f;
+                        faces[f].verts[v].ao = ao;
 
                         // 平滑光照采样
                         glm::ivec3 pO(lx + N.x, ly + N.y, lz + N.z);
@@ -266,20 +237,12 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                                          getLightAt(pO.x + U.x + V.x, pO.y + U.y + V.y, pO.z + U.z + V.z);
                         glm::vec4 light = sumL / 4.0f;
                         if (type == BlockType::Water) light = glm::vec4(1.0f);
-
-                        // ★ 完全照抄原版的 UV 计算
-                        glm::vec2 uv = {
-                            u0 + faceUVs[v][0] * TILE_UV,
-                            v0 + (1.0f - faceUVs[v][1]) * TILE_UV
-                        };
-
-                        verts[v] = MakeVertex(
-                            { baseX + lx + faceOffsets[f][v][0], yPos, baseZ + lz + faceOffsets[f][v][2] },
-                            { (float)faceNormals[f][0], (float)faceNormals[f][1], (float)faceNormals[f][2] },
-                            uv, ao, light
-                        );
+                        faces[f].verts[v].light = light;
                     }
-                    PushQuad(result.vertices, result.indices, verts[0], verts[1], verts[2], verts[3]);
+                    
+                    // 推送计算好后的顶点
+                    PushQuad(result.vertices, result.indices, 
+                             faces[f].verts[0], faces[f].verts[1], faces[f].verts[2], faces[f].verts[3]);
                 }
             }
         }

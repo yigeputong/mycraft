@@ -638,7 +638,7 @@ bool GameServer::AABBCollides(const glm::vec3& pos) const {
 
 bool GameServer::IsSolidAt(int wx, int wy, int wz) const {
     BlockType b = GetBlockAt(wx, wy, wz);
-    return b != BlockType::Air && b != BlockType::Water;
+    return IsPhysicsSolid(b);
 }
 
 void GameServer::BroadcastWorldState() {

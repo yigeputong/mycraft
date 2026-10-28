@@ -76,7 +76,7 @@ BlockType ClientWorld::GetBlockAt(int wx, int wy, int wz) const {
 
 bool ClientWorld::IsSolidAt(int wx, int wy, int wz) const {
     BlockType b = GetBlockAt(wx, wy, wz);
-    return b != BlockType::Air && b != BlockType::Water;
+    return IsPhysicsSolid(b);
 }
 
 void ClientWorld::MarkDirty(uint64_t key) {
