@@ -40,6 +40,7 @@ add_library(engine-client STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Input.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Window.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/WindowManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/AssetManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/OpenGL.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/Vulkan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/VMAImpl.cpp

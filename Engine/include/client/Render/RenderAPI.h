@@ -264,20 +264,14 @@ public:
     /** \brief 创建网格。 */
     virtual MeshPtr CreateMesh(const MeshData& data) = 0;
 
-    /** \brief 从本地文件加载纹理。 */
-    virtual TexturePtr CreateTexture(const std::string& path) = 0;
-
     /** \brief 从内存像素创建纹理。 */
-    virtual TexturePtr CreateTextureFromPixels(const uint8_t* rgba, int w, int h) = 0;
+    virtual TexturePtr CreateTexture(const uint8_t* rgba, int w, int h) = 0;
 
     /** \brief 创建着色器。 */
     virtual ShaderPtr CreateShader(const ShaderCreateInfo& info) = 0;
 
     /** \brief 创建帧缓冲。 */
     virtual FramebufferPtr CreateFramebuffer(const FramebufferCreateInfo& info) = 0;
-
-    /** \brief 加载外部模型（内部会自动处理纹理内嵌与材质解析）。 */
-    virtual Model LoadModel(const std::string& path, bool flipUV = false) = 0;
 
     // ==================== 帧渲染控制 ====================
     

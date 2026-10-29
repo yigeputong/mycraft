@@ -282,7 +282,7 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
 
     // —— 图集纹理（TexturePtr）——
     auto pixels = client::GenerateAtlasPixels();
-    m_atlasTexture = renderer->CreateTextureFromPixels(pixels.data(), client::ATLAS_W, client::ATLAS_H);
+    m_atlasTexture = renderer->CreateTexture(pixels.data(), client::ATLAS_W, client::ATLAS_H);
     if (!m_atlasTexture) {
         logError(logger, "[MyGame] Failed to create atlas texture");
         return false;

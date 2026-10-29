@@ -41,11 +41,9 @@ public:
     void SetGlobalState(const GlobalState& state) override;
 
     MeshPtr CreateMesh(const MeshData& data) override;
-    TexturePtr CreateTexture(const std::string& path) override;
-    TexturePtr CreateTextureFromPixels(const uint8_t* rgba, int w, int h) override;
+    TexturePtr CreateTexture(const uint8_t* rgba, int w, int h) override;
     ShaderPtr CreateShader(const ShaderCreateInfo& info) override;
     FramebufferPtr CreateFramebuffer(const FramebufferCreateInfo& info) override;
-    Model LoadModel(const std::string& path, bool flipUV = false) override;
 
     void BindFramebuffer(const FramebufferPtr& fb) override;
     void UnbindFramebuffer() override;
@@ -131,7 +129,6 @@ private:
     std::unordered_map<ShaderHandle, ShaderInternal>           m_shaders;
     std::unordered_map<TextureHandle, TextureInternal>         m_textures;
     std::unordered_map<FramebufferHandle, FramebufferInternal> m_framebuffers;
-    std::unordered_map<std::string, TextureHandle>             m_textureCache;
     std::unordered_map<FramebufferHandle, TextureHandle>       m_fbColorHandles;
 
     uint32_t m_nextMesh        = 1;

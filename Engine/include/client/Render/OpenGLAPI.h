@@ -27,11 +27,9 @@ public:
 
     // 资源创建
     MeshPtr CreateMesh(const MeshData& data) override;
-    TexturePtr CreateTexture(const std::string& path) override;
-    TexturePtr CreateTextureFromPixels(const uint8_t* rgba, int w, int h) override;
+    TexturePtr CreateTexture(const uint8_t* rgba, int w, int h) override;
     ShaderPtr CreateShader(const ShaderCreateInfo& info) override;
     FramebufferPtr CreateFramebuffer(const FramebufferCreateInfo& info) override;
-    Model LoadModel(const std::string& path, bool flipUV = false) override;
 
     // FBO
     void BindFramebuffer(const FramebufferPtr& fb) override;
@@ -103,7 +101,6 @@ private:
 
     std::unordered_map<MeshHandle,        MeshDataInternal>    m_meshes;
     std::unordered_map<TextureHandle,     TextureDataInternal> m_textures;
-    std::unordered_map<std::string,       TextureHandle>       m_textureCache;
     std::unordered_map<ShaderHandle,      ShaderDataInternal>  m_shaders;
     std::unordered_map<FramebufferHandle, FramebufferInternal> m_framebuffers;
     std::unordered_map<FramebufferHandle, TextureHandle>       m_fbColorHandles;
@@ -132,8 +129,7 @@ private:
 
     // 内部辅助
     MeshHandle CreateMeshInternal(const MeshData& data);
-    TextureHandle CreateTextureInternal(const std::string& path);
-    TextureHandle CreateTextureFromPixelsInternal(const uint8_t* rgba, int w, int h);
+    TextureHandle CreateTextureInternal(const uint8_t* rgba, int w, int h);
     ShaderHandle CreateShaderInternal(const ShaderCreateInfo& info);
     FramebufferHandle CreateFramebufferInternal(int width, int height);
 

@@ -4,7 +4,6 @@
 
 #include <SDL3/SDL_pixels.h>
 #include <iostream>
-#include <filesystem>
 #include <vector>
 #include <fstream>
 #include <sstream>
@@ -77,7 +76,6 @@ void OpenGLAPI::Initialize(int width, int height, Window* window) {
     // 默认纹理（使用内部句柄函数，避免生成 Ptr ）
     m_defaultTexture = m_nextTextureHandle++;
     m_textures[m_defaultTexture] = { 0, 0, 0, GL_RGBA }; // 占位
-    // 实际这里通常会加载一个 missing_texture.png，这里简化处理
 
     glGenBuffers(1, &m_globalUBO);
     glBindBuffer(GL_UNIFORM_BUFFER, m_globalUBO);
@@ -255,44 +253,16 @@ MeshPtr OpenGLAPI::CreateMesh(const MeshData& data) {
     });
 }
 
-TextureHandle OpenGLAPI::CreateTextureInternal(const std::string& path) {
-    auto it = m_textureCache.find(path);
-    if (it != m_textureCache.end()) return it->second;
-
-    SDL_Surface* surf = IMG_Load(path.c_str());
-    if (!surf) return 0;
-
-    SDL_Surface* converted = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_RGBA32);
-    SDL_DestroySurface(surf);
-    if (!converted) return 0;
-
-    GLuint textureID;
-    glCreateTextures(GL_TEXTURE_2D, 1, &textureID);
-    glTextureStorage2D(textureID, 1, GL_RGBA8, converted->w, converted->h);
-    glTextureSubImage2D(textureID, 0, 0, 0, converted->w, converted->h, GL_RGBA, GL_UNSIGNED_BYTE, converted->pixels);
-    glTextureParameteri(textureID, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTextureParameteri(textureID, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTextureParameteri(textureID, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
-    glTextureParameteri(textureID, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glGenerateTextureMipmap(textureID);
-
-    TextureHandle handle = m_nextTextureHandle++;
-    m_textures[handle] = { textureID, converted->w, converted->h, GL_RGBA };
-    m_textureCache[path] = handle;
-    SDL_DestroySurface(converted);
-    return handle;
-}
-
-TexturePtr OpenGLAPI::CreateTexture(const std::string& path) {
-    TextureHandle h = CreateTextureInternal(path);
-    if (h == 0) return nullptr;
-    return TexturePtr(new Texture(h), [this](Texture* t) {
+TexturePtr OpenGLAPI::CreateTexture(const uint8_t* rgba, int w, int h) {
+    TextureHandle th = CreateTextureInternal(rgba, w, h);
+    if (th == 0) return nullptr;
+    return TexturePtr(new Texture(th), [this](Texture* t) {
         this->DestroyTextureInternal(t->GetHandle());
         delete t;
     });
 }
 
-TextureHandle OpenGLAPI::CreateTextureFromPixelsInternal(const uint8_t* rgba, int w, int h) {
+TextureHandle OpenGLAPI::CreateTextureInternal(const uint8_t* rgba, int w, int h) {
     GLuint tex;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
@@ -306,15 +276,6 @@ TextureHandle OpenGLAPI::CreateTextureFromPixelsInternal(const uint8_t* rgba, in
     TextureHandle handle = m_nextTextureHandle++;
     m_textures[handle] = { tex, w, h, GL_RGBA };
     return handle;
-}
-
-TexturePtr OpenGLAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int h) {
-    TextureHandle th = CreateTextureFromPixelsInternal(rgba, w, h);
-    if (th == 0) return nullptr;
-    return TexturePtr(new Texture(th), [this](Texture* t) {
-        this->DestroyTextureInternal(t->GetHandle());
-        delete t;
-    });
 }
 
 ShaderHandle OpenGLAPI::CreateShaderInternal(const ShaderCreateInfo& info) {
@@ -356,63 +317,6 @@ ShaderPtr OpenGLAPI::CreateShader(const ShaderCreateInfo& info) {
         this->DestroyShaderInternal(s->GetHandle());
         delete s;
     });
-}
-
-Model OpenGLAPI::LoadModel(const std::string& path, bool flipUV) {
-    Model result;
-    Assimp::Importer importer;
-    unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_JoinIdenticalVertices | aiProcess_OptimizeMeshes | aiProcess_PreTransformVertices;
-    if (flipUV) flags |= aiProcess_FlipUVs;
-
-    const aiScene* scene = importer.ReadFile(path, flags);
-    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) return result;
-
-    std::filesystem::path modelDir = std::filesystem::path(path).parent_path();
-    std::unordered_map<std::string, TexturePtr> texCache;
-
-    for (unsigned int m = 0; m < scene->mNumMeshes; ++m) {
-        aiMesh* mesh = scene->mMeshes[m];
-        std::vector<Vertex> vertices;
-        for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
-            Vertex v;
-            v.position = glm::vec3(mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z);
-            v.normal = mesh->mNormals ? glm::vec3(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z) : glm::vec3(0, 1, 0);
-            v.uv = mesh->mTextureCoords[0] ? glm::vec2(mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y) : glm::vec2(0);
-            vertices.push_back(v);
-        }
-
-        std::vector<uint32_t> indices;
-        for (unsigned int f = 0; f < mesh->mNumFaces; ++f)
-            for (unsigned int j = 0; j < mesh->mFaces[f].mNumIndices; ++j)
-                indices.push_back(mesh->mFaces[f].mIndices[j]);
-
-        if (vertices.empty() || indices.empty()) continue;
-
-        MeshData md{ vertices, indices };
-        MeshPtr meshPtr = CreateMesh(md);
-        if (!meshPtr) continue;
-
-        TexturePtr diffuseTex = nullptr;
-        if (mesh->mMaterialIndex < scene->mNumMaterials) {
-            aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
-            aiString texPath;
-            if (material->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS) {
-                std::string texKey = texPath.C_Str();
-                auto cacheIt = texCache.find(texKey);
-                if (cacheIt != texCache.end()) {
-                    diffuseTex = cacheIt->second;
-                } else {
-                    std::filesystem::path fullTexPath = modelDir / texKey;
-                    if (std::filesystem::exists(fullTexPath)) {
-                        diffuseTex = CreateTexture(fullTexPath.string());
-                    }
-                    texCache[texKey] = diffuseTex;
-                }
-            }
-        }
-        result.subMeshes.push_back({ meshPtr, diffuseTex });
-    }
-    return result;
 }
 
 FramebufferHandle OpenGLAPI::CreateFramebufferInternal(int width, int height) {

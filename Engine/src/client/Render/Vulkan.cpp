@@ -21,7 +21,6 @@
 #include <array>
 #include <limits>
 #include <algorithm>
-#include <filesystem>
 
 namespace Eng::client {
 
@@ -77,7 +76,7 @@ void VulkanAPI::Initialize(int /*width*/, int /*height*/, Window* window) {
 
     // 创建默认白色纹理（1x1）防止空绑定
     uint8_t white[4] = {255, 255, 255, 255};
-    TexturePtr defaultTexPtr = CreateTextureFromPixels(white, 1, 1);
+    TexturePtr defaultTexPtr = CreateTexture(white, 1, 1);
     m_defaultTexture = defaultTexPtr->GetHandle();
 }
 
@@ -123,7 +122,6 @@ void VulkanAPI::Shutdown() {
         }
     }
     m_textures.clear();
-    m_textureCache.clear();
 
     // Mesh：三个 buffer 都是 VMA 分配
     for (auto& [h, mi] : m_meshes) {
@@ -185,7 +183,6 @@ void VulkanAPI::DestroyTextureInternal(TextureHandle h) {
         vmaDestroyImage(m_allocator, it->second.image, it->second.alloc);
     }
     m_textures.erase(it);
-    std::erase_if(m_textureCache, [h](auto& kv) { return kv.second == h; });
 }
 
 void VulkanAPI::DestroyShaderInternal(ShaderHandle h) {
@@ -280,29 +277,7 @@ MeshHandle VulkanAPI::CreateMeshInternal(const MeshData& data) {
     return h;
 }
 
-TexturePtr VulkanAPI::CreateTexture(const std::string& path) {
-    auto it = m_textureCache.find(path);
-    TextureHandle h = 0;
-    if (it != m_textureCache.end()) {
-        h = it->second;
-    } else {
-        SDL_Surface* loaded = IMG_Load(path.c_str());
-        if (!loaded) return nullptr;
-        SDL_Surface* surf = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32);
-        SDL_DestroySurface(loaded);
-        if (!surf) return nullptr;
-        h = CreateTextureInternal(static_cast<const uint8_t*>(surf->pixels), surf->w, surf->h);
-        SDL_DestroySurface(surf);
-        m_textureCache[path] = h;
-    }
-    if (h == 0) return nullptr;
-    return TexturePtr(new Texture(h), [this](Texture* t) {
-        this->DestroyTextureInternal(t->GetHandle());
-        delete t;
-    });
-}
-
-TexturePtr VulkanAPI::CreateTextureFromPixels(const uint8_t* rgba, int w, int h) {
+TexturePtr VulkanAPI::CreateTexture(const uint8_t* rgba, int w, int h) {
     TextureHandle th = CreateTextureInternal(rgba, w, h);
     if (th == 0) return nullptr;
     return TexturePtr(new Texture(th), [this](Texture* t) {
@@ -599,78 +574,6 @@ FramebufferInternal fbi{ .width = width, .height = height };
     
     m_fbColorHandles[fh] = texHandle;
     return fh;
-}
-
-Model VulkanAPI::LoadModel(const std::string& path, bool flipUV) {
-    Model result;
-    Assimp::Importer importer;
-    unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_JoinIdenticalVertices | aiProcess_OptimizeMeshes | aiProcess_PreTransformVertices;
-    if (flipUV) flags |= aiProcess_FlipUVs;
-
-    const aiScene* scene = importer.ReadFile(path, flags);
-    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) return result;
-
-    std::filesystem::path modelDir = std::filesystem::path(path).parent_path();
-    std::unordered_map<std::string, TexturePtr> texCache;
-
-    for (unsigned int m = 0; m < scene->mNumMeshes; ++m) {
-        aiMesh* mesh = scene->mMeshes[m];
-        std::vector<Vertex> vertices;
-        for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
-            Vertex v;
-            v.position = glm::vec3(mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z);
-            v.normal = mesh->mNormals ? glm::vec3(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z) : glm::vec3(0, 1, 0);
-            v.uv = mesh->mTextureCoords[0] ? glm::vec2(mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y) : glm::vec2(0);
-            vertices.push_back(v);
-        }
-        std::vector<uint32_t> indices;
-        for (unsigned int f = 0; f < mesh->mNumFaces; ++f)
-            for (unsigned int j = 0; j < mesh->mFaces[f].mNumIndices; ++j)
-                indices.push_back(mesh->mFaces[f].mIndices[j]);
-
-        if (vertices.empty() || indices.empty()) continue;
-
-        MeshData md{ vertices, indices };
-        MeshPtr meshPtr = CreateMesh(md);
-        if (!meshPtr) continue;
-
-        TexturePtr diffuseTex = nullptr;
-        if (mesh->mMaterialIndex < scene->mNumMaterials) {
-            aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
-            aiString texPath;
-            if (material->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS) {
-                std::string texKey = texPath.C_Str();
-                auto cacheIt = texCache.find(texKey);
-                if (cacheIt != texCache.end()) {
-                    diffuseTex = cacheIt->second;
-                } else {
-                    const aiTexture* embedded = scene->GetEmbeddedTexture(texKey.c_str());
-                    if (embedded && embedded->mHeight > 0) {
-                        diffuseTex = CreateTextureFromPixels(reinterpret_cast<const uint8_t*>(embedded->pcData), embedded->mWidth, embedded->mHeight);
-                    } else if (embedded) {
-                        SDL_IOStream* io = SDL_IOFromMem(const_cast<void*>(reinterpret_cast<const void*>(embedded->pcData)), embedded->mWidth);
-                        if (io) {
-                            SDL_Surface* surf = IMG_Load_IO(io, true);
-                            if (surf) {
-                                SDL_Surface* converted = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_RGBA32);
-                                if (converted) {
-                                    diffuseTex = CreateTextureFromPixels(static_cast<const uint8_t*>(converted->pixels), converted->w, converted->h);
-                                    SDL_DestroySurface(converted);
-                                }
-                                SDL_DestroySurface(surf);
-                            }
-                        }
-                    } else {
-                        std::filesystem::path fullTexPath = modelDir / texKey;
-                        if (std::filesystem::exists(fullTexPath)) diffuseTex = CreateTexture(fullTexPath.string());
-                    }
-                    texCache[texKey] = diffuseTex;
-                }
-            }
-        }
-        result.subMeshes.push_back({ meshPtr, diffuseTex });
-    }
-    return result;
 }
 
 // ============================================================
