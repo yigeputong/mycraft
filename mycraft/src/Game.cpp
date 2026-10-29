@@ -166,12 +166,8 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
         Eng::client::Input::Get().ProcessEvent(e);
         switch (e.type) {
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-                // 直接覆盖：旧 fbo 在赋值瞬间析构，无需手动 Destroy
                 if (renderer) {
-                    fbo = renderer->CreateFramebuffer({
-                        .width  = e.window.data1,
-                        .height = e.window.data2
-                    });
+                    RecreateFBOs(e.window.data1, e.window.data2);
                 }
                 break;
             case SDL_EVENT_WINDOW_MINIMIZED:
@@ -191,6 +187,22 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
     Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), false);
     m_relativeMode = false;
     return true;
+}
+
+void MyGame::RecreateFBOs(int w, int h) {
+    if (w <= 0 || h <= 0) return;
+    int halfW = std::max(1, w / 2);
+    int halfH = std::max(1, h / 2);
+
+    m_hdrFbo = renderer->CreateFramebuffer({
+        .width = w, .height = h, .hasDepth = true, .isHDR = true
+    });
+    m_bloomFbo1 = renderer->CreateFramebuffer({
+        .width = halfW, .height = halfH, .hasDepth = false, .isHDR = true
+    });
+    m_bloomFbo2 = renderer->CreateFramebuffer({
+        .width = halfW, .height = halfH, .hasDepth = false, .isHDR = true
+    });
 }
 
 bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
@@ -290,11 +302,8 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
     logInfo(logger, "[MyGame] atlas texture created");
 
     // —— FBO（FramebufferPtr）——
-    fbo = renderer->CreateFramebuffer({
-        .width  = mainWin->GetConfigs().windowWidth,
-        .height = mainWin->GetConfigs().windowHeight
-    });
-    if (!fbo || !fbo->GetColorTexture()) {
+    RecreateFBOs(mainWin->GetConfigs().windowPixelWidth, mainWin->GetConfigs().windowPixelHeight);
+    if (!m_hdrFbo || !m_bloomFbo1 || !m_bloomFbo2) {
         logError(logger, "[Game] FBO creation failed!");
         return false;
     }
@@ -306,9 +315,25 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
 // Shader
 // ============================================================
 void MyGame::SetupShaders() {
+    // ★ 修复 1：使用 CreateShaderByName 并传入路径
     m_cubeShader = CreateShaderByName("mesh", false);
     m_skyShader  = CreateShaderByName("sky",  true);
     m_lodShader  = CreateShaderByName("lod",  false);
+
+    const std::string ext  = m_useVulkan ? ".vk.spv" : ".gl.spv";
+    auto loadPostShader = [&](const std::string& name) -> Eng::client::ShaderPtr {
+        Eng::client::ShaderCreateInfo ci;
+        ci.vertPath = "./assets/shaders/build/" + name + "/vert" + ext;
+        ci.fragPath = "./assets/shaders/build/" + name + "/frag" + ext;
+        ci.isPostProcess = true; 
+        // ★ 修复 2：bloom_extract 和 blur 渲染到 HDR FBO，composite 渲染到屏幕
+        ci.renderToHDR = (name != "composite"); 
+        return renderer->CreateShader(ci);
+    };
+
+    m_bloomExtractShader = loadPostShader("bloom_extract");
+    m_blurShader         = loadPostShader("blur");
+    m_compositeShader    = loadPostShader("composite");
 }
 
 Eng::client::ShaderPtr MyGame::CreateShaderByName(const std::string& name, bool isSky) {
@@ -319,14 +344,13 @@ Eng::client::ShaderPtr MyGame::CreateShaderByName(const std::string& name, bool 
     ci.vertPath = base + "vert" + ext;
     ci.fragPath = base + "frag" + ext;
     ci.isSky    = isSky;
+    ci.renderToHDR = true; 
 
     if (isSky) {
-        // 天空盒：不写深度，避免污染后续手部渲染
         ci.depthTest    = true;
         ci.depthWrite   = false;
         ci.blendEnabled = false;
     } else {
-        // 地形 / LOD / 手部：标准深度配置
         ci.depthTest    = true;
         ci.depthWrite   = true;
         ci.blendEnabled = false;
@@ -524,7 +548,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
         m_applyPending = false;
     }
 
-    // 1) 计算 view / projection（仅 Playing 状态更新）
+    // 1) 计算 view / projection
     if (m_state == GameState::Playing) {
         glm::vec3 eye = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
         view = glm::lookAt(eye, eye + cameraFront, cameraUp);
@@ -535,7 +559,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
         UpdateFrustum(projection * view);
     }
 
-    // 2) 组装 GlobalState（必须在 BeginFrame 之前）
+    // 2) 组装 GlobalState
     m_globalState.view        = view;
     m_globalState.projection  = projection;
     m_globalState.viewPos     = cameraPos;
@@ -546,9 +570,9 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->BeginFrame();
 
     // ==========================================
-    // Pass 1: 主世界 → FBO
+    // Pass 1: 主世界 → HDR FBO
     // ==========================================
-    renderer->BindFramebuffer(fbo);
+    renderer->BindFramebuffer(m_hdrFbo);
     renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     renderer->Clear();
 
@@ -578,22 +602,16 @@ void MyGame::OnRender(Eng::Engine& engine) {
             std::unordered_map<BlockType, std::vector<glm::mat4>> instances;
             for (const auto& [id, e] : m_itemEntities) {
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), e.renderPos);
-                // 缓慢旋转
                 model = glm::rotate(model, m_animTime * 2.0f, glm::vec3(0, 1, 0));
-                // 上下浮动 + 一个基础偏移（防止贴着地面）
                 model = glm::translate(model, glm::vec3(0.0f, std::sin(m_animTime * 3.0f + e.id * 0.5f) * 0.1f + 0.1f, 0.0f));
-                // 掉落物缩放
                 model = glm::scale(model, glm::vec3(0.25f));
-                
                 instances[e.itemType].push_back(model);
             }
 
             Eng::client::Material itemMat; itemMat.diffuse = m_atlasTexture;
             for (const auto& [type, transforms] : instances) {
                 auto mesh = GetOrCreateItemMesh(type);
-                if (mesh) {
-                    renderer->DrawMeshInstanced(mesh, m_cubeShader, itemMat, transforms);
-                }
+                if (mesh) renderer->DrawMeshInstanced(mesh, m_cubeShader, itemMat, transforms);
             }
         }
 
@@ -621,8 +639,6 @@ void MyGame::OnRender(Eng::Engine& engine) {
         handLocalModel = glm::rotate(handLocalModel, glm::radians(15.0f), glm::vec3(0, 1, 0));
         handLocalModel = glm::rotate(handLocalModel, glm::radians(-20.0f), glm::vec3(1, 0, 0));
         handLocalModel = glm::scale(handLocalModel, glm::vec3(0.5f));
-
-        // inverse(view) * localModel：把手从相机空间拉回世界空间，绕开 Vulkan Y 翻转
         glm::mat4 handModel = glm::inverse(view) * handLocalModel;
 
         Eng::client::Material handMat; handMat.diffuse = m_atlasTexture;
@@ -645,13 +661,55 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->UnbindFramebuffer();
 
     // ==========================================
-    // Pass 2: 后处理 & UI → 屏幕
+    // Pass 2: 提取高光 (Bloom Extract)
+    // ==========================================
+    renderer->BindFramebuffer(m_bloomFbo1);
+    renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    renderer->Clear();
+    Eng::client::PostProcessParams extractParams;
+    extractParams.threshold = 1.2f; // 可调节发光阈值
+    renderer->DrawPostProcess(m_bloomExtractShader, extractParams, { m_hdrFbo->GetColorTexture() });
+    renderer->UnbindFramebuffer();
+
+    // ==========================================
+    // Pass 3: 横向模糊 (Horizontal Blur)
+    // ==========================================
+    renderer->BindFramebuffer(m_bloomFbo2);
+    renderer->Clear();
+    Eng::client::PostProcessParams blurHParams;
+    blurHParams.direction = glm::vec2(1.0f / m_bloomFbo1->GetWidth(), 0.0f);
+    renderer->DrawPostProcess(m_blurShader, blurHParams, { m_bloomFbo1->GetColorTexture() });
+    renderer->UnbindFramebuffer();
+
+    // ==========================================
+    // Pass 4: 纵向模糊 (Vertical Blur)
+    // ==========================================
+    renderer->BindFramebuffer(m_bloomFbo1);
+    renderer->Clear();
+    Eng::client::PostProcessParams blurVParams;
+    blurVParams.direction = glm::vec2(0.0f, 1.0f / m_bloomFbo2->GetHeight());
+    renderer->DrawPostProcess(m_blurShader, blurVParams, { m_bloomFbo2->GetColorTexture() });
+    renderer->UnbindFramebuffer();
+
+    // ==========================================
+    // Pass 5: 最终合成 → 屏幕
     // ==========================================
     renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     renderer->Clear(Eng::client::ClearFlag::Color | Eng::client::ClearFlag::Depth);
+    
+    Eng::client::PostProcessParams compParams;
+    compParams.exposure      = 0.6f; // 曝光度
+    compParams.bloomStrength = 0.5f; // 泛光强度
+    
+    // 传两张纹理：第一个是原场景，第二个是模糊后的高光
+    renderer->DrawPostProcess(m_compositeShader, compParams, { 
+        m_hdrFbo->GetColorTexture(), 
+        m_bloomFbo1->GetColorTexture() 
+    });
 
-    renderer->DrawFullscreenQuad(fbo->GetColorTexture());
-
+    // ==========================================
+    // UI 渲染
+    // ==========================================
     m_ui.Draw(engine, *this);
 
     renderer->EndFrame();
@@ -709,24 +767,27 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
         safeRenderer->ShutdownImGuiBackend();
     }
 
-    // 必须在 renderer 销毁前，强制清理所有 MeshPtr
-    // 否则 MyGame 析构时会触发悬空指针的 DestroyMeshInternal
     m_visibleChunkMeshes.clear();
     m_visibleLodMeshes.clear();
     m_playerMesh.reset();
     m_handMesh.reset();
     m_itemMeshCache.clear();
-    m_world.Clear();         // 清理 ClientWorld 内的 chunk->mesh
+    m_world.Clear();
     m_itemEntities.clear();
     m_otherPlayers.clear();
     m_meshManager.Stop();
 
-    // 清理其他资源
+    m_hdrFbo.reset();
+    m_bloomFbo1.reset();
+    m_bloomFbo2.reset();
+    m_bloomExtractShader.reset();
+    m_blurShader.reset();
+    m_compositeShader.reset();
+
     m_cubeShader.reset();
     m_skyShader.reset();
     m_lodShader.reset();
     m_atlasTexture.reset();
-    fbo.reset();
 
     renderer = nullptr;
     mainWin = nullptr;
@@ -754,11 +815,7 @@ bool MyGame::GetInput(float dt) {
         configs.fullscreen = !configs.fullscreen;
         mainWin->SetFullscreen(configs.fullscreen);
 
-        // 直接覆盖：旧 FBO 在赋值瞬间析构
-        fbo = renderer->CreateFramebuffer({
-            .width  = mainWin->GetConfigs().windowPixelWidth,
-            .height = mainWin->GetConfigs().windowPixelHeight
-        });
+        RecreateFBOs(mainWin->GetConfigs().windowPixelWidth, mainWin->GetConfigs().windowPixelHeight);
     }
 
     if (Input::IsKeyPressed(KeyCode::F3)) {

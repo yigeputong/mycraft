@@ -209,10 +209,21 @@ struct ShaderCreateInfo {
     std::string vertEntry = "main";          /**< SPIR-V 入口点 */
     std::string fragEntry = "main";          /**< SPIR-V 入口点 */
     bool isSky = false;                      /**< 是否为天空盒（关闭面剔除等） */
+    bool isPostProcess = false;
+    bool renderToHDR = false;
     bool depthTest = true;                   /**< 是否开启深度测试 */
     bool depthWrite = true;                  /**< 是否写入深度 */
     bool blendEnabled = true;                /**< 是否开启透明混合 */
     std::vector<std::pair<std::string, std::string>> defines; /**< 预编译宏 */
+};
+
+struct PostProcessParams {
+    float threshold = 1.0f;
+    float exposure = 1.0f;
+    float bloomStrength = 0.8f;
+    float padding1 = 0.0f;
+    glm::vec2 direction = glm::vec2(0.0f);
+    glm::vec2 padding2 = glm::vec2(0.0f);
 };
 
 /** \brief 帧缓冲创建配置。 */
@@ -306,6 +317,13 @@ public:
 
     /** \brief 绘制全屏四边形（后处理）。 */
     virtual void DrawFullscreenQuad(const TexturePtr& texture) = 0;
+
+    /** \brief 绘制后处理特效（自动处理纹理绑定和参数传递） */
+    virtual void DrawPostProcess(
+        const ShaderPtr& shader, 
+        const PostProcessParams& params, 
+        const std::vector<TexturePtr>& inputTextures
+    ) = 0;
 
     // ==================== Uniform 数据传递 ====================
     virtual void SetUniform(const ShaderPtr& shader, const std::string& name, const glm::mat4& value) = 0;

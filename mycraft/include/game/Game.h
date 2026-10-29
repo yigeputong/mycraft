@@ -41,12 +41,20 @@ private:
     // —— 资源全部改成智能指针，生命周期自动管理 ——
     Eng::client::ShaderPtr      m_cubeShader;
     Eng::client::TexturePtr     m_atlasTexture;
-    Eng::client::FramebufferPtr fbo;
     Eng::client::ShaderPtr      m_skyShader;
     Eng::client::ShaderPtr      m_lodShader;
     Eng::client::DeviceInfo     m_deviceInfo;
 
-    // —— 全局渲染状态聚合（替代旧 SetViewMatrix/SetProjectionMatrix/SetLight* 系列）——
+    Eng::client::FramebufferPtr m_hdrFbo;     
+    Eng::client::FramebufferPtr m_bloomFbo1;  
+    Eng::client::FramebufferPtr m_bloomFbo2;  
+
+    Eng::client::ShaderPtr m_bloomExtractShader;
+    Eng::client::ShaderPtr m_blurShader;
+    Eng::client::ShaderPtr m_compositeShader;
+
+    void RecreateFBOs(int w, int h);
+
     Eng::client::GlobalState    m_globalState;
 
     enum class GameState : std::uint8_t {

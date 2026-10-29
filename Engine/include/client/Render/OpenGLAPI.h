@@ -43,6 +43,11 @@ public:
     void DrawMeshBatch(const std::vector<MeshPtr>& meshes, const ShaderPtr& shader, const Material& mat) override;
     void DrawSkybox(const ShaderPtr& shader) override;
     void DrawFullscreenQuad(const TexturePtr& texture) override;
+    void DrawPostProcess(
+        const ShaderPtr& shader, 
+        const PostProcessParams& params, 
+        const std::vector<TexturePtr>& inputTextures
+    ) override;
 
     // Uniform
     void SetUniform(const ShaderPtr& shader, const std::string& name, const glm::mat4& value) override;
@@ -130,7 +135,7 @@ private:
     MeshHandle CreateMeshInternal(const MeshData& data);
     TextureHandle CreateTextureInternal(const uint8_t* rgba, int w, int h);
     ShaderHandle CreateShaderInternal(const ShaderCreateInfo& info);
-    FramebufferHandle CreateFramebufferInternal(int width, int height);
+    FramebufferHandle CreateFramebufferInternal(const FramebufferCreateInfo& info);
 
     void DestroyMeshInternal(MeshHandle handle);
     void DestroyTextureInternal(TextureHandle handle);

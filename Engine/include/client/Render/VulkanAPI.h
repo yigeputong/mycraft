@@ -58,6 +58,11 @@ public:
     void DrawMeshBatch(const std::vector<MeshPtr>& meshes, const ShaderPtr& shader, const Material& mat) override;
     void DrawSkybox(const ShaderPtr& shader) override;
     void DrawFullscreenQuad(const TexturePtr& texture) override;
+    void DrawPostProcess(
+        const ShaderPtr& shader, 
+        const PostProcessParams& params, 
+        const std::vector<TexturePtr>& inputTextures
+    ) override;
 
     bool InitImGuiBackend() override;
     void ShutdownImGuiBackend() override;
@@ -115,14 +120,13 @@ private:
     struct FramebufferInternal {
         VkImage               colorImage   = VK_NULL_HANDLE;
         VmaAllocation         colorAlloc   = VK_NULL_HANDLE;
-        vk::raii::ImageView   colorView    = nullptr;
-        vk::raii::Sampler     colorSampler = nullptr;
         VkImage               depthImage   = VK_NULL_HANDLE;
         VmaAllocation         depthAlloc   = VK_NULL_HANDLE;
         vk::raii::ImageView   depthView    = nullptr;
         TextureHandle         colorHandle  = 0;
         int                   width        = 0;
         int                   height       = 0;
+        bool                  hasDepth     = false;
     };
 
     std::unordered_map<MeshHandle, MeshInternal>               m_meshes;
@@ -130,6 +134,7 @@ private:
     std::unordered_map<TextureHandle, TextureInternal>         m_textures;
     std::unordered_map<FramebufferHandle, FramebufferInternal> m_framebuffers;
     std::unordered_map<FramebufferHandle, TextureHandle>       m_fbColorHandles;
+    std::unordered_map<uint64_t, vk::raii::DescriptorSet> m_postProcessSets;
 
     uint32_t m_nextMesh        = 1;
     uint32_t m_nextShader      = 1;
@@ -139,6 +144,7 @@ private:
     TexturePtr m_defaultTexturePtr = nullptr;
 
     Window*                          m_window         = nullptr;
+    vk::raii::Context                m_context;
     vk::raii::Instance               m_instance       = nullptr;
     vk::raii::DebugUtilsMessengerEXT m_debugMessenger = nullptr;
     vk::raii::PhysicalDevice         m_physicalDevice = nullptr;
@@ -199,6 +205,8 @@ private:
     uint32_t      m_clearPendingFlags = static_cast<uint32_t>(ClearFlag::All);
     bool          m_renderPassActive = false;
 
+    bool m_isShutdown = false;
+
     FramebufferPtr m_pendingFramebuffer = nullptr;
 
     RenderConfig m_renderConfig;
@@ -253,14 +261,14 @@ private:
     vk::Extent2D getCurrentRenderExtent() const;
     void ensureRenderPassActive();
 
-    static std::vector<char> readFile(const std::string& filename);
+    std::vector<char> readFile(const std::string& filename);
     [[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char>& code) const;
     
     // 底层实际创建的逻辑，返回 handle
     MeshHandle CreateMeshInternal(const MeshData& data);
     TextureHandle CreateTextureInternal(const uint8_t* rgba, int w, int h);
     ShaderHandle CreateShaderInternal(const ShaderCreateInfo& info);
-    FramebufferHandle CreateFramebufferInternal(int width, int height);
+    FramebufferHandle CreateFramebufferInternal(const FramebufferCreateInfo& info);
 };
 
 } // namespace Eng::client

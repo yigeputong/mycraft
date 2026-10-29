@@ -345,14 +345,14 @@ ShaderPtr OpenGLAPI::CreateShader(const ShaderCreateInfo& info) {
     });
 }
 
-FramebufferHandle OpenGLAPI::CreateFramebufferInternal(int width, int height) {
+FramebufferHandle OpenGLAPI::CreateFramebufferInternal(const FramebufferCreateInfo& info) {
     if (!m_fullscreenShader) {
-        ShaderCreateInfo info{};
-info.vertPath = "./assets/shaders/build/post/vert.gl.spv";
-info.fragPath = "./assets/shaders/build/post/frag.gl.spv";
-        m_fullscreenShader = CreateShader(info);
+        ShaderCreateInfo shaderInfo{};
+        shaderInfo.vertPath = "./assets/shaders/build/post/vert.gl.spv";
+        shaderInfo.fragPath = "./assets/shaders/build/post/frag.gl.spv";
+        shaderInfo.isPostProcess = true;
+        m_fullscreenShader = CreateShader(shaderInfo);
     }
-
     if (m_fullscreenVAO == 0) {
         static constexpr float vertices[] = {
             -1.0f,  1.0f,   0.0f, 1.0f,  -1.0f, -1.0f,   0.0f, 0.0f,
@@ -371,31 +371,37 @@ info.fragPath = "./assets/shaders/build/post/frag.gl.spv";
         glEnableVertexArrayAttrib(m_fullscreenVAO, 1);
     }
 
-    GLuint fbo, colorTex, depthBuf;
+    GLuint fbo, colorTex;
     glCreateFramebuffers(1, &fbo);
     glCreateTextures(GL_TEXTURE_2D, 1, &colorTex);
-    glTextureStorage2D(colorTex, 1, GL_RGBA8, width, height);
+    
+    GLenum internalFormat = info.isHDR ? GL_RGBA16F : GL_RGBA8;
+    glTextureStorage2D(colorTex, 1, internalFormat, info.width, info.height);
+    
     glTextureParameteri(colorTex, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTextureParameteri(colorTex, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTextureParameteri(colorTex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTextureParameteri(colorTex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glNamedFramebufferTexture(fbo, GL_COLOR_ATTACHMENT0, colorTex, 0);
 
-    glCreateRenderbuffers(1, &depthBuf);
-    glNamedRenderbufferStorage(depthBuf, GL_DEPTH24_STENCIL8, width, height);
-    glNamedFramebufferRenderbuffer(fbo, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depthBuf);
+    GLuint depthBuf = 0;
+    if (info.hasDepth) {
+        glCreateRenderbuffers(1, &depthBuf);
+        glNamedRenderbufferStorage(depthBuf, GL_DEPTH24_STENCIL8, info.width, info.height);
+        glNamedFramebufferRenderbuffer(fbo, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depthBuf);
+    }
 
     FramebufferHandle h = m_nextFramebufferHandle++;
-    m_framebuffers[h] = { fbo, colorTex, depthBuf, width, height };
+    m_framebuffers[h] = { fbo, colorTex, depthBuf, info.width, info.height };
     
     TextureHandle texHandle = m_nextTextureHandle++;
-    m_textures[texHandle] = { colorTex, width, height, GL_RGBA };
+    m_textures[texHandle] = { colorTex, info.width, info.height, internalFormat };
     m_fbColorHandles[h] = texHandle;
     return h;
 }
 
 FramebufferPtr OpenGLAPI::CreateFramebuffer(const FramebufferCreateInfo& info) {
-    FramebufferHandle h = CreateFramebufferInternal(info.width, info.height);
+    FramebufferHandle h = CreateFramebufferInternal(info);
     if (h == 0) return nullptr;
 
     TextureHandle texH = m_fbColorHandles[h];
@@ -464,6 +470,12 @@ void OpenGLAPI::SetUniform(const ShaderPtr& shader, const std::string& name, int
 }
 
 void OpenGLAPI::BeginFrame() {
+    glDisable(GL_SCISSOR_TEST);
+    if (m_window) {
+        int w, h;
+        SDL_GetWindowSizeInPixels(m_window->GetSDLWindow(), &w, &h);
+        glViewport(0, 0, w, h);
+    }
     if (m_globalUBO) {
         // GlobalState 结构体内存布局与 std140 一致（刚好 192 字节）
         glNamedBufferSubData(m_globalUBO, 0, sizeof(GlobalState), &m_globalState);
@@ -581,6 +593,20 @@ void OpenGLAPI::DrawSkybox(const ShaderPtr& shader) {
 }
 
 void OpenGLAPI::DrawFullscreenQuad(const TexturePtr& texture) {
+    if (!texture) return;
+    
+    // ★ 关键修复 1：彻底关闭所有可能干扰全屏绘制的 3D/UI 状态
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+
+    // ★ 关键修复 2：强制将视口重置为当前屏幕的物理像素尺寸
+    if (m_window) {
+        int w, h;
+        SDL_GetWindowSizeInPixels(m_window->GetSDLWindow(), &w, &h);
+        glViewport(0, 0, w, h);
+    }
+
     glClearColor(m_clearColor[0], m_clearColor[1], m_clearColor[2], m_clearColor[3]);
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -592,9 +618,58 @@ void OpenGLAPI::DrawFullscreenQuad(const TexturePtr& texture) {
     glBindTexture(GL_TEXTURE_2D, ResolveTexture(texture));
     glUniform1i(glGetUniformLocation(shader, "screenTexture"), 0);
 
-    glBindVertexArray(m_fullscreenVAO);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(m_fullscreenVAO); 
+    glDrawArrays(GL_TRIANGLES, 0, 3);
     glBindVertexArray(0);
+}
+
+void OpenGLAPI::DrawPostProcess(
+    const ShaderPtr& shader, const PostProcessParams& params, const std::vector<TexturePtr>& inputTextures) 
+{
+    if (!shader || inputTextures.empty()) return;
+    auto s = m_shaders.find(shader->GetHandle());
+    if (s == m_shaders.end()) return;
+
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+
+    if (m_window) {
+        // 检查当前是否有绑定 FBO
+        GLint currentFbo = 0;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &currentFbo);
+        
+        if (currentFbo == 0) {
+            // 画到屏幕
+            int w, h;
+            SDL_GetWindowSizeInPixels(m_window->GetSDLWindow(), &w, &h);
+            glViewport(0, 0, w, h);
+        }
+    }
+
+    glUseProgram(s->second.program);
+    
+    // 绑定纹理
+    for (size_t i = 0; i < inputTextures.size() && i < 2; ++i) {
+        glActiveTexture(GL_TEXTURE0 + i);
+        glBindTexture(GL_TEXTURE_2D, ResolveTexture(inputTextures[i]));
+        std::string uniformName = "tex" + std::to_string(i);
+        glUniform1i(glGetUniformLocation(s->second.program, uniformName.c_str()), i);
+    }
+
+    // 传入参数 (确保名字与你 Shader 里的名字完全一致)
+    glUniform1f(glGetUniformLocation(s->second.program, "uThreshold"), params.threshold);
+    glUniform1f(glGetUniformLocation(s->second.program, "uExposure"), params.exposure);
+    glUniform1f(glGetUniformLocation(s->second.program, "uBloomStrength"), params.bloomStrength);
+    glUniform2fv(glGetUniformLocation(s->second.program, "uDirection"), 1, glm::value_ptr(params.direction));
+
+    glBindVertexArray(m_fullscreenVAO); 
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindVertexArray(0);
+
+    // 恢复必要的 3D 状态（防止影响 UI 渲染）
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
 }
 
 void OpenGLAPI::EndFrame() {

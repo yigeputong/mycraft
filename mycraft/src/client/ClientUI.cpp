@@ -291,10 +291,10 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
                 wcfg.fullscreen = fs;
                 game.mainWin->SetFullscreen(fs);
                 game.renderer->WaitIdle();
-                game.fbo = game.renderer->CreateFramebuffer({
-                    .width  = game.mainWin->GetConfigs().windowPixelWidth,
-                    .height = game.mainWin->GetConfigs().windowPixelHeight
-                });
+                game.RecreateFBOs(
+                    game.mainWin->GetConfigs().windowPixelWidth,
+                    game.mainWin->GetConfigs().windowPixelHeight
+                );
             }
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
