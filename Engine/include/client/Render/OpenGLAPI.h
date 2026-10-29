@@ -20,7 +20,7 @@ public:
     // 视口与清屏
     void SetViewport(int x, int y, int w, int h) override;
     void SetClearColor(float r, float g, float b, float a) override;
-    void Clear(ClearFlag flag = ClearFlag::All) override;
+    void Clear(rhi::ClearFlag flag = rhi::ClearFlag::All) override;
 
     // 全局状态
     void SetGlobalState(const GlobalState& state) override;
@@ -43,11 +43,6 @@ public:
     void DrawMeshBatch(const std::vector<MeshPtr>& meshes, const ShaderPtr& shader, const Material& mat) override;
     void DrawSkybox(const ShaderPtr& shader) override;
     void DrawFullscreenQuad(const TexturePtr& texture) override;
-    void DrawPostProcess(
-        const ShaderPtr& shader, 
-        const PostProcessParams& params, 
-        const std::vector<TexturePtr>& inputTextures
-    ) override;
 
     // Uniform
     void SetUniform(const ShaderPtr& shader, const std::string& name, const glm::mat4& value) override;
@@ -94,6 +89,9 @@ private:
 
     struct ShaderDataInternal {
         GLuint program = 0;
+        Eng::client::rhi::CullMode  cullMode  = Eng::client::rhi::CullMode::Back;
+        Eng::client::rhi::DepthMode depthMode = Eng::client::rhi::DepthMode::Normal;
+        Eng::client::rhi::BlendMode blendMode = Eng::client::rhi::BlendMode::None;
     };
 
     struct FramebufferInternal {
@@ -146,6 +144,7 @@ private:
     GLuint CompileShader(GLenum type, const std::string& source);
     GLuint LinkProgram(GLuint vertexShader, GLuint fragmentShader);
     std::string ReadFile(const std::string& path);
+    void ApplyState(const ShaderDataInternal& shaderData);
     
     GLuint ResolveTexture(const TexturePtr& tex) const {
         if (tex) {

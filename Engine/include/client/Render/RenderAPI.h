@@ -10,10 +10,66 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <cstdint>
 
 namespace Eng::client {
 
 class Window;
+
+// ==================== 渲染状态与格式枚举 ====================
+/**
+ * \brief 渲染硬件状态定义集合。
+ * 
+ * 将相关的枚举统一收拢在 rhi (Render Hardware Interface) 命名空间下，
+ * 避免全局命名空间污染，同时方便底层统一进行枚举映射。
+ */
+namespace rhi {
+
+/** \brief 纹理与帧缓冲的像素格式 */
+enum class TextureFormat : uint8_t {
+    RGBA8_UNORM,    /**< 常规 8 位颜色（常规屏幕渲染） */
+    RGBA16_SFLOAT,  /**< HDR 浮点颜色（泛光、PBR 高光） */
+    R8_UNORM,       /**< 单通道 8 位（阴影图、灰度图） */
+    D32_SFLOAT      /**< 深度图 */
+};
+
+/** \brief 混合模式 */
+enum class BlendMode : uint8_t {
+    None,           /**< 不混合（实体方块） */
+    AlphaBlend,     /**< 常规透明（水、玻璃） */
+    Additive        /**< 发光叠加（粒子、光效） */
+};
+
+/** \brief 面剔除模式 */
+enum class CullMode : uint8_t {
+    Back,           /**< 背面剔除（默认） */
+    Front,          /**< 正面剔除 */
+    None            /**< 不剔除（树叶、植物、UI） */
+};
+
+/** \brief 深度测试模式 */
+enum class DepthMode : uint8_t {
+    Normal,         /**< 开启测试并写入深度 */
+    TestOnly,       /**< 开启测试不写深度（半透明） */
+    Disabled        /**< 彻底关闭深度（UI、天空盒） */
+};
+
+/** \brief 清屏标志位。 */
+enum class ClearFlag : std::uint8_t {
+    None    = 0,
+    Color   = 1 << 0,
+    Depth   = 1 << 1,
+    Stencil = 1 << 2,
+    All     = Color | Depth | Stencil
+};
+
+inline ClearFlag operator|(ClearFlag a, ClearFlag b) {
+    // 内部计算时允许整型提升，最后强转回 uint8_t
+    return static_cast<ClearFlag>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
+}
+
+} // namespace rhi
+
 
 // ==================== 底层不透明句柄（业务层不可见） ====================
 /**
@@ -22,11 +78,10 @@ class Window;
  * \note 仅供引擎底层（OpenGL/Vulkan）进行资源池索引使用。
  * 业务层代码**绝不**应该接触这些类型，请全程使用下方的智能指针封装。
  */
-using MeshHandle      = uint32_t;
-using TextureHandle   = uint32_t;
-using ShaderHandle    = uint32_t;
+using MeshHandle        = uint32_t;
+using TextureHandle     = uint32_t;
+using ShaderHandle      = uint32_t;
 using FramebufferHandle = uint32_t;
-
 
 // ==================== 资源智能指针前置声明 ====================
 class Mesh;
@@ -188,19 +243,8 @@ struct GlobalState {
     glm::vec3 lightColor = glm::vec3(1.0f);             /**< 平行光颜色 */
     float     timeOfDay = 8.0f;                         /**< 时间（用于昼夜交替） */
     glm::vec3 lightAmbient = glm::vec3(0.3f);           /**< 环境光颜色 */
+    float     _pad2 = 0.0f;                             /**< 补齐 16 字节对齐（UBO 必须） */
 };
-
-/** \brief 清屏标志位。 */
-enum class ClearFlag : std::uint32_t {
-    None    = 0,
-    Color   = 1 << 0,
-    Depth   = 1 << 1,
-    Stencil = 1 << 2,
-    All     = Color | Depth | Stencil
-};
-inline ClearFlag operator|(ClearFlag a, ClearFlag b) {
-    return static_cast<ClearFlag>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
-}
 
 /** \brief 着色器创建配置。支持预编译宏与渲染状态定制。 */
 struct ShaderCreateInfo {
@@ -208,30 +252,22 @@ struct ShaderCreateInfo {
     std::string fragPath;
     std::string vertEntry = "main";          /**< SPIR-V 入口点 */
     std::string fragEntry = "main";          /**< SPIR-V 入口点 */
-    bool isSky = false;                      /**< 是否为天空盒（关闭面剔除等） */
-    bool isPostProcess = false;
-    bool renderToHDR = false;
-    bool depthTest = true;                   /**< 是否开启深度测试 */
-    bool depthWrite = true;                  /**< 是否写入深度 */
-    bool blendEnabled = true;                /**< 是否开启透明混合 */
-    std::vector<std::pair<std::string, std::string>> defines; /**< 预编译宏 */
-};
+    
+    // ★ 数据驱动的底层渲染状态
+    rhi::TextureFormat colorFormat = rhi::TextureFormat::RGBA8_UNORM; /**< 输出目标格式 */
+    rhi::CullMode      cullMode    = rhi::CullMode::Back;             /**< 面剔除模式 */
+    rhi::DepthMode     depthMode   = rhi::DepthMode::Normal;          /**< 深度测试模式 */
+    rhi::BlendMode     blendMode   = rhi::BlendMode::None;            /**< 混合模式 */
 
-struct PostProcessParams {
-    float threshold = 1.0f;
-    float exposure = 1.0f;
-    float bloomStrength = 0.8f;
-    float padding1 = 0.0f;
-    glm::vec2 direction = glm::vec2(0.0f);
-    glm::vec2 padding2 = glm::vec2(0.0f);
+    std::vector<std::pair<std::string, std::string>> defines; /**< 预编译宏 */
 };
 
 /** \brief 帧缓冲创建配置。 */
 struct FramebufferCreateInfo {
     int  width = 0;
     int  height = 0;
-    bool hasDepth = true;                    /**< 是否创建深度附件 */
-    bool isHDR = false;                      /**< 是否使用高动态范围格式 */
+    bool hasDepth = true;                                   /**< 是否创建深度附件 */
+    rhi::TextureFormat colorFormat = rhi::TextureFormat::RGBA8_UNORM; /**< 颜色附件格式 */
 };
 
 
@@ -242,6 +278,12 @@ struct FramebufferCreateInfo {
  * 提供了对底层图形 API（OpenGL/Vulkan）的统一抽象。
  * 上层业务通过 `Create*` 系列接口获取带生命周期管理的智能指针，
  * 通过 `Draw*` 系列接口执行绘制。无需关心底层的句柄与销毁。
+ * 
+ * \note 设计约定：
+ * 1. **坐标系**：上层业务统一使用 OpenGL 规范（Y 轴向上，NDC 范围 -1 到 1）。
+ *    所有针对 Vulkan 的 Y 轴翻转和 Z 轴 0-1 的映射必须在 Vulkan 后端的内部处理。
+ * 2. **线程安全**：整个 IRenderAPI 的绝大多数接口**非线程安全**，必须在主渲染线程调用。
+ *    但资源销毁接口（如 `MeshPtr` 析构）可能会内部调用底层等待，允许在同步点调用。
  */
 class IRenderAPI {
 public:
@@ -249,19 +291,34 @@ public:
 
     /**
      * \brief 初始化渲染器。
-     * \param width 宽度
-     * \param height 高度
-     * \param window 绑定的窗口对象
+     * \param width 初始渲染宽度（通常为窗口像素宽）
+     * \param height 初始渲染高度（通常为窗口像素高）
+     * \param window 绑定的窗口对象，用于获取原生句柄（如 HWND 或 SDL_Window）
+     * 
+     * \warning 必须在 Window 创建完成后调用。
      */
     virtual void Initialize(int width, int height, Window* window) = 0;
 
-    /** \brief 销毁渲染器。内部会调用 WaitIdle() 安全回收。 */
+    /** \brief 销毁渲染器并释放所有 GPU 资源。内部会调用 WaitIdle() 安全回收。 */
     virtual void Shutdown() = 0;
 
     // ==================== 视口与清屏 ====================
+    /**
+     * \brief 设置当前视口大小。
+     * \note 如果绑定到了 FBO，通常需要将视口设置为 FBO 的尺寸。
+     */
     virtual void SetViewport(int x, int y, int w, int h) = 0;
+
+    /**
+     * \brief 设置清屏颜色。
+     */
     virtual void SetClearColor(float r, float g, float b, float a) = 0;
-    virtual void Clear(ClearFlag flag = ClearFlag::All) = 0;
+
+    /**
+     * \brief 根据标志位清理当前绑定的帧缓冲。
+     * \param flag 清理掩码，支持位组合（如 `ClearFlag::Color | ClearFlag::Depth`）。
+     */
+    virtual void Clear(rhi::ClearFlag flag = rhi::ClearFlag::All) = 0;
 
     // ==================== 全局状态 ====================
     /**
@@ -271,59 +328,49 @@ public:
     virtual void SetGlobalState(const GlobalState& state) = 0;
 
     // ==================== 资源创建 ====================
-    
-    /** \brief 创建网格。 */
+    /** \brief 从 CPU 内存中创建网格。 */
     virtual MeshPtr CreateMesh(const MeshData& data) = 0;
 
-    /** \brief 从内存像素创建纹理。 */
+    /** \brief 从原始 RGBA 像素数组创建纹理。 */
     virtual TexturePtr CreateTexture(const uint8_t* rgba, int w, int h) = 0;
 
-    /** \brief 创建着色器。 */
+    /** \brief 编译并链接着色器，同时根据结构体内的配置生成渲染管线。 */
     virtual ShaderPtr CreateShader(const ShaderCreateInfo& info) = 0;
 
-    /** \brief 创建帧缓冲。 */
+    /** \brief 创建离屏渲染帧缓冲。 */
     virtual FramebufferPtr CreateFramebuffer(const FramebufferCreateInfo& info) = 0;
 
     // ==================== 帧渲染控制 ====================
-    
-    /** \brief 绑定离屏帧缓冲。 */
+    /** \brief 将后续的渲染指令输出到指定的帧缓冲中。 */
     virtual void BindFramebuffer(const FramebufferPtr& fb) = 0;
 
-    /** \brief 解绑帧缓冲，恢复渲染到默认屏幕。 */
+    /** \brief 解绑当前帧缓冲，将渲染目标切换回默认屏幕（Swapchain）。 */
     virtual void UnbindFramebuffer() = 0;
 
-    /** \brief 准备开始新的一帧。 */
+    /** \brief 准备开始新的一帧（内部处理 acquireNextImage 等）。 */
     virtual void BeginFrame() = 0;
 
     /** \brief 结束当前帧渲染，提交到 GPU 并交换缓冲。 */
     virtual void EndFrame() = 0;
 
     // ==================== 绘制接口 ====================
-    
     /** 
      * \brief 绘制单个网格。 
      * \param model 模型矩阵（直接内嵌，无需状态机式 SetModelMatrix）。
      */
     virtual void DrawMesh(const MeshPtr& mesh, const ShaderPtr& shader, const Material& material, const glm::mat4& model = glm::mat4(1.0f)) = 0;
 
-    /** \brief 绘制多个实例（适合掉落物、粒子等）。 */
+    /** \brief 实例化绘制（适合绘制大量形状相同但位置不同的物体，如掉落物、粒子）。 */
     virtual void DrawMeshInstanced(const MeshPtr& mesh, const ShaderPtr& shader, const Material& material, const std::vector<glm::mat4>& transforms) = 0;
 
-    /** \brief 批量绘制（适合大量使用相同 Shader 的区块）。 */
+    /** \brief 合批绘制（适合地形区块，能显著减少状态切换开销）。 */
     virtual void DrawMeshBatch(const std::vector<MeshPtr>& meshes, const ShaderPtr& shader, const Material& mat) = 0;
 
-    /** \brief 绘制天空盒。 */
+    /** \brief 绘制天空盒。通常在渲染流程的最后阶段调用。 */
     virtual void DrawSkybox(const ShaderPtr& shader) = 0;
 
-    /** \brief 绘制全屏四边形（后处理）。 */
+    /** \brief 绘制全屏四边形（通常用于后处理，如将 FBO 贴图渲染到屏幕）。 */
     virtual void DrawFullscreenQuad(const TexturePtr& texture) = 0;
-
-    /** \brief 绘制后处理特效（自动处理纹理绑定和参数传递） */
-    virtual void DrawPostProcess(
-        const ShaderPtr& shader, 
-        const PostProcessParams& params, 
-        const std::vector<TexturePtr>& inputTextures
-    ) = 0;
 
     // ==================== Uniform 数据传递 ====================
     virtual void SetUniform(const ShaderPtr& shader, const std::string& name, const glm::mat4& value) = 0;

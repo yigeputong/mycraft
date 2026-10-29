@@ -23,7 +23,7 @@
 
 namespace Eng::client {
 
-class VulkanAPI : public IRenderAPI {
+class VulkanAPI final : public IRenderAPI {
 public:
     VulkanAPI();
     ~VulkanAPI() override;
@@ -36,7 +36,7 @@ public:
 
     void SetViewport(int x, int y, int w, int h) override;
     void SetClearColor(float r, float g, float b, float a) override;
-    void Clear(ClearFlag flag = ClearFlag::All) override;
+    void Clear(rhi::ClearFlag flag = rhi::ClearFlag::All) override;
 
     void SetGlobalState(const GlobalState& state) override;
 
@@ -58,11 +58,6 @@ public:
     void DrawMeshBatch(const std::vector<MeshPtr>& meshes, const ShaderPtr& shader, const Material& mat) override;
     void DrawSkybox(const ShaderPtr& shader) override;
     void DrawFullscreenQuad(const TexturePtr& texture) override;
-    void DrawPostProcess(
-        const ShaderPtr& shader, 
-        const PostProcessParams& params, 
-        const std::vector<TexturePtr>& inputTextures
-    ) override;
 
     bool InitImGuiBackend() override;
     void ShutdownImGuiBackend() override;
@@ -202,7 +197,7 @@ private:
 
     GlobalState m_globalState{};
     float         m_clearColor[4]    = { 0.0f, 0.0f, 0.0f, 1.0f };
-    uint32_t      m_clearPendingFlags = static_cast<uint32_t>(ClearFlag::All);
+    uint32_t      m_clearPendingFlags = static_cast<uint32_t>(rhi::ClearFlag::All);
     bool          m_renderPassActive = false;
 
     bool m_isShutdown = false;

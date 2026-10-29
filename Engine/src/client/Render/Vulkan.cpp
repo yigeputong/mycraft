@@ -423,19 +423,42 @@ ShaderHandle VulkanAPI::CreateShaderInternal(const ShaderCreateInfo& info) {
     
     if (vertCode.empty() || fragCode.empty()) {
         logError(m_logger, "[Vulkan] Shader source empty or not found!");
-        return 0; // ★ 优雅失败，返回 0
+        return 0;
     }
 
     ShaderInternal si;
     si.vertModule = createShaderModule(vertCode);
     si.fragModule = createShaderModule(fragCode);
 
+    // ==== 将自定义枚举映射为 Vulkan 状态 ====
+    // 面剔除
+    vk::CullModeFlagBits vkCullMode = vk::CullModeFlagBits::eBack;
+    if (info.cullMode == rhi::CullMode::None)  vkCullMode = vk::CullModeFlagBits::eNone;
+    if (info.cullMode == rhi::CullMode::Front) vkCullMode = vk::CullModeFlagBits::eFront;
+
+    // 深度测试
+    bool vkDepthTest = (info.depthMode != rhi::DepthMode::Disabled);
+    bool vkDepthWrite = (info.depthMode == rhi::DepthMode::Normal);
+    vk::CompareOp vkDepthOp = (info.cullMode == rhi::CullMode::None && info.depthMode == rhi::DepthMode::TestOnly) ? vk::CompareOp::eLessOrEqual : vk::CompareOp::eLess; // 简易推断天空盒
+
+    // 混合模式
+    bool vkBlendEnable = (info.blendMode != rhi::BlendMode::None);
+    vk::BlendFactor srcColor = vk::BlendFactor::eSrcAlpha;
+    vk::BlendFactor dstColor = vk::BlendFactor::eOneMinusSrcAlpha;
+    if (info.blendMode == rhi::BlendMode::Additive) {
+        srcColor = vk::BlendFactor::eSrcAlpha;
+        dstColor = vk::BlendFactor::eOne;
+    }
+
+    // 颜色格式
+    vk::Format colorFmt = vk::Format::eR8G8B8A8Unorm;
+    if (info.colorFormat == rhi::TextureFormat::RGBA16_SFLOAT) colorFmt = vk::Format::eR16G16B16A16Sfloat;
+    if (info.colorFormat == rhi::TextureFormat::R8_UNORM)      colorFmt = vk::Format::eR8Unorm;
+
     // ==== Shader stages ====
     vk::PipelineShaderStageCreateInfo stages[2] = {
-        vk::PipelineShaderStageCreateInfo{}.setStage(vk::ShaderStageFlagBits::eVertex)
-            .setModule(*si.vertModule).setPName(info.vertEntry.c_str()),
-        vk::PipelineShaderStageCreateInfo{}.setStage(vk::ShaderStageFlagBits::eFragment)
-            .setModule(*si.fragModule).setPName(info.fragEntry.c_str())
+        vk::PipelineShaderStageCreateInfo{}.setStage(vk::ShaderStageFlagBits::eVertex).setModule(*si.vertModule).setPName(info.vertEntry.c_str()),
+        vk::PipelineShaderStageCreateInfo{}.setStage(vk::ShaderStageFlagBits::eFragment).setModule(*si.fragModule).setPName(info.fragEntry.c_str())
     };
 
     // ==== Vertex input ====
@@ -457,21 +480,13 @@ ShaderHandle VulkanAPI::CreateShaderInternal(const ShaderCreateInfo& info) {
     };
 
     vk::PipelineVertexInputStateCreateInfo vi{};
-    
-    if (info.isPostProcess) {
-        vi.vertexBindingDescriptionCount   = 0;
-        vi.pVertexBindingDescriptions      = nullptr;
-        vi.vertexAttributeDescriptionCount = 0;
-        vi.pVertexAttributeDescriptions    = nullptr;
-    } else {
-        vi.vertexBindingDescriptionCount = info.isSky ? 1 : 2;
-        vi.pVertexBindingDescriptions = bindings;
-        vi.vertexAttributeDescriptionCount = info.isSky ? 1 : 9;
-        vi.pVertexAttributeDescriptions = attrs;
-    }
+    // 简化处理：如果不是常规地形，就不绑顶点（天空盒等由外部提供特殊网格，此处若有冲突则外部应单独创建）
+    vi.vertexBindingDescriptionCount = (info.cullMode == rhi::CullMode::None && !vkDepthWrite) ? 1 : 2;
+    vi.pVertexBindingDescriptions = bindings;
+    vi.vertexAttributeDescriptionCount = (info.cullMode == rhi::CullMode::None && !vkDepthWrite) ? 1 : 9;
+    vi.pVertexAttributeDescriptions = attrs;
 
-    vk::PipelineInputAssemblyStateCreateInfo ia{};
-    ia.setTopology(vk::PrimitiveTopology::eTriangleList);
+    vk::PipelineInputAssemblyStateCreateInfo ia{ .topology = vk::PrimitiveTopology::eTriangleList };
 
     vk::DynamicState dynStates[2] = { vk::DynamicState::eViewport, vk::DynamicState::eScissor };
     vk::PipelineDynamicStateCreateInfo dyn{};
@@ -481,82 +496,35 @@ ShaderHandle VulkanAPI::CreateShaderInternal(const ShaderCreateInfo& info) {
     vps.setViewportCount(1).setScissorCount(1);
 
     vk::PipelineRasterizationStateCreateInfo rast{};
-    rast.setPolygonMode(vk::PolygonMode::eFill)
-        .setCullMode(info.isSky ? vk::CullModeFlagBits::eNone : vk::CullModeFlagBits::eBack)
-        .setFrontFace(vk::FrontFace::eCounterClockwise)
-        .setLineWidth(1.0f);
+    rast.setPolygonMode(vk::PolygonMode::eFill).setCullMode(vkCullMode).setFrontFace(vk::FrontFace::eCounterClockwise).setLineWidth(1.0f);
 
     vk::PipelineMultisampleStateCreateInfo ms{};
     ms.setRasterizationSamples(vk::SampleCountFlagBits::e1);
 
     vk::PipelineDepthStencilStateCreateInfo ds{};
-    ds.setDepthTestEnable(info.depthTest)
-      .setDepthWriteEnable(info.depthWrite)
-      .setDepthCompareOp(info.isSky ? vk::CompareOp::eLessOrEqual : vk::CompareOp::eLess);
+    ds.setDepthTestEnable(vkDepthTest).setDepthWriteEnable(vkDepthWrite).setDepthCompareOp(vkDepthOp);
 
     vk::PipelineColorBlendAttachmentState blendAtt{};
-    blendAtt.setBlendEnable(info.blendEnabled)
-            .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
-            .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
-            .setColorBlendOp(vk::BlendOp::eAdd)
-            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
-            .setDstAlphaBlendFactor(vk::BlendFactor::eZero)
-            .setAlphaBlendOp(vk::BlendOp::eAdd)
-            .setColorWriteMask(vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-                               vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
+    blendAtt.setBlendEnable(vkBlendEnable).setSrcColorBlendFactor(srcColor).setDstColorBlendFactor(dstColor).setColorBlendOp(vk::BlendOp::eAdd)
+            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne).setDstAlphaBlendFactor(vk::BlendFactor::eZero).setAlphaBlendOp(vk::BlendOp::eAdd)
+            .setColorWriteMask(vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
 
     vk::PipelineColorBlendStateCreateInfo blend{};
     blend.setAttachments(blendAtt);
 
-    // ==== Pipeline layout ====
     vk::PipelineLayoutCreateInfo plci{};
-    
-    if (info.isPostProcess) {
-        plci.setSetLayouts(*m_textureSetLayout);
-        // 自动加上 Push Constant 范围
-        vk::PushConstantRange pcRange{};
-        pcRange.setStageFlags(vk::ShaderStageFlagBits::eFragment)
-               .setOffset(0)
-               .setSize(sizeof(PostProcessParams));
-        plci.setPushConstantRanges(pcRange);
-        
-        // 后处理管线的基础状态调整
-        rast.setCullMode(vk::CullModeFlagBits::eNone);
-        ds.setDepthTestEnable(vk::False).setDepthWriteEnable(vk::False);
-    } else {
-        if (info.isSky) plci.setSetLayouts(*m_globalSetLayout);
-        else {
-            vk::DescriptorSetLayout layouts[2] = { *m_globalSetLayout, *m_textureSetLayout };
-            plci.setSetLayouts(layouts);
-        }
-    }
+    vk::DescriptorSetLayout layouts[2] = { *m_globalSetLayout, *m_textureSetLayout };
+    plci.setSetLayouts(layouts);
     si.layout = vk::raii::PipelineLayout(m_device, plci);
 
-    // ==== PipelineRenderingCreateInfo (VK 1.3 dynamic rendering) ====
-    vk::Format colorFmt = (info.renderToHDR || (info.isPostProcess && info.fragPath.find("composite") == std::string::npos)) 
-                        ? vk::Format::eR16G16B16A16Sfloat 
-                        : m_swapChainSurfaceFormat.format;
     vk::Format depthFmt = findDepthFormat();
-
     vk::PipelineRenderingCreateInfo priC{};
-    priC.setColorAttachmentCount(1)
-        .setPColorAttachmentFormats(&colorFmt)
-        .setDepthAttachmentFormat(depthFmt);
+    priC.setColorAttachmentCount(1).setPColorAttachmentFormats(&colorFmt).setDepthAttachmentFormat(depthFmt);
 
-    // ==== GraphicsPipelineCreateInfo ====
     vk::GraphicsPipelineCreateInfo gpciC{};
-    gpciC.setStages(stages)
-         .setPVertexInputState(&vi)
-         .setPInputAssemblyState(&ia)
-         .setPViewportState(&vps)
-         .setPRasterizationState(&rast)
-         .setPMultisampleState(&ms)
-         .setPDepthStencilState(&ds)
-         .setPColorBlendState(&blend)
-         .setPDynamicState(&dyn)
-         .setLayout(*si.layout)
-         .setRenderPass(nullptr)
-         .setPNext(&priC);
+    gpciC.setStages(stages).setPVertexInputState(&vi).setPInputAssemblyState(&ia).setPViewportState(&vps)
+         .setPRasterizationState(&rast).setPMultisampleState(&ms).setPDepthStencilState(&ds).setPColorBlendState(&blend)
+         .setPDynamicState(&dyn).setLayout(*si.layout).setRenderPass(nullptr).setPNext(&priC);
 
     si.pipeline = vk::raii::Pipeline(m_device, nullptr, gpciC);
 
@@ -583,7 +551,10 @@ FramebufferPtr VulkanAPI::CreateFramebuffer(const FramebufferCreateInfo& info) {
 
 FramebufferHandle VulkanAPI::CreateFramebufferInternal(const FramebufferCreateInfo& info) {
     FramebufferInternal fbi{ .width = info.width, .height = info.height, .hasDepth = info.hasDepth };
-    vk::Format colorFormat = info.isHDR ? vk::Format::eR16G16B16A16Sfloat : vk::Format::eR8G8B8A8Unorm;
+    
+    vk::Format colorFormat = vk::Format::eR8G8B8A8Unorm;
+    if (info.colorFormat == rhi::TextureFormat::RGBA16_SFLOAT) colorFormat = vk::Format::eR16G16B16A16Sfloat;
+    if (info.colorFormat == rhi::TextureFormat::R8_UNORM)      colorFormat = vk::Format::eR8Unorm;
 
     {
         VkImageCreateInfo ici{};
@@ -653,8 +624,8 @@ FramebufferHandle VulkanAPI::CreateFramebufferInternal(const FramebufferCreateIn
     TextureInternal ti{
         .image = fbi.colorImage,
         .alloc = VK_NULL_HANDLE,
-        .view = std::move(colorView),       // ★ 转移所有权
-        .sampler = std::move(colorSampler), // ★ 转移所有权
+        .view = std::move(colorView),
+        .sampler = std::move(colorSampler),
         .set = std::move(set),
         .ownsImage = false
     };
@@ -794,7 +765,7 @@ void VulkanAPI::SetClearColor(float r, float g, float b, float a) {
     m_clearColor[3] = a;
 }
 
-void VulkanAPI::Clear(ClearFlag flags) {
+void VulkanAPI::Clear(rhi::ClearFlag flags) {
     m_clearPendingFlags |= static_cast<uint32_t>(flags);
 
     if (m_frameStarted && m_renderPassActive) {
@@ -946,73 +917,6 @@ void VulkanAPI::DrawFullscreenQuad(const TexturePtr& texture) {
     auto& cmd = m_commandBuffers[m_frameIndex];
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *m_fullscreenPipeline);
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_fullscreenLayout, 0, *texIt->second.set, {});
-    cmd.draw(3, 1, 0, 0);
-}
-
-void VulkanAPI::DrawPostProcess(
-    const ShaderPtr& shader, const PostProcessParams& params, const std::vector<TexturePtr>& inputTextures) 
-{
-    if (!shader || inputTextures.empty()) return;
-    auto sit = m_shaders.find(shader->GetHandle());
-    if (sit == m_shaders.end()) return;
-
-    ensureRenderPassActive();
-    auto& cmd = m_commandBuffers[m_frameIndex];
-    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *sit->second.pipeline);
-
-    vk::DescriptorSet texSet = nullptr;
-
-    // ==========================================
-    // 1. 单纹理：直接复用 FBO/Texture 自带的 Set
-    // ==========================================
-    if (inputTextures.size() == 1) {
-        auto texIt = m_textures.find(inputTextures[0]->GetHandle());
-        if (texIt == m_textures.end() || texIt->second.set == nullptr) return;
-        texSet = *texIt->second.set;
-    } 
-    // ==========================================
-    // 2. 双纹理：动态分配并缓存一个包含两张图的 Set
-    // ==========================================
-    else if (inputTextures.size() >= 2) {
-        uint64_t hash = (uint64_t(inputTextures[0]->GetHandle()) << 32) | inputTextures[1]->GetHandle();
-        auto it = m_postProcessSets.find(hash);
-        
-        if (it == m_postProcessSets.end()) {
-            // 如果缓存里没有这对组合，就创建一个
-            vk::DescriptorSetAllocateInfo dsai{ 
-                .descriptorPool = m_descriptorPool, 
-                .descriptorSetCount = 1, 
-                .pSetLayouts = &*m_textureSetLayout 
-            };
-            auto sets = m_device.allocateDescriptorSets(dsai);
-            
-            auto t0 = m_textures.find(inputTextures[0]->GetHandle());
-            auto t1 = m_textures.find(inputTextures[1]->GetHandle());
-            if (t0 == m_textures.end() || t1 == m_textures.end()) return;
-
-            // 必须保留空间，防止 vector 扩容导致指针悬空
-            std::array<vk::DescriptorImageInfo, 2> imgInfos = {{
-                { .sampler = *t0->second.sampler, .imageView = *t0->second.view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal },
-                { .sampler = *t1->second.sampler, .imageView = *t1->second.view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal }
-            }};
-
-            std::array<vk::WriteDescriptorSet, 2> writes = {{
-                { .dstSet = *sets[0], .dstBinding = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imgInfos[0] },
-                { .dstSet = *sets[0], .dstBinding = 1, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imgInfos[1] }
-            }};
-
-            m_device.updateDescriptorSets(writes, {});
-            
-            // 存入缓存（转移所有权）
-            it = m_postProcessSets.emplace(hash, std::move(sets[0])).first;
-        }
-        texSet = *it->second;
-    }
-
-    if (!texSet) return;
-
-    cmd.pushConstants<PostProcessParams>(*sit->second.layout, vk::ShaderStageFlagBits::eFragment, 0, params);
-    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *sit->second.layout, 0, texSet, {});
     cmd.draw(3, 1, 0, 0);
 }
 
@@ -1457,8 +1361,8 @@ void VulkanAPI::ensureRenderPassActive() {
         }
     }
 
-    bool clearColor = (m_clearPendingFlags & static_cast<uint32_t>(ClearFlag::Color)) != 0;
-    bool clearDepth = (m_clearPendingFlags & static_cast<uint32_t>(ClearFlag::Depth)) != 0;
+    bool clearColor = (m_clearPendingFlags & static_cast<uint32_t>(rhi::ClearFlag::Color)) != 0;
+    bool clearDepth = (m_clearPendingFlags & static_cast<uint32_t>(rhi::ClearFlag::Depth)) != 0;
     vk::ClearValue clearColorValue{};
     clearColorValue.color = vk::ClearColorValue(m_clearColor[0], m_clearColor[1], m_clearColor[2], m_clearColor[3]);
     vk::ClearValue clearDepthValue = vk::ClearDepthStencilValue(1.0f, 0);
@@ -1483,8 +1387,8 @@ void VulkanAPI::ensureRenderPassActive() {
     cmd.setViewport(0, vk::Viewport(0, 0, (float)extent.width, (float)extent.height, 0, 1));
     cmd.setScissor(0, vk::Rect2D({0,0}, extent));
     m_renderPassActive = true;
-    m_clearPendingFlags &= ~static_cast<uint32_t>(ClearFlag::Color);
-    m_clearPendingFlags &= ~static_cast<uint32_t>(ClearFlag::Depth);
+    m_clearPendingFlags &= ~static_cast<uint32_t>(rhi::ClearFlag::Color);
+    m_clearPendingFlags &= ~static_cast<uint32_t>(rhi::ClearFlag::Depth);
 }
 
 void VulkanAPI::BindFramebuffer(const FramebufferPtr& fb) {

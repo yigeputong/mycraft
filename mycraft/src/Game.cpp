@@ -192,7 +192,10 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
 void MyGame::RecreateFBOs(int w, int h) {
     if (w <= 0 || h <= 0) return;
     Eng::client::FramebufferCreateInfo info{
-        .width = w, .height = h, .hasDepth = true, .isHDR = false
+        .width = w, 
+        .height = h, 
+        .hasDepth = true, 
+        .colorFormat = Eng::client::rhi::TextureFormat::RGBA8_UNORM
     };
     m_mainFbo = renderer->CreateFramebuffer(info);
 }
@@ -319,17 +322,15 @@ Eng::client::ShaderPtr MyGame::CreateShaderByName(const std::string& name, bool 
     Eng::client::ShaderCreateInfo ci;
     ci.vertPath = base + "vert" + ext;
     ci.fragPath = base + "frag" + ext;
-    ci.isSky    = isSky;
-    ci.renderToHDR = true; 
 
     if (isSky) {
-        ci.depthTest    = true;
-        ci.depthWrite   = false;
-        ci.blendEnabled = false;
+        ci.cullMode  = Eng::client::rhi::CullMode::None;
+        ci.depthMode = Eng::client::rhi::DepthMode::TestOnly;
+        ci.blendMode = Eng::client::rhi::BlendMode::None;
     } else {
-        ci.depthTest    = true;
-        ci.depthWrite   = true;
-        ci.blendEnabled = false;
+        ci.cullMode  = Eng::client::rhi::CullMode::Back;
+        ci.depthMode = Eng::client::rhi::DepthMode::Normal;
+        ci.blendMode = Eng::client::rhi::BlendMode::None;
     }
     return renderer->CreateShader(ci);
 }
@@ -552,7 +553,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
     } else {
         renderer->SetClearColor(0.1f, 0.1f, 0.1f, 1.0f); // 主菜单深灰
     }
-    renderer->Clear(Eng::client::ClearFlag::Color | Eng::client::ClearFlag::Depth);
+    renderer->Clear(Eng::client::rhi::ClearFlag::Color | Eng::client::rhi::ClearFlag::Depth);
 
     // ==========================================
     // 直接渲染主世界到屏幕
