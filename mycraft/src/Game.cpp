@@ -191,18 +191,10 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
 
 void MyGame::RecreateFBOs(int w, int h) {
     if (w <= 0 || h <= 0) return;
-    int halfW = std::max(1, w / 2);
-    int halfH = std::max(1, h / 2);
-
-    m_hdrFbo = renderer->CreateFramebuffer({
-        .width = w, .height = h, .hasDepth = true, .isHDR = true
-    });
-    m_bloomFbo1 = renderer->CreateFramebuffer({
-        .width = halfW, .height = halfH, .hasDepth = false, .isHDR = true
-    });
-    m_bloomFbo2 = renderer->CreateFramebuffer({
-        .width = halfW, .height = halfH, .hasDepth = false, .isHDR = true
-    });
+    Eng::client::FramebufferCreateInfo info{
+        .width = w, .height = h, .hasDepth = true, .isHDR = false
+    };
+    m_mainFbo = renderer->CreateFramebuffer(info);
 }
 
 bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
@@ -303,7 +295,7 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
 
     // —— FBO（FramebufferPtr）——
     RecreateFBOs(mainWin->GetConfigs().windowPixelWidth, mainWin->GetConfigs().windowPixelHeight);
-    if (!m_hdrFbo || !m_bloomFbo1 || !m_bloomFbo2) {
+    if (!m_mainFbo) {
         logError(logger, "[Game] FBO creation failed!");
         return false;
     }
@@ -315,25 +307,9 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
 // Shader
 // ============================================================
 void MyGame::SetupShaders() {
-    // ★ 修复 1：使用 CreateShaderByName 并传入路径
     m_cubeShader = CreateShaderByName("mesh", false);
     m_skyShader  = CreateShaderByName("sky",  true);
     m_lodShader  = CreateShaderByName("lod",  false);
-
-    const std::string ext  = m_useVulkan ? ".vk.spv" : ".gl.spv";
-    auto loadPostShader = [&](const std::string& name) -> Eng::client::ShaderPtr {
-        Eng::client::ShaderCreateInfo ci;
-        ci.vertPath = "./assets/shaders/build/" + name + "/vert" + ext;
-        ci.fragPath = "./assets/shaders/build/" + name + "/frag" + ext;
-        ci.isPostProcess = true; 
-        // ★ 修复 2：bloom_extract 和 blur 渲染到 HDR FBO，composite 渲染到屏幕
-        ci.renderToHDR = (name != "composite"); 
-        return renderer->CreateShader(ci);
-    };
-
-    m_bloomExtractShader = loadPostShader("bloom_extract");
-    m_blurShader         = loadPostShader("blur");
-    m_compositeShader    = loadPostShader("composite");
 }
 
 Eng::client::ShaderPtr MyGame::CreateShaderByName(const std::string& name, bool isSky) {
@@ -570,26 +546,32 @@ void MyGame::OnRender(Eng::Engine& engine) {
     // 3) 帧开始
     renderer->BeginFrame();
 
-    // ==========================================
-    // Pass 1: 主世界 → HDR FBO
-    // ==========================================
-    renderer->BindFramebuffer(m_hdrFbo);
-    renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    renderer->Clear();
+    // 根据游戏状态设置清屏色
+    if (m_state == GameState::Playing) {
+        renderer->SetClearColor(0.5f, 0.7f, 1.0f, 1.0f); // 天空蓝
+    } else {
+        renderer->SetClearColor(0.1f, 0.1f, 0.1f, 1.0f); // 主菜单深灰
+    }
+    renderer->Clear(Eng::client::ClearFlag::Color | Eng::client::ClearFlag::Depth);
 
+    // ==========================================
+    // 直接渲染主世界到屏幕
+    // ==========================================
     if (m_state == GameState::Playing) {
         Eng::client::Material mat; mat.diffuse = m_atlasTexture;
 
+        // 1. 渲染地形
         m_world.CollectVisibleMeshes(m_frustum, m_visibleChunkMeshes);
         if (!m_visibleChunkMeshes.empty())
             renderer->DrawMeshBatch(m_visibleChunkMeshes, m_cubeShader, mat);
 
+        // 2. 渲染 LOD
         Eng::client::Material lodMat; lodMat.diffuse = m_atlasTexture;
         m_lodManager.CollectVisibleMeshes(m_frustum, m_visibleLodMeshes);
         if (!m_visibleLodMeshes.empty())
             renderer->DrawMeshBatch(m_visibleLodMeshes, m_lodShader, lodMat);
 
-        // 其他玩家
+        // 3. 其他玩家
         if (!m_playerMesh) m_playerMesh = BuildPlayerMesh();
         Eng::client::Material playerMat; playerMat.diffuse = m_atlasTexture;
         for (auto& [id, ps] : m_otherPlayers) {
@@ -598,7 +580,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
             renderer->DrawMesh(m_playerMesh, m_cubeShader, playerMat, model);
         }
 
-        // 实例化渲染掉落物
+        // 4. 实例化渲染掉落物
         if (!m_itemEntities.empty()) {
             std::unordered_map<BlockType, std::vector<glm::mat4>> instances;
             for (const auto& [id, e] : m_itemEntities) {
@@ -616,10 +598,10 @@ void MyGame::OnRender(Eng::Engine& engine) {
             }
         }
 
-        // 天空盒
+        // 5. 渲染天空盒
         renderer->DrawSkybox(m_skyShader);
 
-        // 手部
+        // 6. 渲染手部
         renderer->Clear(Eng::client::ClearFlag::Depth);
         if (!m_handMesh) m_handMesh = BuildHandMesh();
 
@@ -658,55 +640,6 @@ void MyGame::OnRender(Eng::Engine& engine) {
             }
         }
     }
-
-    renderer->UnbindFramebuffer();
-
-    // ==========================================
-    // Pass 2: 提取高光 (Bloom Extract)
-    // ==========================================
-    renderer->BindFramebuffer(m_bloomFbo1);
-    renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    renderer->Clear();
-    Eng::client::PostProcessParams extractParams;
-    extractParams.threshold = m_ppThreshold; // 可调节发光阈值
-    renderer->DrawPostProcess(m_bloomExtractShader, extractParams, { m_hdrFbo->GetColorTexture() });
-    renderer->UnbindFramebuffer();
-
-    // ==========================================
-    // Pass 3: 横向模糊 (Horizontal Blur)
-    // ==========================================
-    renderer->BindFramebuffer(m_bloomFbo2);
-    renderer->Clear();
-    Eng::client::PostProcessParams blurHParams;
-    blurHParams.direction = glm::vec2(1.0f / m_bloomFbo1->GetWidth(), 0.0f);
-    renderer->DrawPostProcess(m_blurShader, blurHParams, { m_bloomFbo1->GetColorTexture() });
-    renderer->UnbindFramebuffer();
-
-    // ==========================================
-    // Pass 4: 纵向模糊 (Vertical Blur)
-    // ==========================================
-    renderer->BindFramebuffer(m_bloomFbo1);
-    renderer->Clear();
-    Eng::client::PostProcessParams blurVParams;
-    blurVParams.direction = glm::vec2(0.0f, 1.0f / m_bloomFbo2->GetHeight());
-    renderer->DrawPostProcess(m_blurShader, blurVParams, { m_bloomFbo2->GetColorTexture() });
-    renderer->UnbindFramebuffer();
-
-    // ==========================================
-    // Pass 5: 最终合成 → 屏幕
-    // ==========================================
-    renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    renderer->Clear(Eng::client::ClearFlag::Color | Eng::client::ClearFlag::Depth);
-    
-    Eng::client::PostProcessParams compParams;
-    compParams.exposure      = m_ppExposure;      // 曝光度
-    compParams.bloomStrength = m_ppBloomStrength; // 泛光强度
-    
-    // 传两张纹理：第一个是原场景，第二个是模糊后的高光
-    renderer->DrawPostProcess(m_compositeShader, compParams, { 
-        m_hdrFbo->GetColorTexture(), 
-        m_bloomFbo1->GetColorTexture() 
-    });
 
     // ==========================================
     // UI 渲染
@@ -778,12 +711,7 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
     m_otherPlayers.clear();
     m_meshManager.Stop();
 
-    m_hdrFbo.reset();
-    m_bloomFbo1.reset();
-    m_bloomFbo2.reset();
-    m_bloomExtractShader.reset();
-    m_blurShader.reset();
-    m_compositeShader.reset();
+    m_mainFbo.reset();
 
     m_cubeShader.reset();
     m_skyShader.reset();

@@ -23,16 +23,25 @@ layout(set = 1, binding = 0) uniform sampler2D uDiffuse;
 #endif
 
 void main() {
-    // 找到 lod.frag 里的光照计算部分，改为：
-    vec3 texColor = textureLod(uDiffuse, vUV, 0.0).rgb;
+    vec4 texColor4 = textureLod(uDiffuse, vUV, 0.0);
+    // ★ 加上透明裁剪，防止远处的树叶变成黑块
+    if (texColor4.a < 0.1) discard;
+    
+    vec3 texColor = texColor4.rgb;
     vec3 norm = vec3(0.0, 1.0, 0.0);
     vec3 lightDirN = normalize(global.lightDir);
     float diff = max(dot(norm, lightDirN), 0.0);
 
-    // 稍微夸张一点平行光强度，因为远处不需要精细高光
-    vec3 lit = global.lightAmbient * texColor + diff * global.lightColor * global.lightIntensity * 1.5 * texColor;
+    // ★ 用一个简单的计算来模拟天空光亮度
+    // 白天时 sunH > 0，夜晚变暗
+    float skyLight = clamp(global.lightDir.y * 2.0 + 0.3, 0.1, 1.0); 
+
+    // 乘上 skyLight
+    vec3 lit = (global.lightAmbient + diff * global.lightColor * global.lightIntensity) * skyLight * texColor;
     vec3 result = lit * 1.0;
-    result = max(result, texColor * 0.35);
+    
+    // 保底亮度
+    result = max(result, texColor * 0.05 * skyLight); 
 
     FragColor = vec4(result, 1.0);
 }

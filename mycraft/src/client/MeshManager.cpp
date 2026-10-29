@@ -191,16 +191,17 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                 BlockType type = ChunkGet(chunk, lx, ly, lz);
                 if (type == BlockType::Air || type == BlockType::Void) continue;
 
-                // --- 1.火把和植物 ---
-                if (type == BlockType::Torch || type == BlockType::TallGrass || type == BlockType::FlowerRed || type == BlockType::FlowerYellow) {
-                    glm::vec4 light;
-                    if (type == BlockType::Torch) {
-                        light = glm::vec4(0.0f, 1.0f, 0.6f, 0.2f); // 火把自发光
-                    } else {
-                        light = getLightAt(lx, ly, lz);             // 植物吃环境光
-                    }
+                // --- 1. 火把（独立 3D 模型） ---
+                if (type == BlockType::Torch) {
+                    glm::vec4 light = glm::vec4(0.0f, 1.0f, 0.6f, 0.2f); // 火把自发光
+                    MeshBuilderUtils::AppendTorch(baseX + lx, ly, baseZ + lz, light, result.vertices, result.indices);
+                    continue;
+                }
+
+                // --- 2. 植物（十字面片） ---
+                if (type == BlockType::TallGrass || type == BlockType::FlowerRed || type == BlockType::FlowerYellow) {
+                    glm::vec4 light = getLightAt(lx, ly, lz);             // 植物吃环境光
                     glm::vec3 center = { baseX + lx + 0.5f, (float)ly + 0.5f, baseZ + lz + 0.5f };
-                    
                     MeshBuilderUtils::AppendSprite(type, center, light, result.vertices, result.indices);
                     continue;
                 }
@@ -216,7 +217,14 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                     int nz = lz + N.z;
                     BlockType neighbor = getBlock(nx, ny, nz);
 
-                    if (IsSolid(neighbor)) continue;
+                    if (IsSolid(neighbor)) {
+                        // 如果当前是树叶，且邻居也是树叶，不要剔除内部面（让树冠看起来是实心的）
+                        if (type == BlockType::Leaves && neighbor == BlockType::Leaves) {
+                            // 保留内部面
+                        } else {
+                            continue; // 其他情况正常剔除
+                        }
+                    }
                     if (type == BlockType::Water && neighbor == BlockType::Water) continue;
 
                     for (int v = 0; v < 4; ++v) {

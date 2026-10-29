@@ -45,13 +45,7 @@ private:
     Eng::client::ShaderPtr      m_lodShader;
     Eng::client::DeviceInfo     m_deviceInfo;
 
-    Eng::client::FramebufferPtr m_hdrFbo;     
-    Eng::client::FramebufferPtr m_bloomFbo1;  
-    Eng::client::FramebufferPtr m_bloomFbo2;  
-
-    Eng::client::ShaderPtr m_bloomExtractShader;
-    Eng::client::ShaderPtr m_blurShader;
-    Eng::client::ShaderPtr m_compositeShader;
+    Eng::client::FramebufferPtr m_mainFbo;     
 
     void RecreateFBOs(int w, int h);
 
@@ -155,11 +149,6 @@ private:
 
     bool m_inventoryOpen = false;
     std::array<ItemStack, 27> m_inventory{};
-
-    // ==================== 后处理参数 ====================
-    float m_ppThreshold = 1.0f;         // 提取高光的阈值
-    float m_ppExposure = 0.33f;         // 曝光度
-    float m_ppBloomStrength = 0.33f;    // 泛光强度
 
     // ==================== 状态与 UI 标志 ====================
     friend class client::ClientUI;

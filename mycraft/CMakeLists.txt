@@ -49,46 +49,15 @@ add_sanitizer(mycraft-server)
 # ============================================================
 # Shader 编译（只挂到客户端，服务端不需要）
 # ============================================================
-function(add_post_shader TARGET NAME)
-    set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/src)
-    set(OUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/build/${NAME})
-    file(MAKE_DIRECTORY ${OUT_DIR})
 
-    # ★ 复用 post.vert 作为全屏顶点着色器
-    set(VERT_GLSL ${SRC_DIR}/post.vert)
-    set(FRAG_GLSL ${SRC_DIR}/${NAME}.frag)
-    
-    set(VERT_VK   ${OUT_DIR}/vert.vk.spv)
-    set(FRAG_VK   ${OUT_DIR}/frag.vk.spv)
-    set(VERT_GL   ${OUT_DIR}/vert.gl.spv)
-    set(FRAG_GL   ${OUT_DIR}/frag.gl.spv)
-
-    # Vulkan 版
-    add_custom_command(OUTPUT ${VERT_VK} COMMAND ${GLSLC_EXECUTABLE} --target-env=vulkan1.3 ${VERT_GLSL} -o ${VERT_VK} DEPENDS ${VERT_GLSL} VERBATIM)
-    add_custom_command(OUTPUT ${FRAG_VK} COMMAND ${GLSLC_EXECUTABLE} --target-env=vulkan1.3 ${FRAG_GLSL} -o ${FRAG_VK} DEPENDS ${FRAG_GLSL} VERBATIM)
-
-    # OpenGL 版
-    add_custom_command(OUTPUT ${VERT_GL} COMMAND ${GLSLC_EXECUTABLE} -DUSE_OPENGL --target-env=opengl4.5 ${VERT_GLSL} -o ${VERT_GL} DEPENDS ${VERT_GLSL} VERBATIM)
-    add_custom_command(OUTPUT ${FRAG_GL} COMMAND ${GLSLC_EXECUTABLE} -DUSE_OPENGL --target-env=opengl4.5 ${FRAG_GLSL} -o ${FRAG_GL} DEPENDS ${FRAG_GLSL} VERBATIM)
-
-    add_custom_target(${TARGET} DEPENDS ${VERT_VK} ${FRAG_VK} ${VERT_GL} ${FRAG_GL})
-endfunction()
-
-# 常规 3D 渲染 Shader
 add_glsl_shader(shader_mesh mesh)
 add_glsl_shader(shader_sky  sky)
 add_glsl_shader(shader_post post)
 add_glsl_shader(shader_lod  lod)
 
-# 后处理 Shader
-add_post_shader(shader_bloom_extract bloom_extract)
-add_post_shader(shader_blur blur)
-add_post_shader(shader_composite composite)
-
 # 让 mycraft 依赖所有 shader 编译完成
 add_dependencies(mycraft 
-    shader_mesh shader_sky shader_post shader_lod 
-    shader_bloom_extract shader_blur shader_composite
+    shader_mesh shader_sky shader_post shader_lod
 )
 
 # ============================================================

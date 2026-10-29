@@ -1,9 +1,26 @@
 #include "game/client/TextureAtlas.h"
 #include "game/core/Blocks.h"
+
+#include <SDL3_image/SDL_image.h>
+
 #include <vector>
 #include <cstdint>
 #include <algorithm>
 #include <array>
+#include <string>
+#include <unordered_map>
+
+// ================== 颜色定义 ==================
+// --- 平原 (Plains) ---
+// 草地: #91BD59 -> R:145, G:189, B:89
+const uint8_t PLAINS_GRASS_R = 145, PLAINS_GRASS_G = 189, PLAINS_GRASS_B = 89;
+// 树叶: #77AB2F -> R:119, G:171, B:47
+const uint8_t PLAINS_LEAF_R = 119, PLAINS_LEAF_G = 171, PLAINS_LEAF_B = 47;
+
+// --- 水体 (Water) --- 这里以Java版颜色为例
+// 平原/河流水体: #3F76E4 -> R:63, G:118, B:228
+const uint8_t WATER_R = 63, WATER_G = 118, WATER_B = 228;
+// ============================================
 
 namespace game::client {
 
@@ -40,101 +57,102 @@ constexpr std::array<TileSpec, 20> kTiles = {{
     {.r=255, .g=200, .b= 50, .noise=10}     // 19 Torch
 }};
 
-std::vector<uint8_t> GenerateAtlasPixels() {
-    std::vector<uint8_t> px(static_cast<size_t>(ATLAS_W) * ATLAS_H * 4, 0);
+bool BlitToAtlasTinted(std::vector<uint8_t>& px, const std::string& filepath, int tileIndex, 
+                       uint8_t tintR = 255, uint8_t tintG = 255, uint8_t tintB = 255) 
+{
+    SDL_Surface* loaded = IMG_Load(filepath.c_str());
+    if (!loaded) return false;
+    
+    SDL_Surface* surf = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(loaded);
+    if (!surf) return false;
 
-    // 用字符串画出 16x16 的图案 (0=透明, 1=茎, 2=花瓣)
-    static const char* flowerPattern[16] = {
-        "................",
-        "................",
-        "................",
-        ".....222222.....",
-        "....22222222....",
-        "....22222222....",
-        "....22222222....",
-        ".....222222.....",
-        "......11........",
-        "......11........",
-        "......11........",
-        "......11........",
-        "......11........",
-        "......11........",
-        "......11........",
-        "......11........",
-    };
+    int col = tileIndex % ATLAS_COLS;
+    int row = tileIndex / ATLAS_COLS;
+    int ox = col * ATLAS_TILE;
+    int oy = row * ATLAS_TILE;
 
-    for (size_t t = 0; t < kTiles.size(); ++t) {
-        int col = t % ATLAS_COLS;
-        int row = t / ATLAS_COLS;
-        int ox = col * ATLAS_TILE;
-        int oy = row * ATLAS_TILE;
+    int copyW = std::min(surf->w, 16);
+    int copyH = std::min(surf->h, 16);
+    const uint8_t* srcPixels = static_cast<const uint8_t*>(surf->pixels);
 
-        for (int y = 0; y < ATLAS_TILE; ++y) {
-            for (int x = 0; x < ATLAS_TILE; ++x) {
-                int n = static_cast<int>(HashNoise(x, y, t * 31 + 7)) % (kTiles[t].noise * 2 + 1)
-                        - kTiles[t].noise;
-                int r = kTiles[t].r + n;
-                int g = kTiles[t].g + n;
-                int b = kTiles[t].b + n;
-
-                if (t == 2 || t == 7) {   // 草侧面 / 雪侧面
-                    bool top = (y < 4) || (y == 4 && ((x + HashNoise(x, 0, 99)) % 3 != 0));
-                    if (!top) { r = 110 + n; g = 75 + n; b = 50 + n; }   // 下半土色
-                }
-                if (t == 11) {
-                    if ((x + HashNoise(0, y, 42)) % 4 == 0) {
-                        r = 110 + n; g = 70 + n; b = 30 + n;   // 深色条纹
-                    }
-                }
-
-                int i = ((oy + y) * ATLAS_W + (ox + x)) * 4;
-
-                // ================= 处理透明植物 =================
-                if (t >= 16) {
-                    px[i + 0] = 0; px[i + 1] = 0; px[i + 2] = 0; px[i + 3] = 0; // 默认透明
-
-                    if (t == 16) { 
-                        // 从底部开始长，保证根部连着地，越往上越稀疏且带点弯曲
-                        if (y >= 4) {
-                            // 用 x 和 (15-y) 作为噪声，生成类似植物生长的弯曲感
-                            bool isBlade = (HashNoise(x * 3, 15 - y, 42) % 4 == 0);
-                            // 强制在底部生成几根主根
-                            if (y > 12 && (x == 4 || x == 7 || x == 11)) isBlade = true;
-
-                            if (isBlade) {
-                                px[i + 0] = 88; px[i + 1] = 160; px[i + 2] = 70; px[i + 3] = 255;
-                            }
-                        }
-                    } else if (t == 17 || t == 18) { 
-                        // 使用上面定义的字符画图案
-                        char p = flowerPattern[y][x];
-                        if (p == '1') { // 茎
-                            px[i + 0] = 42; px[i + 1] = 100; px[i + 2] = 45; px[i + 3] = 255;
-                        } else if (p == '2') { // 花瓣
-                            px[i + 0] = 220; 
-                            px[i + 1] = (t == 17) ? 40 : 200; 
-                            px[i + 2] = 40; 
-                            px[i + 3] = 255;
-                        }
-                    } else if (t == 19) { // 火把
-                        // 简单画个居中的小木棍和火焰
-                        if (x >= 7 && x <= 8 && y >= 8) { // 木棍
-                            px[i + 0] = 139; px[i + 1] = 90; px[i + 2] = 43; px[i + 3] = 255;
-                        } else if (y < 8 && x >= 6 && x <= 9) { // 火焰
-                            px[i + 0] = 255; px[i + 1] = 200; px[i + 2] = 50; px[i + 3] = 255;
-                        }
-                    }
-                    continue; // 跳过下面的默认不透明赋值
-                }
-                // =================================================
-
-                px[i + 0] = static_cast<uint8_t>(std::clamp(r, 0, 255));
-                px[i + 1] = static_cast<uint8_t>(std::clamp(g, 0, 255));
-                px[i + 2] = static_cast<uint8_t>(std::clamp(b, 0, 255));
-                px[i + 3] = 255;
-            }
+    for (int y = 0; y < copyH; ++y) {
+        for (int x = 0; x < copyW; ++x) {
+            int srcIdx = (y * surf->w + x) * 4;
+            int dstIdx = ((oy + y) * ATLAS_W + (ox + x)) * 4;
+            
+            // ★ 核心：将原图的 RGB 乘以染料的 RGB
+            px[dstIdx + 0] = static_cast<uint8_t>((srcPixels[srcIdx + 0] * tintR) / 255);
+            px[dstIdx + 1] = static_cast<uint8_t>((srcPixels[srcIdx + 1] * tintG) / 255);
+            px[dstIdx + 2] = static_cast<uint8_t>((srcPixels[srcIdx + 2] * tintB) / 255);
+            px[dstIdx + 3] = srcPixels[srcIdx + 3]; // Alpha 不变
         }
     }
+    
+    SDL_DestroySurface(surf);
+    return true;
+}
+
+void FallbackTile(std::vector<uint8_t>& px, int t) {
+    int col = t % ATLAS_COLS;
+    int row = t / ATLAS_COLS;
+    int ox = col * ATLAS_TILE;
+    int oy = row * ATLAS_TILE;
+
+    for (int y = 0; y < ATLAS_TILE; ++y) {
+        for (int x = 0; x < ATLAS_TILE; ++x) {
+            int n = static_cast<int>(HashNoise(x, y, t * 31 + 7)) % (kTiles[t].noise * 2 + 1) - kTiles[t].noise;
+            int r = std::clamp(kTiles[t].r + n, 0, 255);
+            int g = std::clamp(kTiles[t].g + n, 0, 255);
+            int b = std::clamp(kTiles[t].b + n, 0, 255);
+            int i = ((oy + y) * ATLAS_W + (ox + x)) * 4;
+            px[i + 0] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = 255;
+        }
+    }
+}
+
+std::vector<uint8_t> GenerateAtlasPixels() {
+    std::vector<uint8_t> px(static_cast<size_t>(ATLAS_W) * ATLAS_H * 4, 0);
+    std::string base = "./assets/textures/block/";
+
+    for (size_t t = 0; t < kTiles.size(); ++t) {
+        bool success = false;
+        
+        // 针对需要染色的方块，使用 BlitToAtlasTinted
+        // 这里我们先统一使用平原的颜色，方便你快速看到效果。
+        // 后续你可以根据生物群系动态切换这些常量。
+        if (t == 1) { // 草方块顶面
+            success = BlitToAtlasTinted(px, base + "grass_block_top.png", t, PLAINS_GRASS_R, PLAINS_GRASS_G, PLAINS_GRASS_B);
+        } else if (t == 2) { // 草方块侧面
+            // 侧面染色逻辑不变，先用平原草地色
+            success = BlitToAtlasTinted(px, base + "grass_block_side.png", t, PLAINS_GRASS_R, PLAINS_GRASS_G, PLAINS_GRASS_B);
+        } else if (t == 12) { // 树叶
+            success = BlitToAtlasTinted(px, base + "oak_leaves.png", t, PLAINS_LEAF_R, PLAINS_LEAF_G, PLAINS_LEAF_B);
+        } else if (t == 16) { // 高草丛
+            success = BlitToAtlasTinted(px, base + "short_grass.png", t, PLAINS_GRASS_R, PLAINS_GRASS_G, PLAINS_GRASS_B);
+        } 
+        // ★ 新增：处理水体染色
+        else if (t == 5) { 
+            // 假设水的原图是灰度的，我们给它染上水的颜色
+            success = BlitToAtlasTinted(px, base + "water_still.png", t, WATER_R, WATER_G, WATER_B);
+        } else {
+            std::unordered_map<int, std::string> pngMap = {
+                { 0, "stone.png" }, { 3, "dirt.png" }, { 4, "sand.png" },
+                { 5, "water_still.png" }, { 6, "snow.png" }, { 7, "snow.png" },
+                { 11, "oak_log.png" }, { 17, "poppy.png" }, { 18, "dandelion.png" },
+                { 19, "torch.png" }
+            };
+            auto it = pngMap.find(t);
+            if (it != pngMap.end()) {
+                success = BlitToAtlasTinted(px, base + it->second, t, 255, 255, 255); // 传 255 等于不染色
+            }
+        }
+
+        if (!success) {
+            FallbackTile(px, t);
+        }
+    }
+
     return px;
 }
 
@@ -144,18 +162,16 @@ int TileForBlock(BlockType b, int face) {
     switch (b) {
         case BlockType::Stone:        return 0;
         case BlockType::GrassBlock:
-            if (face == 2) return 1;
-            if (face == 3) return 3;
-            return 2;
+            if (face == 2) return 1; // +Y 顶面：草
+            if (face == 3) return 3; // -Y 底面：泥
+            return 2;                // 侧面：草土混合
         case BlockType::Dirt:         return 3;
         case BlockType::Sand:         return 4;
         case BlockType::Water:        return 5;
         case BlockType::Snow:
-            // 顶=6（纯白）、底=3（土）、侧面=7
-            if (face == 2) return 6;
-            if (face == 3) return 3;
-            return 7;
-
+            if (face == 2) return 6; // 顶面纯雪
+            if (face == 3) return 3; // 底面土
+            return 7;                // 侧面雪+土
         case BlockType::Sandstone:    return 8;
         case BlockType::CoalOre:      return 9;
         case BlockType::IronOre:      return 10;
@@ -171,15 +187,24 @@ int TileForBlock(BlockType b, int face) {
 
 const char* BlockName(BlockType t) {
     switch (t) {
-        case BlockType::Stone:      return "Stone";
-        case BlockType::Dirt:       return "Dirt";
-        case BlockType::GrassBlock: return "Grass";
-        case BlockType::Sand:       return "Sand";
-        case BlockType::Water:      return "Water";
-        case BlockType::Snow:       return "Snow";
-        case BlockType::Wood:       return "Wood";
-        case BlockType::Leaves:     return "Leaves";
-        default:                          return "Unknown";
+        case BlockType::Air:          return "Air";
+        case BlockType::Stone:        return "Stone";
+        case BlockType::GrassBlock:   return "Grass Block";
+        case BlockType::Dirt:         return "Dirt";
+        case BlockType::Sand:         return "Sand";
+        case BlockType::Water:        return "Water";
+        case BlockType::Snow:         return "Snow";
+        case BlockType::Sandstone:    return "Sandstone";
+        case BlockType::CoalOre:      return "Coal Ore";
+        case BlockType::IronOre:      return "Iron Ore";
+        case BlockType::Wood:         return "Wood";
+        case BlockType::Leaves:       return "Leaves";
+        case BlockType::TallGrass:    return "Tall Grass";
+        case BlockType::FlowerRed:    return "Red Flower";
+        case BlockType::FlowerYellow: return "Yellow Flower";
+        case BlockType::Torch:        return "Torch";
+        case BlockType::Void:         return "Void";
+        default:                      return "Unknown";
     }
 }
 

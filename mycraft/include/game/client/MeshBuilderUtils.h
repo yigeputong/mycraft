@@ -22,6 +22,8 @@ public:
 
     static void AppendSprite(BlockType type, glm::vec3 center, const glm::vec4& light, std::vector<Eng::client::Vertex>& outV, std::vector<uint32_t>& outI);
 
+    static void AppendTorch(int x, int y, int z, glm::vec4 light, std::vector<Eng::client::Vertex>& outV, std::vector<uint32_t>& outI);
+
     static Eng::client::MeshData BuildItemMeshData(BlockType type);
 };
 

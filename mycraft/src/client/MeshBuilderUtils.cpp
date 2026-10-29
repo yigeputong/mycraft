@@ -101,6 +101,49 @@ void MeshBuilderUtils::AppendSprite(BlockType type, glm::vec3 c, const glm::vec4
     pushQuad({c.x, y0, c.z+s}, {u1, v1}, {c.x, y0, c.z-s}, {u0, v1}, {c.x, y1, c.z-s}, {u0, v0}, {c.x, y1, c.z+s}, {u1, v0}, {-1,0,0});
 }
 
+void MeshBuilderUtils::AppendTorch(int x, int y, int z, glm::vec4 light, std::vector<Eng::client::Vertex>& outV, std::vector<uint32_t>& outI) {
+    int tile = 19; // 火把的图集索引
+    
+    // 计算 Tile 的基础 UV
+    float u0 = (tile % ATLAS_COLS) * TILE_UV;
+    float v0 = (tile / ATLAS_COLS) * TILE_UV;
+    
+    // 原图 16x16，火把木棍和火的 UV 范围
+    float su_min = u0 + (7.0f / 16.0f) * TILE_UV;  // 侧面木棍的 UV
+    float su_max = u0 + (9.0f / 16.0f) * TILE_UV;
+    float sv_min = v0 + (6.0f / 16.0f) * TILE_UV;
+    float sv_max = v0 + (16.0f / 16.0f) * TILE_UV;
+    
+    float tu_min = u0 + (7.0f / 16.0f) * TILE_UV;  // 顶面火焰的 UV
+    float tu_max = u0 + (9.0f / 16.0f) * TILE_UV;
+    float tv_min = v0 + (0.0f / 16.0f) * TILE_UV;
+    float tv_max = v0 + (6.0f / 16.0f) * TILE_UV;
+    
+    // 火把尺寸：宽深 2/16，高 10/16
+    glm::vec3 c = glm::vec3(x + 0.5f, y + 0.3125f, z + 0.5f); // 中心点（y 向上偏移，因为底部在 y）
+    float hw = 0.0625f; // 宽度一半 1/16
+    float hh = 0.3125f; // 高度一半 5/16
+    float hd = 0.0625f;
+
+    auto addFace = [&](glm::vec3 p0, glm::vec3 p1, glm::vec3 p2, glm::vec3 p3, glm::vec3 norm, float umin, float umax, float vmin, float vmax) {
+        uint32_t base = outV.size();
+        outV.push_back({p0, norm, {umin, vmax}, 1.0f, light});
+        outV.push_back({p1, norm, {umax, vmax}, 1.0f, light});
+        outV.push_back({p2, norm, {umax, vmin}, 1.0f, light});
+        outV.push_back({p3, norm, {umin, vmin}, 1.0f, light});
+        outI.insert(outI.end(), {base, base+1, base+2, base+2, base+3, base});
+    };
+
+    // 侧面 4 个面
+    addFace({c.x+hw, c.y-hh, c.z-hd}, {c.x+hw, c.y-hh, c.z+hd}, {c.x+hw, c.y+hh, c.z+hd}, {c.x+hw, c.y+hh, c.z-hd}, {1,0,0}, su_min, su_max, sv_min, sv_max);
+    addFace({c.x-hw, c.y-hh, c.z+hd}, {c.x-hw, c.y-hh, c.z-hd}, {c.x-hw, c.y+hh, c.z-hd}, {c.x-hw, c.y+hh, c.z+hd}, {-1,0,0}, su_min, su_max, sv_min, sv_max);
+    addFace({c.x-hw, c.y-hh, c.z+hd}, {c.x+hw, c.y-hh, c.z+hd}, {c.x+hw, c.y+hh, c.z+hd}, {c.x-hw, c.y+hh, c.z+hd}, {0,0,1}, su_min, su_max, sv_min, sv_max);
+    addFace({c.x+hw, c.y-hh, c.z-hd}, {c.x-hw, c.y-hh, c.z-hd}, {c.x-hw, c.y+hh, c.z-hd}, {c.x+hw, c.y+hh, c.z-hd}, {0,0,-1}, su_min, su_max, sv_min, sv_max);
+    
+    // 顶面
+    addFace({c.x-hw, c.y+hh, c.z-hd}, {c.x+hw, c.y+hh, c.z-hd}, {c.x+hw, c.y+hh, c.z+hd}, {c.x-hw, c.y+hh, c.z+hd}, {0,1,0}, tu_min, tu_max, tv_min, tv_max);
+}
+
 Eng::client::MeshData MeshBuilderUtils::BuildItemMeshData(BlockType type) {
     Eng::client::MeshData data;
     bool isSprite = (type == BlockType::TallGrass || type == BlockType::FlowerRed || 

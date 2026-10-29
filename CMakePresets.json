@@ -7,20 +7,29 @@
             "generator": "Ninja Multi-Config",
             "cacheVariables": {
                 "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-                "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets"
+                "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
+                "BUILD_SHARED_LIBS": "OFF"
             }
         },
         {
             "name": "windows-base",
             "hidden": true,
             "inherits": "base",
-            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+            "cacheVariables": {
+                "VCPKG_TARGET_TRIPLET": "x64-windows-static",
+                "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+            }
         },
         {
             "name": "linux-base",
             "hidden": true,
             "inherits": "base",
-            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+            "cacheVariables": {
+                "VCPKG_TARGET_TRIPLET": "x64-linux",
+                "CMAKE_EXE_LINKER_FLAGS": "-static"
+            }
         },
         {
             "name": "windows-msvc",
@@ -34,7 +43,9 @@
             "inherits": "windows-base",
             "binaryDir": "${sourceDir}/build/msvc-asan",
             "cacheVariables": {
-                "SANITIZER": "address"
+                "SANITIZER": "address",
+                "VCPKG_TARGET_TRIPLET": "x64-windows",
+                "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
             }
         },
         {
@@ -55,7 +66,9 @@
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang-cl",
                 "CMAKE_CXX_COMPILER": "clang-cl",
-                "SANITIZER": "address"
+                "SANITIZER": "address",
+                "VCPKG_TARGET_TRIPLET": "x64-windows",
+                "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
             }
         },
         {
