@@ -156,6 +156,11 @@ private:
     bool m_inventoryOpen = false;
     std::array<ItemStack, 27> m_inventory{};
 
+    // ==================== 后处理参数 ====================
+    float m_ppThreshold = 1.0f;         // 提取高光的阈值
+    float m_ppExposure = 0.33f;         // 曝光度
+    float m_ppBloomStrength = 0.33f;    // 泛光强度
+
     // ==================== 状态与 UI 标志 ====================
     friend class client::ClientUI;
     client::ClientUI m_ui;

@@ -31,5 +31,11 @@ layout(push_constant) uniform PostProcessPC {
 void main() {
     vec3 color = texture(tex0, vUv).rgb;
     float brightness = dot(color, vec3(0.2126, 0.7152, 0.0722));
-    FragColor = (brightness > pc.threshold) ? vec4(color, 1.0) : vec4(0.0);
+    
+    // 使用 smoothstep 做软提取
+    float soft = clamp(brightness - pc.threshold, 0.0, 1.0);
+    soft = soft * soft * 0.5; 
+    
+    // 提取出的高光乘以 soft 系数，避免过亮
+    FragColor = vec4(color * soft, 1.0);
 }

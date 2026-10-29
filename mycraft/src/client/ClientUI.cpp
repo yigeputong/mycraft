@@ -511,7 +511,32 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
 
         int hh = (int)game.m_timeOfDay;
         int mm = (int)((game.m_timeOfDay - hh) * 60);
-        DrawLineBgLeft(leftX, dbgY, white, "Time: %02d:%02d", hh, mm);
+                DrawLineBgLeft(leftX, dbgY, white, "Time: %02d:%02d", hh, mm);
+        dbgY += lineHeight;
+
+        // ==========================================
+        // ★ 新增：后处理滑块（带完整的鼠标捕获与交互）
+        // ==========================================
+        ImGui::SetNextWindowPos(ImVec2(leftX, dbgY + 10.0f));
+        ImGui::SetNextWindowBgAlpha(0.8f); // 稍微加深一点背景，防看不清字
+
+        // 注意：去掉了 NoInputs，允许鼠标捕获
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | 
+                                 ImGuiWindowFlags_AlwaysAutoResize | 
+                                 ImGuiWindowFlags_NoSavedSettings | 
+                                 ImGuiWindowFlags_NoMove;
+
+        if (ImGui::Begin("Post-Processing", nullptr, flags)) {
+            ImGui::PushItemWidth(140.0f);
+            
+            // 只有当鼠标悬停在这个窗口上时，才会触发 WantCaptureMouse
+            ImGui::SliderFloat("Threshold", &game.m_ppThreshold, 0.0f, 5.0f, "%.2f");
+            ImGui::SliderFloat("Exposure", &game.m_ppExposure, 0.1f, 3.0f, "%.2f");
+            ImGui::SliderFloat("Bloom", &game.m_ppBloomStrength, 0.0f, 3.0f, "%.2f");
+            
+            ImGui::PopItemWidth();
+        }
+        ImGui::End();
 
         // 右侧信息
         float rightX = io.DisplaySize.x - 14.0f;

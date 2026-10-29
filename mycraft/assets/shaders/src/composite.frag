@@ -39,15 +39,28 @@ void main() {
     vec2 d = pc.direction;
 #endif
 
-    vec3 scene = texture(tex0, vUv).rgb;
+        vec3 scene = texture(tex0, vUv).rgb;
     vec3 bloom = texture(tex1, vUv).rgb;
     
+    // 混合泛光
     vec3 result = scene + bloom * b;
+    
+    // 调整曝光
     result *= e;
+    
+    // ACES 映射
     result = ACESFilm(result);
     
+    // ★ 核心防爆：把极亮的地方压回正常颜色
     float luma = dot(result, vec3(0.2126, 0.7152, 0.0722));
+    if (luma > 0.85) {
+        result = mix(result, vec3(luma), (luma - 0.85) * 1.5); // 将纯白稍微向灰度靠拢，去除死白
+    }
+    
+    // 拉高饱和度
     result = mix(vec3(luma), result, 1.2);
+    
+    // Gamma 校正
     result = pow(result, vec3(1.0 / 2.2));
     
     FragColor = vec4(result, 1.0);

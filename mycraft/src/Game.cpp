@@ -464,10 +464,11 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     glm::vec3 sunDir = glm::normalize(glm::vec3(cos(angle), sin(angle), 0.3f));
     float sunH = sunDir.y;
 
-    float sunI = glm::clamp(sunH * 4.0f, 0.0f, 1.0f);
+    float sunI = glm::clamp(sunH * 2.5f, 0.0f, 0.85f); // 限制最高强度为 0.85
     float warm = 1.0f - glm::clamp(sunH * 3.0f, 0.0f, 1.0f);
     glm::vec3 sunColor = glm::mix(glm::vec3(1.0f, 1.0f, 1.0f), glm::vec3(1.0f, 0.5f, 0.2f), warm);
-    glm::vec3 ambient  = glm::mix(glm::vec3(0.10f, 0.12f, 0.20f), glm::vec3(0.55f, 0.60f, 0.70f),
+    // 环境光不要太高
+    glm::vec3 ambient  = glm::mix(glm::vec3(0.1f, 0.12f, 0.2f), glm::vec3(0.35f, 0.4f, 0.45f), 
                                   glm::clamp(sunH * 2.0f, 0.0f, 1.0f));
 
     m_globalState.lightDir       = sunDir;
@@ -667,7 +668,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     renderer->Clear();
     Eng::client::PostProcessParams extractParams;
-    extractParams.threshold = 1.2f; // 可调节发光阈值
+    extractParams.threshold = m_ppThreshold; // 可调节发光阈值
     renderer->DrawPostProcess(m_bloomExtractShader, extractParams, { m_hdrFbo->GetColorTexture() });
     renderer->UnbindFramebuffer();
 
@@ -698,8 +699,8 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->Clear(Eng::client::ClearFlag::Color | Eng::client::ClearFlag::Depth);
     
     Eng::client::PostProcessParams compParams;
-    compParams.exposure      = 0.6f; // 曝光度
-    compParams.bloomStrength = 0.5f; // 泛光强度
+    compParams.exposure      = m_ppExposure;      // 曝光度
+    compParams.bloomStrength = m_ppBloomStrength; // 泛光强度
     
     // 传两张纹理：第一个是原场景，第二个是模糊后的高光
     renderer->DrawPostProcess(m_compositeShader, compParams, { 

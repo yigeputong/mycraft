@@ -23,17 +23,14 @@ layout(set = 1, binding = 0) uniform sampler2D uDiffuse;
 #endif
 
 void main() {
+    // 找到 lod.frag 里的光照计算部分，改为：
     vec3 texColor = textureLod(uDiffuse, vUV, 0.0).rgb;
-
-    // LOD 顶面法线朝上
     vec3 norm = vec3(0.0, 1.0, 0.0);
     vec3 lightDirN = normalize(global.lightDir);
     float diff = max(dot(norm, lightDirN), 0.0);
 
-    vec3 lit = global.lightAmbient * texColor
-             + diff * global.lightColor * global.lightIntensity * texColor;
-
-    // 顶面 faceShade = 1.0，照 mesh.frag 的规则
+    // 稍微夸张一点平行光强度，因为远处不需要精细高光
+    vec3 lit = global.lightAmbient * texColor + diff * global.lightColor * global.lightIntensity * 1.5 * texColor;
     vec3 result = lit * 1.0;
     result = max(result, texColor * 0.35);
 
