@@ -603,7 +603,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
         renderer->DrawSkybox(m_skyShader);
 
         // 6. 渲染手部
-        renderer->Clear(Eng::client::ClearFlag::Depth);
+        renderer->Clear(Eng::client::rhi::ClearFlag::Depth);
         if (!m_handMesh) m_handMesh = BuildHandMesh();
 
         glm::vec3 basePos(0.5f, -0.5f, -1.0f);
