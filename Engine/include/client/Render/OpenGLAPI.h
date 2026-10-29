@@ -105,8 +105,7 @@ private:
     std::unordered_map<FramebufferHandle, FramebufferInternal> m_framebuffers;
     std::unordered_map<FramebufferHandle, TextureHandle>       m_fbColorHandles;
 
-    TextureHandle m_defaultTexture = 0;
-    GLuint m_defaultTexID = 0;
+    TexturePtr m_defaultTexturePtr = nullptr;
 
     GlobalState m_globalState{};
 
@@ -144,11 +143,21 @@ private:
     std::string ReadFile(const std::string& path);
     
     GLuint ResolveTexture(const TexturePtr& tex) const {
-        if (!tex) return m_defaultTexID;
-        auto it = m_textures.find(tex->GetHandle());
-        if (it == m_textures.end() || it->second.textureID == 0)
-            return m_defaultTexID;
-        return it->second.textureID;
+        if (tex) {
+            auto it = m_textures.find(tex->GetHandle());
+            if (it != m_textures.end() && it->second.textureID != 0) {
+                return it->second.textureID;
+            }
+        }
+        
+        // Fallback：如果传入的 tex 为空或无效，返回默认的紫黑棋盘格
+        if (m_defaultTexturePtr) {
+            auto it = m_textures.find(m_defaultTexturePtr->GetHandle());
+            if (it != m_textures.end()) {
+                return it->second.textureID;
+            }
+        }
+        return 0; // 极端情况，什么都没有
     }
 };
 

@@ -136,6 +136,8 @@ private:
     uint32_t m_nextTexture     = 1;
     uint32_t m_nextFramebuffer = 1;
 
+    TexturePtr m_defaultTexturePtr = nullptr;
+
     Window*                          m_window         = nullptr;
     vk::raii::Instance               m_instance       = nullptr;
     vk::raii::DebugUtilsMessengerEXT m_debugMessenger = nullptr;

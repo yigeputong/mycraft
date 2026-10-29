@@ -3,6 +3,7 @@
 #include "core/Log.h"
 
 #include <SDL3/SDL_pixels.h>
+#include <cstddef>
 #include <iostream>
 #include <vector>
 #include <fstream>
@@ -49,6 +50,27 @@ namespace {
         }
         return shader;
     }
+
+    std::vector<uint8_t> GenerateMissingTexturePixels() {
+        constexpr int kSize = 16;
+        std::vector<uint8_t> pixels(static_cast<size_t>(kSize * kSize) * 4);
+        const uint8_t magenta[4] = {248, 0, 248, 255}; // #F800F8
+        const uint8_t black[4]   = {0, 0, 0, 255};
+        
+        for (int y = 0; y < kSize; ++y) {
+            for (int x = 0; x < kSize; ++x) {
+                int idx = (y * kSize + x) * 4;
+                // 8x8 的大格子棋盘格（视觉更醒目）
+                bool isMagenta = ((x / 8) + (y / 8)) % 2 == 0;
+                const uint8_t* color = isMagenta ? magenta : black;
+                pixels[idx + 0] = color[0];
+                pixels[idx + 1] = color[1];
+                pixels[idx + 2] = color[2];
+                pixels[idx + 3] = color[3];
+            }
+        }
+        return pixels;
+    }
 }
 
 namespace Eng::client {
@@ -73,9 +95,12 @@ void OpenGLAPI::Initialize(int width, int height, Window* window) {
     SetViewport(0, 0, width, height);
     m_initialized = true;
 
-    // 默认纹理（使用内部句柄函数，避免生成 Ptr ）
-    m_defaultTexture = m_nextTextureHandle++;
-    m_textures[m_defaultTexture] = { 0, 0, 0, GL_RGBA }; // 占位
+    // 默认无效纹理（紫黑棋盘格 16x16）
+    auto missingPixels = GenerateMissingTexturePixels();
+    m_defaultTexturePtr = CreateTexture(missingPixels.data(), 16, 16);
+    if (!m_defaultTexturePtr) {
+        throw std::runtime_error("Failed to create default missing texture");
+    }
 
     glGenBuffers(1, &m_globalUBO);
     glBindBuffer(GL_UNIFORM_BUFFER, m_globalUBO);
@@ -111,6 +136,7 @@ void OpenGLAPI::Shutdown() {
         if (tex.textureID) glDeleteTextures(1, &tex.textureID);
     }
     m_textures.clear();
+    m_defaultTexturePtr.reset();
 
     for (auto& [handle, shader] : m_shaders) {
         if (shader.program) glDeleteProgram(shader.program);

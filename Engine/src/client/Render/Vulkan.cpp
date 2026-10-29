@@ -4,6 +4,7 @@
 
 #include <SDL3/SDL_vulkan.h>
 #include <SDL3_image/SDL_image.h>
+#include <cstddef>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
@@ -23,6 +24,29 @@
 #include <algorithm>
 
 namespace Eng::client {
+
+namespace {
+    std::vector<uint8_t> GenerateMissingTexturePixels() {
+        constexpr int kSize = 16;
+        std::vector<uint8_t> pixels(static_cast<size_t>(kSize * kSize) * 4);
+        const uint8_t magenta[4] = {248, 0, 248, 255}; // #F800F8
+        const uint8_t black[4]   = {0, 0, 0, 255};
+        
+        for (int y = 0; y < kSize; ++y) {
+            for (int x = 0; x < kSize; ++x) {
+                int idx = (y * kSize + x) * 4;
+                // 8x8 的大格子棋盘格（视觉更醒目）
+                bool isMagenta = ((x / 8) + (y / 8)) % 2 == 0;
+                const uint8_t* color = isMagenta ? magenta : black;
+                pixels[idx + 0] = color[0];
+                pixels[idx + 1] = color[1];
+                pixels[idx + 2] = color[2];
+                pixels[idx + 3] = color[3];
+            }
+        }
+        return pixels;
+    }
+}
 
 VulkanAPI::VulkanAPI() = default;
 
@@ -74,10 +98,14 @@ void VulkanAPI::Initialize(int /*width*/, int /*height*/, Window* window) {
     createCommandBuffers();
     createSyncObjects();
 
-    // 创建默认白色纹理（1x1）防止空绑定
-    uint8_t white[4] = {255, 255, 255, 255};
-    TexturePtr defaultTexPtr = CreateTexture(white, 1, 1);
-    m_defaultTexture = defaultTexPtr->GetHandle();
+    // 创建默认紫黑棋盘格无效纹理（16x16）防止空绑定
+    auto missingPixels = GenerateMissingTexturePixels();
+    m_defaultTexturePtr = CreateTexture(missingPixels.data(), 16, 16);
+    if (m_defaultTexturePtr) {
+        m_defaultTexture = m_defaultTexturePtr->GetHandle();
+    } else {
+        throw std::runtime_error("Failed to create default missing texture");
+    }
 }
 
 void VulkanAPI::Shutdown() {
@@ -87,6 +115,9 @@ void VulkanAPI::Shutdown() {
     // 先释放 pending framebuffer 引用（可能让 FBO 的 shared_ptr 才能降为 0）
     m_pendingFramebuffer = nullptr;
     m_imageInAttachment  = false;
+
+    m_defaultTexturePtr.reset();
+    m_defaultTexture = 0;
 
     if (m_skyCubeBuffer != VK_NULL_HANDLE && m_skyCubeAlloc != VK_NULL_HANDLE) {
         vmaDestroyBuffer(m_allocator, m_skyCubeBuffer, m_skyCubeAlloc);
