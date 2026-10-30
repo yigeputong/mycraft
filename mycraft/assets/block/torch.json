@@ -1,0 +1,8 @@
+{
+  "id": 15, "name": "mycraft:torch", "display_name": "Torch",
+  "render": {
+    "tiles": { "all": "torch" },
+    "opaque": false, "cross": true, "luminance": 14
+  },
+  "properties": { "solid": false, "hardness": 0.0, "tool": "none", "harvest_tier": 0 }
+}

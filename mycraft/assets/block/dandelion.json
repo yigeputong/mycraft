@@ -1,0 +1,5 @@
+{
+  "id": 14, "name": "mycraft:dandelion", "display_name": "Dandelion",
+  "render": { "tiles": { "all": "dandelion" }, "opaque": false, "cross": true },
+  "properties": { "solid": false, "hardness": 0.0, "tool": "none", "harvest_tier": 0 }
+}

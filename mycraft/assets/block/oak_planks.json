@@ -1,0 +1,5 @@
+{
+  "id": 9, "name": "mycraft:oak_planks", "display_name": "Oak Planks",
+  "render": { "tiles": { "all": "oak_planks" }, "opaque": true },
+  "properties": { "solid": true, "hardness": 2.0, "tool": "axe", "harvest_tier": 0 }
+}

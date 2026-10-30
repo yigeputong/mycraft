@@ -1,0 +1,5 @@
+{
+  "id": 13, "name": "mycraft:poppy", "display_name": "Poppy",
+  "render": { "tiles": { "all": "poppy" }, "opaque": false, "cross": true },
+  "properties": { "solid": false, "hardness": 0.0, "tool": "none", "harvest_tier": 0 }
+}

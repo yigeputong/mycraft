@@ -57,18 +57,27 @@ void ClientUI::DrawRotatedText(ImDrawList* dl, ImVec2 center, const char* text, 
     }
 }
 
-void ClientUI::DrawIsometricBlock(ImDrawList* dl, ImVec2 center, float size, BlockType type, ImTextureID texId) {
-    if (type == BlockType::Air || texId == 0) return;
+void ClientUI::DrawIsometricBlock(ImDrawList* dl, ImVec2 center, float size, BlockId id, ImTextureID texId, const BlockRegistry& reg) {
+    if (id == AIR_ID || texId == 0) return;
 
-    int topTile   = TileForBlock(type, 2);
-    int leftTile  = TileForBlock(type, 1);
-    int rightTile = TileForBlock(type, 0);
+    const auto& def = reg.Get(id);
+    
+    // ★ 从 BlockRender 获取贴图名字，再查图集索引
+    int topTile   = ResolveTile(def.render.ForTop().tile);
+    int sideTile  = ResolveTile(def.render.ForSide().tile);
+    
+    // 如果没找到，fallback 到 0
+    if (topTile < 0) topTile = 0;
+    if (sideTile < 0) sideTile = 0;
 
     auto getUV = [&](int tile) {
-        float u0 = (tile % ATLAS_COLS) * TILE_UV;
-        float v0 = (tile / static_cast<float>(ATLAS_COLS)) * TILE_UV;
-        float u1 = u0 + TILE_UV;
-        float v1 = v0 + TILE_UV;
+        // ★ 动态获取图集常量
+        const int cols = AtlasCols();
+        const float tile_uv = AtlasTileUV();
+        float u0 = (tile % cols) * tile_uv;
+        float v0 = (tile / static_cast<float>(cols)) * tile_uv;
+        float u1 = u0 + tile_uv;
+        float v1 = v0 + tile_uv;
         return std::make_tuple(ImVec2(u0, v0), ImVec2(u1, v0), ImVec2(u1, v1), ImVec2(u0, v1));
     };
 
@@ -83,10 +92,10 @@ void ClientUI::DrawIsometricBlock(ImDrawList* dl, ImVec2 center, float size, Blo
     float midY = topY + h;
     float botY = midY + h;
 
-    auto [lu0, lu1, lu2, lu3] = getUV(leftTile);
+    auto [lu0, lu1, lu2, lu3] = getUV(sideTile);
     dl->AddImageQuad(texId, ImVec2(cx - w, midY), ImVec2(cx, midY - h), ImVec2(cx, midY - h + d), ImVec2(cx - w, midY + d), lu0, lu1, lu2, lu3);
 
-    auto [ru0, ru1, ru2, ru3] = getUV(rightTile);
+    auto [ru0, ru1, ru2, ru3] = getUV(sideTile);
     dl->AddImageQuad(texId, ImVec2(cx, midY - h), ImVec2(cx + w, midY), ImVec2(cx + w, midY + d), ImVec2(cx, midY - h + d), ru0, ru1, ru2, ru3);
 
     auto [tu0, tu1, tu2, tu3] = getUV(topTile);
@@ -101,7 +110,6 @@ void ClientUI::Draw(Eng::Engine& engine, MyGame& game) {
     game.renderer->ImGuiNewFrame();
     ImGui::NewFrame();
 
-    // 全局暗色遮罩
     if (game.m_menuOpen || game.m_state == MyGame::GameState::MainMenu) {
         ImDrawList* bgDrawList = ImGui::GetBackgroundDrawList();
         bgDrawList->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize, IM_COL32(10, 10, 10, 160));
@@ -112,8 +120,6 @@ void ClientUI::Draw(Eng::Engine& engine, MyGame& game) {
             DrawMainMenu(engine, game);
         } else if (game.m_state == MyGame::GameState::Playing) {
             DrawHUD(engine, game);
-            // 背包 UI 预留
-            // if (game.m_inventoryOpen) DrawInventory(engine, game);
         }
     }
 
@@ -415,7 +421,12 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
     float totalW = MyGame::kHotbarSize * SLOT + (MyGame::kHotbarSize - 1) * GAP_ITEM;
     float startX = (io.DisplaySize.x - totalW) * 0.5f;
     float y = io.DisplaySize.y - SLOT - 20.0f;
-    
+
+    // 预处理高频用到的方块 ID，提高判断效率
+    BlockId dirtId  = game.m_blockRegistry.Get("mycraft:dirt").id;
+    BlockId grassId = game.m_blockRegistry.Get("mycraft:grass_block").id;
+    BlockId sandId  = game.m_blockRegistry.Get("mycraft:sand").id;
+    BlockId stoneId = game.m_blockRegistry.Get("mycraft:stone").id;
 
     for (int i = 0; i < MyGame::kHotbarSize; ++i) {
         float x = startX + i * (SLOT + GAP_ITEM);
@@ -429,16 +440,16 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         if (slot.isEmpty()) continue;
 
         ImU32 itemColor = IM_COL32(150, 150, 150, 255); // 默认灰色
-        if (slot.type == BlockType::Dirt) itemColor = IM_COL32(110, 75, 50, 255);
-        else if (slot.type == BlockType::GrassBlock) itemColor = IM_COL32(88, 160, 70, 255);
-        else if (slot.type == BlockType::Sand) itemColor = IM_COL32(220, 210, 160, 255);
-        else if (slot.type == BlockType::Stone) itemColor = IM_COL32(128, 128, 128, 255);
+        if (slot.type == dirtId)       itemColor = IM_COL32(110, 75, 50, 255);
+        else if (slot.type == grassId) itemColor = IM_COL32(88, 160, 70, 255);
+        else if (slot.type == sandId)  itemColor = IM_COL32(220, 210, 160, 255);
+        else if (slot.type == stoneId) itemColor = IM_COL32(128, 128, 128, 255);
         
         // 画个内嵌小方块
         dl->AddRectFilled(ImVec2(p0.x + 8, p0.y + 8), ImVec2(p1.x - 8, p1.y - 8), itemColor);
         
-        // 画个首字母
-        const char* name = BlockName(slot.type);
+        // 获取显示名首字母
+        const char* name = game.m_blockRegistry.Get(slot.type).displayName.c_str();
         char firstLetter[2] = { name[0], '\0' };
         ImVec2 textSize = ImGui::CalcTextSize(firstLetter);
         dl->AddText(ImVec2(p0.x + SLOT * 0.5f - textSize.x * 0.5f, p0.y + SLOT * 0.5f - textSize.y * 0.5f), 
@@ -495,16 +506,15 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         DrawLineBgLeft(leftX, dbgY, white, "%.0f fps | Frame: %.2f ms", game.m_fpsDisplay, game.m_frameMsDisplay); dbgY += lineHeight;
         DrawLineBgLeft(leftX, dbgY, white, "Server tick: %.2f ms", game.m_serverTickMs); dbgY += lineHeight;
         dbgY += lineHeight * 0.5f;
-        DrawLineBgLeft(leftX, dbgY, white, "XYZ: %.3f / %.3f / %.3f", game.cameraPos.x, game.cameraPos.y, game.cameraPos.z); dbgY += lineHeight;
-        DrawLineBgLeft(leftX, dbgY, white, "Yaw/Pitch: %.1f / %.1f", game.yaw, game.pitch); dbgY += lineHeight;
-        
-        int pcx = static_cast<int>(std::floor(game.cameraPos.x)) >> 4;
-        int pcz = static_cast<int>(std::floor(game.cameraPos.z)) >> 4;
-        DrawLineBgLeft(leftX, dbgY, white, "Chunk: %d %d", pcx, pcz); dbgY += lineHeight;
-        dbgY += lineHeight * 0.5f;
-
-        DrawLineBgLeft(leftX, dbgY, white, "Chunks loaded: %zu", game.m_world.GetChunks().size()); dbgY += lineHeight;
-        DrawLineBgLeft(leftX, dbgY, white, "Pending: %zu", game.m_world.GetPendingSize()); dbgY += lineHeight;
+        // 区分客户端和服务端区块
+        DrawLineBgLeft(leftX, dbgY, white, "Data Chunks: %zu", game.m_world.GetChunks().size()); dbgY += lineHeight;
+        DrawLineBgLeft(leftX, dbgY, white, "Mesh Chunks: %zu", game.m_world.GetMeshCount()); dbgY += lineHeight;
+        DrawLineBgLeft(leftX, dbgY, white, "Client Pending: %zu", game.m_world.GetPendingSize()); dbgY += lineHeight;
+        if (game.m_server) {
+            DrawLineBgLeft(leftX, dbgY, white, "Server Chunks: %zu", game.m_server->GetChunkCount()); dbgY += lineHeight;
+        } else {
+            DrawLineBgLeft(leftX, dbgY, white, "Server Chunks: N/A (Multiplayer)"); dbgY += lineHeight;
+        }
         DrawLineBgLeft(leftX, dbgY, white, "Render Distance: %d chunks", game.m_renderDistance); dbgY += lineHeight;
         DrawLineBgLeft(leftX, dbgY, white, "Player ID: %d", game.m_myClientId); dbgY += lineHeight;
         dbgY += lineHeight * 0.5f;

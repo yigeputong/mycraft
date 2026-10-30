@@ -1,0 +1,5 @@
+{
+  "id": 5, "name": "mycraft:snow", "display_name": "Snow",
+  "render": { "tiles": { "all": "snow" }, "opaque": true },
+  "properties": { "solid": true, "hardness": 0.3, "tool": "shovel", "harvest_tier": 0 }
+}

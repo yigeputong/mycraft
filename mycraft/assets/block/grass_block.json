@@ -1,0 +1,12 @@
+{
+  "id": 3, "name": "mycraft:grass_block", "display_name": "Grass Block",
+  "render": {
+    "tiles": {
+      "top":    { "tile": "grass_block_top",  "tint": "grass" },
+      "side":   "grass_block_side",
+      "bottom": "dirt"
+    },
+    "opaque": true
+  },
+  "properties": { "solid": true, "hardness": 0.6, "tool": "shovel", "harvest_tier": 0 }
+}

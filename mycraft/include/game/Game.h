@@ -4,10 +4,12 @@
 #include "Protocol.h"
 #include "core/Transport.h"
 #include "game/GameServer.h"
+#include "game/core/GameContext.h"
 #include "game/client/MeshManager.h"
 #include "game/client/ClientWorld.h"
 #include "game/client/ClientUI.h"
 #include "game/client/LODManager.h"
+#include "client/AssetManager.h"
 #include <memory>
 #include <unordered_map>
 
@@ -38,14 +40,15 @@ private:
     Eng::client::IRenderAPI*   renderer = nullptr;
     uint32_t m_win = 0;
 
-    // —— 资源全部改成智能指针，生命周期自动管理 ——
     Eng::client::ShaderPtr      m_cubeShader;
     Eng::client::TexturePtr     m_atlasTexture;
     Eng::client::ShaderPtr      m_skyShader;
     Eng::client::ShaderPtr      m_lodShader;
     Eng::client::DeviceInfo     m_deviceInfo;
+    Eng::client::FramebufferPtr m_mainFbo;
 
-    Eng::client::FramebufferPtr m_mainFbo;     
+    Eng::client::TexturePtr     m_playerTexture;
+    std::unique_ptr<Eng::client::AssetManager> m_assets;  
 
     void RecreateFBOs(int w, int h);
 
@@ -71,12 +74,20 @@ private:
     std::unordered_map<uint32_t, net::PlayerState> m_otherPlayers;
 
     // ==================== 世界管理 ====================
+    game::BlockRegistry m_blockRegistry;                    // 先构造
+    game::GameContext   m_ctx{ m_blockRegistry };           // 绑引用
     game::client::ClientWorld m_world;
     int m_renderDistance = 16;
 
     float m_timeOfDay = 8.0f;
     static constexpr float kDayLengthSec = 300.0f;
     float m_animTime = 0.0f;
+
+    struct ChunkBuffer {
+        int receivedSections = 0;
+        std::array<BlockId, CHUNK_VOLUME> blocks;
+    };
+    std::unordered_map<uint64_t, ChunkBuffer> m_chunkBuffers;
 
     // ==================== 多线程 Mesh ====================
     client::MeshManager m_meshManager;
@@ -87,7 +98,6 @@ private:
     client::LodManager m_lodManager;
 
     // ==================== 相机与物理 ====================
-    // 可见集合改为持有 MeshPtr，直接喂给 DrawMeshBatch
     std::vector<Eng::client::MeshPtr> m_visibleChunkMeshes;
     std::vector<Eng::client::MeshPtr> m_visibleLodMeshes;
 
@@ -121,7 +131,7 @@ private:
 
     struct ClientItemEntity : game::PointEntity {
         uint32_t  id          = 0;
-        BlockType itemType    = BlockType::Air;
+        BlockId   itemType    = AIR_ID;   // ★ 改为 BlockId
         glm::vec3 renderPos{0.0f};
         glm::vec3 prevPos  {0.0f};
         glm::vec3 targetPos{0.0f};
@@ -132,20 +142,16 @@ private:
         uint32_t  pickerId    = 0;
     };
     std::unordered_map<uint32_t, ClientItemEntity> m_itemEntities;
-    std::unordered_map<BlockType, Eng::client::MeshPtr> m_itemMeshCache;
-    Eng::client::MeshPtr GetOrCreateItemMesh(BlockType type);
-    Eng::client::MeshPtr BuildItemCubeMesh(BlockType type);
+    std::unordered_map<BlockId, Eng::client::MeshPtr> m_itemMeshCache; // ★ 改为 BlockId
+    
+    Eng::client::MeshPtr GetOrCreateItemMesh(BlockId id);  // ★
+    Eng::client::MeshPtr BuildItemCubeMesh(BlockId id);    // ★
 
     // ==================== Hotbar 与物品 ====================
     static constexpr int kHotbarSize = 4;
     int m_hotbarIndex = 0;
-    std::array<game::ItemStack, kHotbarSize> m_hotbar = {{
-        game::MakeItemStack(BlockType::Torch,      64),
-        game::MakeItemStack(BlockType::Dirt,       64),
-        game::MakeItemStack(BlockType::GrassBlock, 64),
-        game::MakeItemStack(BlockType::Sand,       64),
-    }};
-    void AddToInventory(BlockType type, int count);
+    std::array<game::ItemStack, kHotbarSize> m_hotbar{};   // ★ 移除硬编码初始化，改到 OnStart
+    void AddToInventory(BlockId id, int count);            // ★
 
     bool m_inventoryOpen = false;
     std::array<ItemStack, 27> m_inventory{};
@@ -206,7 +212,7 @@ private:
     void HandleServerMessage(const std::vector<uint8_t>& data);
     bool GetInput(float dt);
 
-    BlockType GetBlockAt(int wx, int wy, int wz) const;
+    BlockId GetBlockAt(int wx, int wy, int wz) const; // ★
     bool IsSolidAt(int wx, int wy, int wz) const;
     bool AABBCollides(const glm::vec3& pos) const;
 };

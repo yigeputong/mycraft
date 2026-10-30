@@ -1,28 +1,28 @@
 #pragma once
 #include "./World.h"
+#include "BlockRegistry.h" // ★ 引入 BlockRegistry
 #include <queue>
 
 namespace game {
 
-struct LightEmission { uint8_t r = 0, g = 0, b = 0; };
-
-inline LightEmission GetLightEmission(BlockType b) {
-    if (b == BlockType::Torch) return {14, 10, 6}; // 暖色火把光
-    return {0, 0, 0}; 
-}
+// 移除硬编码的 GetLightEmission(BlockType)
 
 class LightEngine {
 public:
-    static void InitRegion(Chunk& c, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp);
-    static void OnBlockChanged(Chunk& c, int lx, int ly, int lz, BlockType oldB, BlockType newB);
+    static void InitRegion(const BlockRegistry& reg, Chunk& c, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp);
+    
+    // ★ BlockType 换为 BlockId，并传入注册表
+    static void OnBlockChanged(const BlockRegistry& reg, Chunk& c, int lx, int ly, int lz, BlockId oldB, BlockId newB);
 
 private:
     struct NodeSky   { Chunk* chunk; int16_t x, y, z; uint8_t v; };
     struct NodeBlock { Chunk* chunk; int16_t x, y, z; uint8_t r, g, b; };
 
     static Chunk* RouteChunk(Chunk* current, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp, int& nx, int& nz);
-    static void PropagateSky  (std::queue<NodeSky>& q, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp);
-    static void PropagateBlock(std::queue<NodeBlock>& q, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp);
+    
+    // ★ 传播函数也需要传入注册表来判断遮挡
+    static void PropagateSky  (const BlockRegistry& reg, std::queue<NodeSky>& q, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp);
+    static void PropagateBlock(const BlockRegistry& reg, std::queue<NodeBlock>& q, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp);
 };
 
 } // namespace game

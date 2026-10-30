@@ -6,6 +6,7 @@
 #include "game/server/WorldGenerator.h"
 #include "game/Protocol.h"
 #include "game/core/Physics.h"
+#include "game/core/BlockRegistry.h" // ★ 引入 BlockRegistry
 #include "game/server/WorldSave.h"
 #include <memory>
 #include <thread>
@@ -23,8 +24,8 @@ public:
     void Stop();
     bool IsRunning() const { return m_running.load(); }
     std::shared_ptr<Eng::MemoryPipe> GetMemoryPipe() const;
+    size_t GetChunkCount() const { return m_chunks.size(); } 
 private:
-    private:
     // ==================== 生命周期 ====================
     static constexpr float TPS = 20.0f;
     std::thread        m_thread;
@@ -33,6 +34,9 @@ private:
     // ==================== 网络 ====================
     std::unique_ptr<Eng::IServerTransport> m_server;
     std::unique_ptr<Eng::Log>              m_logger = std::make_unique<Eng::Log>();
+
+    // ★ 服务端自己的注册表
+    game::BlockRegistry m_registry; 
 
     // ==================== 玩家 ====================
     struct ServerPlayer {
@@ -48,6 +52,7 @@ private:
         bool        flyMode = false;
     };
     std::vector<ServerPlayer> m_players;
+    mutable std::mutex        m_playersMutex;
     static constexpr float REACH_DISTANCE = 5.0f;
 
     // ==================== 世界 ====================
@@ -90,15 +95,15 @@ private:
 
     // ==================== 实体 ====================
 
-    struct ItemEntity : game::PointEntity {   // ★ 继承：拿到 position / velocity
+    struct ItemEntity : game::PointEntity {
         uint32_t  id          = 0;
         float     pickupDelay = 0.5f;
         float     age         = 0.0f;
-        BlockType itemType    = BlockType::Air;
+        BlockId   itemType    = AIR_ID; // ★ 改为 BlockId
     };
     std::unordered_map<uint32_t, ItemEntity> m_entities;
     uint32_t m_nextEntityId = 1;
-    std::vector<uint32_t> m_freeEntityIds;   // ★ 回收池
+    std::vector<uint32_t> m_freeEntityIds;   // 回收池
 
     uint32_t AllocEntityId() {
         if (!m_freeEntityIds.empty()) {
@@ -109,7 +114,7 @@ private:
         return m_nextEntityId++;
     }
 
-    void SpawnItemDrop(const glm::vec3& pos, BlockType type);
+    void SpawnItemDrop(const glm::vec3& pos, BlockId id); // ★
     void TickEntities(float dt);
 
     // ==================== 指标 ====================
@@ -125,17 +130,17 @@ private:
     Chunk* GetCachedChunk(int cx, int cz);
 
     // 方块查询/修改
-    BlockType GetBlockAt(int wx, int wy, int wz) const;
-    void      SetBlockAt(int wx, int wy, int wz, BlockType bt);
-    bool      IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz);
+    BlockId GetBlockAt(int wx, int wy, int wz) const; // ★
+    void    SetBlockAt(int wx, int wy, int wz, BlockId id); // ★
+    bool    IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz);
 
     // 交互
     void HandleDig(ServerPlayer& p);
-    void HandlePlace(ServerPlayer& p, BlockType type);
+    void HandlePlace(ServerPlayer& p, BlockId id); // ★
 
     // 广播
     void BroadcastWorldState();
-    void BroadcastBlockChange(int bx, int by, int bz, BlockType type);
+    void BroadcastBlockChange(int bx, int by, int bz, BlockId id); // ★
 
     // 碰撞
     bool IsSolidAt(int wx, int wy, int wz) const;

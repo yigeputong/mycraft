@@ -1,6 +1,7 @@
 #include "game/Game.h"
 
 #include "Engine.h"
+#include "client/AssetManager.h"
 #include "core/Log.h"
 #include "core/MessageWriter.h"
 #include "core/MemoryTransport.h"
@@ -17,6 +18,7 @@
 #include <SDL3/SDL_messagebox.h>
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <fstream>
 
@@ -25,17 +27,15 @@ using json = nlohmann::json;
 namespace game {
 
 namespace {
-    void AppendBoxToMesh(glm::vec3 c, glm::vec3 size, int tile,
+    void AppendPlayerBox(glm::vec3 c, glm::vec3 size, 
+                        const glm::vec4& top, const glm::vec4& bottom,
+                        const glm::vec4& right, const glm::vec4& left,
+                        const glm::vec4& front, const glm::vec4& back,
                         std::vector<Eng::client::Vertex>& vertices,
                         std::vector<uint32_t>& indices) {
         const float x0 = c.x - size.x*0.5f, x1 = c.x + size.x*0.5f;
         const float y0 = c.y - size.y*0.5f, y1 = c.y + size.y*0.5f;
         const float z0 = c.z - size.z*0.5f, z1 = c.z + size.z*0.5f;
-
-        int tileRow = tile / client::ATLAS_COLS;
-        int tileCol = tile % client::ATLAS_COLS;
-        float u0 = tileCol * client::TILE_UV;
-        float v0 = tileRow * client::TILE_UV;
 
         const glm::vec3 corners[8] = {
             {x0,y0,z0},{x1,y0,z0},{x1,y0,z1},{x0,y0,z1},
@@ -47,16 +47,26 @@ namespace {
         const glm::vec3 normals[6] = {
             {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}
         };
-        static constexpr float fuv[4][2] = {{0,0},{1,0},{1,1},{0,1}};
+        
+        static constexpr float fuv[4][2] = {{0,1},{1,1},{1,0},{0,0}}; 
+
+        auto toUV = [](float px, float py) { return glm::vec2(px / 64.0f, py / 64.0f); };
+
+        glm::vec4 faceUVs[6] = { right, left, top, bottom, front, back };
 
         for (int f = 0; f < 6; ++f) {
             uint32_t base = (uint32_t)vertices.size();
+            glm::vec4 uvRect = faceUVs[f];
+            
             for (int k = 0; k < 4; ++k) {
                 Eng::client::Vertex v;
                 v.position = corners[faces[f][k]];
                 v.normal   = normals[f];
-                v.uv = { u0 + fuv[k][0]*client::TILE_UV,
-                         v0 + (1.0f - fuv[k][1])*client::TILE_UV };
+                
+                float u = uvRect.x + fuv[k][0] * uvRect.z;
+                float v_coord = uvRect.y + fuv[k][1] * uvRect.w;
+                v.uv = toUV(u, v_coord);
+                
                 v.ao = 1.0f;
                 v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
                 vertices.push_back(v);
@@ -166,9 +176,7 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
         Eng::client::Input::Get().ProcessEvent(e);
         switch (e.type) {
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-                if (renderer) {
-                    RecreateFBOs(e.window.data1, e.window.data2);
-                }
+                if (renderer) RecreateFBOs(e.window.data1, e.window.data2);
                 break;
             case SDL_EVENT_WINDOW_MINIMIZED:
                 m_minimized = true;
@@ -261,10 +269,7 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
     style.ScaleAllSizes(m_uiScale);
     ImGuiIO& io = ImGui::GetIO();
 
-    static const ImWchar allGlyphs[] = {
-        0x0020, 0xFFFF,
-        0
-    };
+    static const ImWchar allGlyphs[] = { 0x0020, 0xFFFF, 0 };
 
     ImFontConfig fontConfig;
     fontConfig.OversampleH = 1;
@@ -274,11 +279,7 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
     float scaledFontSize = 16.0f * m_uiScale;
 
     ImFont* unifont = io.Fonts->AddFontFromFileTTF(
-        "./assets/fonts/unifont-18.0.01.otf",
-        scaledFontSize,
-        &fontConfig,
-        allGlyphs
-    );
+        "./assets/fonts/unifont-18.0.01.otf", scaledFontSize, &fontConfig, allGlyphs);
 
     if (!unifont) {
         logError(logger, "[Game] Failed to load Unifont, falling back to default font.");
@@ -287,16 +288,21 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
         logInfo(logger, "[Game] Loaded Unifont with all BMP glyphs at size " << scaledFontSize);
     }
 
-    // —— 图集纹理（TexturePtr）——
-    auto pixels = client::GenerateAtlasPixels();
-    m_atlasTexture = renderer->CreateTexture(pixels.data(), client::ATLAS_W, client::ATLAS_H);
+    m_assets = std::make_unique<Eng::client::AssetManager>(renderer);
+    m_playerTexture = m_assets->LoadTexture("assets/textures/entity/player.png");
+
+    // —— 图集纹理（由 OnStart 中动态生成好，这里直接创建） ——
+    const auto& pixels = client::AtlasPixels();
+    int atlasW = client::AtlasCols() * client::ATLAS_TILE;
+    int atlasH = client::AtlasRows() * client::ATLAS_TILE;
+    m_atlasTexture = renderer->CreateTexture(pixels.data(), atlasW, atlasH);
     if (!m_atlasTexture) {
         logError(logger, "[MyGame] Failed to create atlas texture");
         return false;
     }
     logInfo(logger, "[MyGame] atlas texture created");
 
-    // —— FBO（FramebufferPtr）——
+    // —— FBO（FramebufferPtr） ——
     RecreateFBOs(mainWin->GetConfigs().windowPixelWidth, mainWin->GetConfigs().windowPixelHeight);
     if (!m_mainFbo) {
         logError(logger, "[Game] FBO creation failed!");
@@ -354,6 +360,14 @@ void MyGame::OnStart(Eng::Engine& engine) {
 
     LoadSettings(engine);
 
+    // ★ 1) 先加载方块注册表并生成图集纹理（SetupRenderer 里面要用）
+    m_blockRegistry.LoadAll("assets/block");
+    {
+        auto tileTints = m_blockRegistry.CollectTileTints();
+        client::BuildAtlas(tileTints);
+    }
+
+    // ★ 2) 窗口与渲染器
     try {
         if (!SetupWindow(engine)) return;
         if (!mainWin->GetFallbackReason().empty()) {
@@ -368,7 +382,17 @@ void MyGame::OnStart(Eng::Engine& engine) {
     if (!SetupRenderer(engine)) return;
     SetupShaders();
 
+    // ★ 3) 注入注册表指针
+    m_lodManager.SetRegistry(&m_blockRegistry);
+    m_meshManager.SetRegistry(&m_blockRegistry);
+    m_world.SetRegistry(&m_blockRegistry);
     m_meshManager.Start();
+
+    // ★ 4) 热栏初始化（此时注册表已就绪）
+    m_hotbar[0] = game::MakeItemStack(m_blockRegistry.Get("mycraft:torch").id,       64);
+    m_hotbar[1] = game::MakeItemStack(m_blockRegistry.Get("mycraft:dirt").id,        64);
+    m_hotbar[2] = game::MakeItemStack(m_blockRegistry.Get("mycraft:grass_block").id, 64);
+    m_hotbar[3] = game::MakeItemStack(m_blockRegistry.Get("mycraft:sand").id,        64);
 
     m_state = GameState::MainMenu;
 }
@@ -434,7 +458,7 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     cameraPos      += m_positionError * t;
     m_positionError *= (1.0f - t);
 
-    // —— 时间 & 光照（写入 GlobalState，OnRender 之前生效）——
+    // —— 时间 & 光照 ——
     float hoursPerSec = 24.0f / kDayLengthSec;
     m_timeOfDay = std::fmod(m_timeOfDay + hoursPerSec * deltaTime, 24.0f);
 
@@ -442,10 +466,9 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     glm::vec3 sunDir = glm::normalize(glm::vec3(cos(angle), sin(angle), 0.3f));
     float sunH = sunDir.y;
 
-    float sunI = glm::clamp(sunH * 2.5f, 0.0f, 0.85f); // 限制最高强度为 0.85
+    float sunI = glm::clamp(sunH * 2.5f, 0.0f, 0.85f);
     float warm = 1.0f - glm::clamp(sunH * 3.0f, 0.0f, 1.0f);
     glm::vec3 sunColor = glm::mix(glm::vec3(1.0f, 1.0f, 1.0f), glm::vec3(1.0f, 0.5f, 0.2f), warm);
-    // 环境光不要太高
     glm::vec3 ambient  = glm::mix(glm::vec3(0.1f, 0.12f, 0.2f), glm::vec3(0.35f, 0.4f, 0.45f), 
                                   glm::clamp(sunH * 2.0f, 0.0f, 1.0f));
 
@@ -493,7 +516,6 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     }
 
     // —— 区块流式 ——
-    // 注意：新版 UpdateStreaming 不再需要 destroy 回调，ClientWorld 内部靠 MeshPtr 自动释放
     m_world.UpdateStreaming(cameraPos, m_renderDistance,
         [this](int cx, int cz) {
             Eng::MessageWriter w;
@@ -504,13 +526,13 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         }
     );
 
-    auto dirtyKeys = m_world.FetchDirtyChunks(2);
+    auto dirtyKeys = m_world.FetchDirtyChunks(std::numeric_limits<size_t>::max()); 
     for (uint64_t key : dirtyKeys) {
         auto* cc = m_world.GetChunk(key);
         if (cc) QueueChunkMeshTask(key);
     }
 
-    m_lodManager.Update(cameraPos, m_world, renderer);
+    m_lodManager.Update(cameraPos, m_world, m_renderDistance, renderer);
     DrainMeshResults();
 
     return false;
@@ -527,7 +549,6 @@ void MyGame::OnRender(Eng::Engine& engine) {
         m_applyPending = false;
     }
 
-    // 1) 计算 view / projection
     if (m_state == GameState::Playing) {
         glm::vec3 eye = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
         view = glm::lookAt(eye, eye + cameraFront, cameraUp);
@@ -538,53 +559,43 @@ void MyGame::OnRender(Eng::Engine& engine) {
         UpdateFrustum(projection * view);
     }
 
-    // 2) 组装 GlobalState
     m_globalState.view        = view;
     m_globalState.projection  = projection;
     m_globalState.viewPos     = cameraPos;
     m_globalState.aoStrength  = engine.GetConfig().render.m_aoStrength;
     renderer->SetGlobalState(m_globalState);
 
-    // 3) 帧开始
     renderer->BeginFrame();
 
-    // 根据游戏状态设置清屏色
     if (m_state == GameState::Playing) {
-        renderer->SetClearColor(0.5f, 0.7f, 1.0f, 1.0f); // 天空蓝
+        renderer->SetClearColor(0.5f, 0.7f, 1.0f, 1.0f);
     } else {
-        renderer->SetClearColor(0.1f, 0.1f, 0.1f, 1.0f); // 主菜单深灰
+        renderer->SetClearColor(0.1f, 0.1f, 0.1f, 1.0f);
     }
     renderer->Clear(Eng::client::rhi::ClearFlag::Color | Eng::client::rhi::ClearFlag::Depth);
 
-    // ==========================================
-    // 直接渲染主世界到屏幕
-    // ==========================================
     if (m_state == GameState::Playing) {
         Eng::client::Material mat; mat.diffuse = m_atlasTexture;
 
-        // 1. 渲染地形
         m_world.CollectVisibleMeshes(m_frustum, m_visibleChunkMeshes);
         if (!m_visibleChunkMeshes.empty())
             renderer->DrawMeshBatch(m_visibleChunkMeshes, m_cubeShader, mat);
 
-        // 2. 渲染 LOD
         Eng::client::Material lodMat; lodMat.diffuse = m_atlasTexture;
         m_lodManager.CollectVisibleMeshes(m_frustum, m_visibleLodMeshes);
         if (!m_visibleLodMeshes.empty())
             renderer->DrawMeshBatch(m_visibleLodMeshes, m_lodShader, lodMat);
 
-        // 3. 其他玩家
         if (!m_playerMesh) m_playerMesh = BuildPlayerMesh();
-        Eng::client::Material playerMat; playerMat.diffuse = m_atlasTexture;
+        Eng::client::Material playerMat; playerMat.diffuse = m_playerTexture;
         for (auto& [id, ps] : m_otherPlayers) {
             glm::mat4 model = glm::translate(glm::mat4(1.0f), ps.position);
             model = glm::rotate(model, ps.yaw, glm::vec3(0, 1, 0));
             renderer->DrawMesh(m_playerMesh, m_cubeShader, playerMat, model);
         }
 
-        // 4. 实例化渲染掉落物
         if (!m_itemEntities.empty()) {
-            std::unordered_map<BlockType, std::vector<glm::mat4>> instances;
+            std::unordered_map<BlockId, std::vector<glm::mat4>> instances; // ★ BlockId
             for (const auto& [id, e] : m_itemEntities) {
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), e.renderPos);
                 model = glm::rotate(model, m_animTime * 2.0f, glm::vec3(0, 1, 0));
@@ -600,10 +611,8 @@ void MyGame::OnRender(Eng::Engine& engine) {
             }
         }
 
-        // 5. 渲染天空盒
         renderer->DrawSkybox(m_skyShader);
 
-        // 6. 渲染手部
         renderer->Clear(Eng::client::rhi::ClearFlag::Depth);
         if (!m_handMesh) m_handMesh = BuildHandMesh();
 
@@ -626,10 +635,9 @@ void MyGame::OnRender(Eng::Engine& engine) {
         handLocalModel = glm::scale(handLocalModel, glm::vec3(0.5f));
         glm::mat4 handModel = glm::inverse(view) * handLocalModel;
 
-        Eng::client::Material handMat; handMat.diffuse = m_atlasTexture;
+        Eng::client::Material handMat; handMat.diffuse = m_playerTexture;
         renderer->DrawMesh(m_handMesh, m_cubeShader, handMat, handModel);
 
-        // 手持物品
         auto& curSlot = m_hotbar[m_hotbarIndex];
         if (!curSlot.isEmpty()) {
             auto itemMesh = GetOrCreateItemMesh(curSlot.type);
@@ -638,16 +646,12 @@ void MyGame::OnRender(Eng::Engine& engine) {
                 itemLocalModel = glm::translate(itemLocalModel, glm::vec3(0.0f, 0.2f, -0.5f));
                 itemLocalModel = glm::scale(itemLocalModel, glm::vec3(0.5f));
                 glm::mat4 itemModel = glm::inverse(view) * itemLocalModel;
-                renderer->DrawMesh(itemMesh, m_cubeShader, handMat, itemModel);
+                renderer->DrawMesh(itemMesh, m_cubeShader, mat, itemModel); 
             }
         }
     }
 
-    // ==========================================
-    // UI 渲染
-    // ==========================================
     m_ui.Draw(engine, *this);
-
     renderer->EndFrame();
 }
 
@@ -663,17 +667,16 @@ void MyGame::ReturnToMainMenu() {
     m_lodManager.Stop();
     m_meshManager.Stop();
 
-    // 智能指针自动释放，无需手动 Destroy
     m_playerMesh.reset();
     m_handMesh.reset();
     m_itemMeshCache.clear();
 
-    m_world.Clear();     // ClientWorld 内部 reset 所有 chunk mesh
+    m_world.Clear();
     m_itemEntities.clear();
     m_otherPlayers.clear();
     m_myClientId = 0;
 
-    m_lodManager.Clear();   // 若 LodManager 已内部改为 MeshPtr，可去掉 renderer 参数
+    m_lodManager.Clear();
 
     cameraPos   = glm::vec3(0.0f, 40.0f, 0.0f);
     cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
@@ -696,13 +699,12 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
     if (m_client) { m_client->Disconnect(); m_client.reset(); }
     if (m_server) { m_server->Stop(); m_server.reset(); }
 
-    auto* safeRenderer = mainWin ? mainWin->GetAPI() : nullptr;
-    if (safeRenderer) {
-        m_lodManager.Stop();
-        m_lodManager.Clear();
-        safeRenderer->ShutdownImGuiBackend();
-    }
+    // 1. 停止所有后台线程
+    m_lodManager.Stop();
+    m_meshManager.Stop();
 
+    // 2. 清理世界与实体
+    m_lodManager.Clear();
     m_visibleChunkMeshes.clear();
     m_visibleLodMeshes.clear();
     m_playerMesh.reset();
@@ -711,14 +713,25 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
     m_world.Clear();
     m_itemEntities.clear();
     m_otherPlayers.clear();
-    m_meshManager.Stop();
 
+    // 3. ★ 极其重要：在 renderer 存活期间，销毁所有持有 GPU 资源的对象！
     m_mainFbo.reset();
-
     m_cubeShader.reset();
     m_skyShader.reset();
     m_lodShader.reset();
     m_atlasTexture.reset();
+    m_playerTexture.reset();
+    
+    // ★ 销毁 AssetManager（它内部持有玩家皮肤的贴图）
+    if (m_assets) {
+        m_assets.reset();
+    }
+
+    // 4. 最后关闭 ImGui 并销毁 renderer
+    auto* safeRenderer = mainWin ? mainWin->GetAPI() : nullptr;
+    if (safeRenderer) {
+        safeRenderer->ShutdownImGuiBackend();
+    }
 
     renderer = nullptr;
     mainWin = nullptr;
@@ -730,9 +743,7 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
 bool MyGame::GetInput(float dt) {
     using namespace Eng::client;
 
-    if (Input::IsKeyPressed(KeyCode::Escape)) {
-        m_menuOpen = !m_menuOpen;
-    }
+    if (Input::IsKeyPressed(KeyCode::Escape)) m_menuOpen = !m_menuOpen;
     if (m_menuOpen) return m_shouldQuit;
 
     if (Input::IsKeyPressed(KeyCode::F)) {
@@ -745,13 +756,10 @@ bool MyGame::GetInput(float dt) {
         auto& configs = mainWin->GetConfigs();
         configs.fullscreen = !configs.fullscreen;
         mainWin->SetFullscreen(configs.fullscreen);
-
         RecreateFBOs(mainWin->GetConfigs().windowPixelWidth, mainWin->GetConfigs().windowPixelHeight);
     }
 
-    if (Input::IsKeyPressed(KeyCode::F3)) {
-        m_showDebug = !m_showDebug;
-    }
+    if (Input::IsKeyPressed(KeyCode::F3)) m_showDebug = !m_showDebug;
 
     glm::vec2 mouseDelta = Input::GetMouseDelta();
     ImGuiIO& io = ImGui::GetIO();
@@ -785,9 +793,7 @@ bool MyGame::GetInput(float dt) {
     m_lastMoveDir = moveDir;
     input.look = glm::vec2(glm::radians(yaw), glm::radians(pitch));
 
-    if (Input::IsKeyDown(KeyCode::Space)) {
-        m_jumpHoldTimer = 0.2f;
-    }
+    if (Input::IsKeyDown(KeyCode::Space)) m_jumpHoldTimer = 0.2f;
     m_jumpHoldTimer = std::max(0.0f, m_jumpHoldTimer - dt);
     input.jump = (m_jumpHoldTimer > 0.0f);
 
@@ -816,9 +822,9 @@ bool MyGame::GetInput(float dt) {
 
     auto& curSlot = m_hotbar[m_hotbarIndex];
     if (curSlot.isEmpty()) {
-        input.placeBlock = 0;
+        input.placeBlock = AIR_ID;
     } else {
-        input.placeBlock = static_cast<uint16_t>(curSlot.type);
+        input.placeBlock = curSlot.type;
         if (input.place) {
             curSlot.count--;
             if (curSlot.count <= 0) curSlot = game::ItemStack{};
@@ -901,17 +907,29 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             break;
         }
 
-        case game::net::MessageType::ChunkData: {
+                case game::net::MessageType::ChunkData: {
             int cx = r.Read<int>();
             int cz = r.Read<int>();
             uint16_t sy = r.Read<uint16_t>();
             if (sy != CHUNK_SIZE_Y) return;
 
-            auto bytes = r.ReadBytes(CHUNK_VOLUME);
-            std::vector<uint8_t> blockData(bytes.begin(), bytes.end());
+            // 1. 读方块
+            auto bytes = r.ReadBytes(CHUNK_VOLUME * sizeof(BlockId));
+            std::vector<BlockId> blockData(reinterpret_cast<const BlockId*>(bytes.data()),
+                                           reinterpret_cast<const BlockId*>(bytes.data() + bytes.size()));
+
+            // 2. 读天空光
+            auto skyBytes = r.ReadBytes(CHUNK_VOLUME);
+            std::array<uint8_t, CHUNK_VOLUME> skyData;
+            std::memcpy(skyData.data(), skyBytes.data(), CHUNK_VOLUME);
+
+            // 3. 读方块光
+            auto blockLightBytes = r.ReadBytes(CHUNK_VOLUME * sizeof(LightRGB));
+            std::array<LightRGB, CHUNK_VOLUME> blockLightData;
+            std::memcpy(blockLightData.data(), blockLightBytes.data(), CHUNK_VOLUME * sizeof(LightRGB));
 
             uint64_t key = ChunkKey(cx, cz);
-            m_world.AddChunk(cx, cz, blockData, 0);
+            m_world.AddChunk(cx, cz, blockData, skyData, blockLightData, nullptr);
 
             m_world.MarkDirty(key);
             m_world.MarkDirty(ChunkKey(cx - 1, cz));
@@ -925,7 +943,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             int bx = r.Read<int32_t>();
             int by = r.Read<int32_t>();
             int bz = r.Read<int32_t>();
-            auto t = static_cast<BlockType>(r.Read<uint16_t>());
+            BlockId t = r.Read<uint16_t>(); // ★
             m_world.SetBlock(bx, by, bz, t);
             break;
         }
@@ -933,11 +951,11 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
         case game::net::MessageType::EntitySpawn: {
             uint32_t  id   = r.Read<uint32_t>();
             glm::vec3 pos  = r.ReadVec3();
-            BlockType blockType = static_cast<BlockType>(r.Read<uint16_t>());
+            BlockId   bt   = r.Read<uint16_t>(); // ★
 
             ClientItemEntity e;
             e.id        = id;
-            e.itemType  = blockType;
+            e.itemType  = bt;
             e.renderPos = pos;
             e.prevPos   = pos;
             e.targetPos = pos;
@@ -997,17 +1015,17 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
 // ============================================================
 // Mesh 构建
 // ============================================================
-Eng::client::MeshPtr MyGame::GetOrCreateItemMesh(BlockType type) {
-    auto it = m_itemMeshCache.find(type);
+Eng::client::MeshPtr MyGame::GetOrCreateItemMesh(BlockId id) { // ★
+    auto it = m_itemMeshCache.find(id);
     if (it != m_itemMeshCache.end()) return it->second;
 
-    auto mesh = BuildItemCubeMesh(type);
-    m_itemMeshCache[type] = mesh;
+    auto mesh = BuildItemCubeMesh(id);
+    m_itemMeshCache[id] = mesh;
     return mesh;
 }
 
-Eng::client::MeshPtr MyGame::BuildItemCubeMesh(BlockType type) {
-    Eng::client::MeshData data = client::MeshBuilderUtils::BuildItemMeshData(type);
+Eng::client::MeshPtr MyGame::BuildItemCubeMesh(BlockId id) { // ★
+    Eng::client::MeshData data = client::MeshBuilderUtils::BuildItemMeshData(m_blockRegistry, id);
     return renderer->CreateMesh(data);
 }
 
@@ -1015,12 +1033,17 @@ Eng::client::MeshPtr MyGame::BuildPlayerMesh() {
     std::vector<Eng::client::Vertex> vertices;
     std::vector<uint32_t> indices;
 
-    AppendBoxToMesh({0.0f, 1.55f, 0.0f}, {0.5f, 0.5f, 0.5f}, 13, vertices, indices);       // 头
-    AppendBoxToMesh({0.0f, 1.05f, 0.0f}, {0.5f, 0.5f, 0.25f}, 14, vertices, indices);      // 身体
-    AppendBoxToMesh({-0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, 14, vertices, indices);  // 左臂
-    AppendBoxToMesh({ 0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, 14, vertices, indices);  // 右臂
-    AppendBoxToMesh({-0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, 15, vertices, indices);   // 左腿
-    AppendBoxToMesh({ 0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, 15, vertices, indices);   // 右腿
+    glm::vec4 h_top(8,0,8,8), h_bot(16,0,8,8), h_right(0,8,8,8), h_left(16,8,8,8), h_front(8,8,8,8), h_back(24,8,8,8);
+    glm::vec4 b_top(20,16,8,4), b_bot(28,16,8,4), b_right(16,20,4,12), b_left(28,20,4,12), b_front(20,20,8,12), b_back(32,20,8,12);
+    glm::vec4 ra_top(44,16,4,4), ra_bot(48,16,4,4), ra_right(40,20,4,12), ra_left(48,20,4,12), ra_front(44,20,4,12), ra_back(52,20,4,12);
+    glm::vec4 rl_top(4,16,4,4), rl_bot(8,16,4,4), rl_right(0,20,4,12), rl_left(8,20,4,12), rl_front(4,20,4,12), rl_back(12,20,4,12);
+
+    AppendPlayerBox({0.0f, 1.55f, 0.0f}, {0.5f, 0.5f, 0.5f}, h_top, h_bot, h_right, h_left, h_front, h_back, vertices, indices);
+    AppendPlayerBox({0.0f, 1.05f, 0.0f}, {0.5f, 0.5f, 0.25f}, b_top, b_bot, b_right, b_left, b_front, b_back, vertices, indices);
+    AppendPlayerBox({-0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, ra_top, ra_bot, ra_right, ra_left, ra_front, ra_back, vertices, indices);
+    AppendPlayerBox({ 0.375f, 1.05f, 0.0f}, {0.25f, 0.5f, 0.25f}, ra_top, ra_bot, ra_right, ra_left, ra_front, ra_back, vertices, indices);
+    AppendPlayerBox({-0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, rl_top, rl_bot, rl_right, rl_left, rl_front, rl_back, vertices, indices);
+    AppendPlayerBox({ 0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, rl_top, rl_bot, rl_right, rl_left, rl_front, rl_back, vertices, indices);
 
     Eng::client::MeshData data;
     data.vertices = std::move(vertices);
@@ -1032,8 +1055,8 @@ Eng::client::MeshPtr MyGame::BuildHandMesh() {
     std::vector<Eng::client::Vertex> vertices;
     std::vector<uint32_t> indices;
 
-    AppendBoxToMesh({0.0f, 0.0f, 0.0f}, {0.25f, 0.25f, 0.6f}, 14, vertices, indices);
-    AppendBoxToMesh({0.0f, 0.0f, -0.35f}, {0.25f, 0.25f, 0.2f}, 13, vertices, indices);
+    glm::vec4 ra_top(44,16,4,4), ra_bot(48,16,4,4), ra_right(40,20,4,12), ra_left(48,20,4,12), ra_front(44,20,4,12), ra_back(52,20,4,12);
+    AppendPlayerBox({0.0f, 0.0f, 0.0f}, {0.25f, 0.25f, 0.6f}, ra_top, ra_bot, ra_right, ra_left, ra_front, ra_back, vertices, indices);
 
     Eng::client::MeshData data;
     data.vertices = std::move(vertices);
@@ -1044,7 +1067,7 @@ Eng::client::MeshPtr MyGame::BuildHandMesh() {
 // ============================================================
 // 世界查询
 // ============================================================
-BlockType MyGame::GetBlockAt(int wx, int wy, int wz) const {
+BlockId MyGame::GetBlockAt(int wx, int wy, int wz) const { // ★
     return m_world.GetBlockAt(wx, wy, wz);
 }
 
@@ -1070,18 +1093,18 @@ bool MyGame::AABBCollides(const glm::vec3& pos) const {
 // ============================================================
 // 背包
 // ============================================================
-void MyGame::AddToInventory(BlockType type, int count) {
-    if (type == BlockType::Air || count <= 0) return;
+void MyGame::AddToInventory(BlockId id, int count) { // ★
+    if (id == AIR_ID || count <= 0) return;
 
     for (auto& slot : m_hotbar) {
-        if (slot.type == type) {
+        if (slot.type == id) {
             slot.count += count;
             return;
         }
     }
     for (auto& slot : m_hotbar) {
         if (slot.isEmpty()) {
-            slot.type  = type;
+            slot.type  = id;
             slot.count = count;
             return;
         }
@@ -1092,12 +1115,17 @@ void MyGame::AddToInventory(BlockType type, int count) {
 // Mesh 结果汇聚
 // ============================================================
 void MyGame::DrainMeshResults() {
-    m_meshManager.DrainResults([this](game::client::MeshResult&& r) {
+    // ★ 每帧最多只给上传 Mesh 分配 3 毫秒的预算
+    auto startTime = std::chrono::steady_clock::now();
+    
+    m_meshManager.DrainResults([this, startTime](game::client::MeshResult&& r) {
+        // 检查是否超时
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
+        if (elapsed > 3) return; // 超过 3ms 就不管了，下一帧再说
+
         auto* cc = m_world.GetChunk(r.chunkKey);
         if (!cc || !cc->chunk) return;
-
-        cc->chunk->sky   = r.sky;
-        cc->chunk->block = r.block;
 
         if (r.vertices.empty()) {
             cc->mesh.reset();
@@ -1122,9 +1150,9 @@ void MyGame::QueueChunkMeshTask(uint64_t key) {
     auto* cZm = m_world.GetChunk(ChunkKey(cx, cz - 1));
     auto* cZp = m_world.GetChunk(ChunkKey(cx, cz + 1));
 
+    // 邻居不存在就传 nullptr
     m_meshManager.Submit(
-        key,
-        pC->chunk,
+        key, pC->chunk,
         cXm ? cXm->chunk : nullptr,
         cXp ? cXp->chunk : nullptr,
         cZm ? cZm->chunk : nullptr,

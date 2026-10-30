@@ -1,0 +1,5 @@
+{
+  "id": 4, "name": "mycraft:sand", "display_name": "Sand",
+  "render": { "tiles": { "all": "sand" }, "opaque": true },
+  "properties": { "solid": true, "hardness": 0.5, "tool": "shovel", "harvest_tier": 0 }
+}

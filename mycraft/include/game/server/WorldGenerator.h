@@ -1,15 +1,13 @@
 #pragma once
 #include <array>
 #include <cstdint>
-#include <cmath>
-#include <algorithm>
-#include "game/core/Blocks.h"
+#include "game/core/BlockRegistry.h" // ★ 引入注册表
 #include "game/core/World.h"
 
 namespace game::server {
 
 // ============================================================
-// Perlin 噪声（保留你现在的实现，不动）
+// Perlin 噪声
 // ============================================================
 class PerlinNoise {
 public:
@@ -30,27 +28,14 @@ private:
 };
 
 // ============================================================
-// 生物群系
+// 生物群系与阶段（保持不变）
 // ============================================================
 enum class Biome : uint8_t {
-    Ocean,      // 海洋：海平面以下
-    Beach,      // 沙滩：海岸带
-    Plains,     // 平原：低海拔内陆
-    Forest,     // 森林：中等湿度内陆
-    Desert,     // 沙漠：低湿度高温
-    Snow,       // 雪地：低温
-    Mountain,   // 山地：高侵蚀度内陆
+    Ocean, Beach, Plains, Forest, Desert, Snow, Mountain,
 };
 
-// ============================================================
-// 生成阶段枚举（对齐文档的"分阶段生成"）
-// ============================================================
 enum class GenPhase : uint8_t {
-    Biomes,      // 1. 计算生物群系（纯 2D 噪声）
-    NoiseTerrain,// 2. 计算密度函数 → 填方块
-    Surface,     // 3. 应用表面规则（草/沙/雪）
-    Carvers,     // 4. 挖洞穴
-    Features,    // 5. 地物（树、矿脉）
+    Biomes, NoiseTerrain, Surface, Carvers, Features,
 };
 
 // ============================================================
@@ -58,19 +43,32 @@ enum class GenPhase : uint8_t {
 // ============================================================
 class TerrainGenerator {
 public:
-    explicit TerrainGenerator(uint32_t seed);
+    // ★ 注入注册表
+    explicit TerrainGenerator(uint32_t seed, const BlockRegistry& reg);
 
-    // ★ 对外唯一入口：生成一个完整区块
     Chunk GenerateChunk(int cx, int cz) const;
 
-    // ---- 各阶段的独立查询（用于调试 / 跨区块地物）----
     Biome    GetBiome(int wx, int wz) const;
-    int      GetHeight(int wx, int wz) const;         // 地表高度
-    bool     IsSolidAt(int wx, int wy, int wz) const; // 密度函数查询
+    int      GetHeight(int wx, int wz) const;
+    bool     IsSolidAt(int wx, int wy, int wz) const;
     int      GetSurfaceY(int wx, int wz) const;
 
 private:
     PerlinNoise m_noise;
+    const BlockRegistry& m_registry; // ★ 注册表引用
+
+    // ★ 缓存常用方块的 ID，避免生成时反复查询
+    BlockId ID_STONE;
+    BlockId ID_DIRT;
+    BlockId ID_GRASS;
+    BlockId ID_SAND;
+    BlockId ID_WATER;
+    BlockId ID_SNOW;
+    BlockId ID_WOOD;
+    BlockId ID_LEAVES;
+    BlockId ID_TALLGRASS;
+    BlockId ID_POPPY;
+    BlockId ID_DANDELION;
 
     // ---- 阶段 1：生物群系 ----
     Biome    ComputeBiome(float temp, float humid, float cont) const;
@@ -80,10 +78,8 @@ private:
                                  const std::array<std::array<Biome, 18>, 18>& biomes,
                                  std::array<std::array<int, 18>, 18>& out) const;
 
-
     // ---- 阶段 3：表面规则 ----
-    BlockType ApplySurfaceRule(Biome biome, int wy, int surfaceY,
-                                bool nearWater) const;
+    BlockId  ApplySurfaceRule(Biome biome, int wy, int surfaceY, bool nearWater) const; // ★
 
     // ---- 阶段 4：雕刻器 ----
     bool IsCarvedByCave(int wx, int wy, int wz, int surfaceY) const;
@@ -91,7 +87,7 @@ private:
     bool  IsCaveAt(float diff, int ly, int surfaceY) const;
 
     // ---- 阶段 5：矿脉 ----
-    BlockType OreForPosition(int wx, int wy, int wz, BlockType base) const;
+    BlockId OreForPosition(int wx, int wy, int wz, BlockId base) const; // ★
 
     struct DensityParams {
         float temp      = 0.0f;
@@ -102,13 +98,10 @@ private:
     };
 
     DensityParams ComputeParams(int wx, int wz) const;
-    float ComputeDensity(int wx, int wy, int wz,
-                          const DensityParams& p) const;
-    Biome BiomeAt(const DensityParams& p, int wx, int wz, int surfaceY) const;   // ★ 高度修正
+    float ComputeDensity(int wx, int wy, int wz, const DensityParams& p) const;
+    Biome BiomeAt(const DensityParams& p, int wx, int wz, int surfaceY) const;
 
-    private:
     // ---- 树 ----
-    private:
     void GenerateTrees(Chunk& chunk,
                         const std::array<std::array<int, 16>, 16>& surfaceYs) const;
     bool CanPlaceTree(int wx, int wz, int surfaceY, Biome biome) const;

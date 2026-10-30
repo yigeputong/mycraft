@@ -10,24 +10,26 @@
 #include <functional>
 #include <unordered_set>
 
+namespace game { class BlockRegistry; }
+
 namespace game::client {
 
 struct MeshTask {
     uint64_t chunkKey;
     std::shared_ptr<Chunk> chunk;
     std::shared_ptr<Chunk> nXm, nXp, nZm, nZp;
+    const game::BlockRegistry* reg = nullptr;
 };
 
 struct MeshResult {
     uint64_t chunkKey;
     std::vector<Eng::client::Vertex> vertices;
     std::vector<uint32_t>            indices;
-    std::array<uint8_t, CHUNK_VOLUME> sky;
-    std::array<game::LightRGB, CHUNK_VOLUME> block;
 };
 
 class MeshManager {
 public:
+    void SetRegistry(const game::BlockRegistry* reg) { m_registry = reg; }
     void Start();
     void Stop();
 
@@ -52,6 +54,7 @@ private:
     std::queue<MeshResult>                m_resultQueue;
 
     std::unordered_set<uint64_t>          m_inflightTasks;
+    const game::BlockRegistry*            m_registry = nullptr;
 };
 
 } // namespace game::client

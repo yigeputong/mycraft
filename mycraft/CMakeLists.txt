@@ -7,6 +7,7 @@ add_library(game-server STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WorldGenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WorldSave.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/LightEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/BlockRegistry.cpp
 )
 target_include_directories(game-server PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

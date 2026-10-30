@@ -1,0 +1,7 @@
+{
+  "id": 0,
+  "name": "mycraft:air",
+  "display_name": "Air",
+  "render": { "opaque": false, "cross": false, "liquid": false, "leaves": false, "luminance": 0 },
+  "properties": { "solid": false, "hardness": 0.0, "tool": "none", "harvest_tier": 0 }
+}

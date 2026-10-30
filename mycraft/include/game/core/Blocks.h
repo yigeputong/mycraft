@@ -1,94 +1,45 @@
 #pragma once
-#include <cstdint>
+#include "BlockRegistry.h"
 #include <map>
 
 namespace game {
 
-enum BlockType : uint8_t {
-    Air = 0,
-    Stone, GrassBlock, Dirt, Sand, Water,
-    Snow,           // 雪地顶层
-    Sandstone,      // 砂岩
-    CoalOre,        // 煤矿
-    IronOre,        // 铁矿
-    Wood,           // 木头
-    Leaves,         // 树叶
-    TallGrass,      // 高草丛
-    FlowerRed,      // 红花
-    FlowerYellow,   // 黄花
-    Torch,          // 火把
-    Void
-};
-
-inline bool IsSolid(BlockType b) {
-    // 草丛和花不是固体（允许玩家穿过，不遮挡相邻面）
-    return  b != BlockType::Air && b != BlockType::Water && b != BlockType::Void &&
-            b != BlockType::TallGrass && b != BlockType::FlowerRed && b != BlockType::FlowerYellow &&
-            b != BlockType::Torch;
-}
-
-inline bool IsPhysicsSolid(BlockType b) {
-    return b != BlockType::Air 
-        && b != BlockType::Water 
-        && b != BlockType::Void 
-        && b != BlockType::TallGrass 
-        && b != BlockType::FlowerRed 
-        && b != BlockType::FlowerYellow 
-        && b != BlockType::Torch;
-}
-
-struct Block {
-    BlockType type;
-};
-
 // ==================== 组件类型 ====================
 enum class DataComponentType : std::uint8_t {
-    MaxStackSize,   // int, 默认 64
-    // 未来: Damage, MaxDamage, ToolType, AttackDamage, ...
+    MaxStackSize,
 };
 
 // ==================== 组件值容器 ====================
 class DataComponentMap {
 public:
-    void set(DataComponentType type, int value) {
-        m_ints[type] = value;
-    }
-
+    void set(DataComponentType type, int value) { m_ints[type] = value; }
     const int* get(DataComponentType type) const {
         auto it = m_ints.find(type);
         return it == m_ints.end() ? nullptr : &it->second;
     }
-
-    bool has(DataComponentType type) const {
-        return m_ints.count(type) > 0;
-    }
-
+    bool has(DataComponentType type) const { return m_ints.count(type) > 0; }
 private:
     std::map<DataComponentType, int> m_ints;
-    // 未来加: std::map<DataComponentType, std::string> m_strings;
-    //         std::map<DataComponentType, glm::vec3> m_vec3s;
 };
 
 // ==================== 物品堆叠 ====================
 struct ItemStack {
-    BlockType       type  = BlockType::Air;
+    BlockId         type  = AIR_ID;
     int             count = 0;
     DataComponentMap components;
 
     int getMaxStackSize() const {
-        if (auto* v = components.get(DataComponentType::MaxStackSize))
-            return *v;
+        if (auto* v = components.get(DataComponentType::MaxStackSize)) return *v;
         return 64;
     }
-
-    bool isEmpty() const { return type == BlockType::Air || count <= 0; }
+    bool isEmpty() const { return type == AIR_ID || count <= 0; }
 };
 
-inline ItemStack MakeItemStack(BlockType type, int count = 1) {
+inline ItemStack MakeItemStack(BlockId type, int count = 1) {
     ItemStack s;
     s.type  = type;
     s.count = count;
     return s;
 }
 
-}
+} // namespace game

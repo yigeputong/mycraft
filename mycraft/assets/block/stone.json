@@ -1,0 +1,5 @@
+{
+  "id": 1, "name": "mycraft:stone", "display_name": "Stone",
+  "render": { "tiles": { "all": "stone" }, "opaque": true },
+  "properties": { "solid": true, "hardness": 1.5, "tool": "pickaxe", "harvest_tier": 0 }
+}

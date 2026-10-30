@@ -1,0 +1,5 @@
+{
+  "id": 7, "name": "mycraft:glass", "display_name": "Glass",
+  "render": { "tiles": { "all": "glass" }, "opaque": false },
+  "properties": { "solid": true, "hardness": 0.3, "tool": "none", "harvest_tier": 0 }
+}

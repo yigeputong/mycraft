@@ -1,5 +1,5 @@
 #pragma once
-#include "./Blocks.h"
+#include "game/core/BlockRegistry.h"
 #include <glm/glm.hpp>
 #include <cmath>
 
@@ -15,7 +15,7 @@ struct RayHit {
 // Amanatides & Woo voxel traversal
 // getBlock(x,y,z) -> BlockType（调用方注入，避免依赖具体世界实现）
 template<typename GetBlockFn>
-RayHit RayCast(glm::vec3 origin, glm::vec3 dir, float maxDist, GetBlockFn getBlock) {
+RayHit RayCast(const BlockRegistry& reg, glm::vec3 origin, glm::vec3 dir, float maxDist, GetBlockFn getBlock) {
     if (glm::length(dir) < 1e-6f) return {};
     dir = glm::normalize(dir);
 
@@ -45,9 +45,10 @@ RayHit RayCast(glm::vec3 origin, glm::vec3 dir, float maxDist, GetBlockFn getBlo
     float t = 0.0f;
 
     while (t <= maxDist) {
-        BlockType b = getBlock(x, y, z);
-        if (b != BlockType::Air && b != BlockType::Water) {
-            return { true, x, y, z, nx, ny, nz, t };
+        BlockId b = getBlock(x, y, z);
+        if (b != AIR_ID && !reg.Get(b).render.isLiquid) { 
+            // 命中
+            return {true, x, y, z, nx, ny, nz};
         }
 
         if (tMaxX < tMaxY && tMaxX < tMaxZ) {

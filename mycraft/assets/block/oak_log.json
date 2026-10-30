@@ -1,0 +1,8 @@
+{
+  "id": 8, "name": "mycraft:oak_log", "display_name": "Oak Log",
+  "render": {
+    "tiles": { "top": "oak_log_top", "bottom": "oak_log_top", "side": "oak_log" },
+    "opaque": true
+  },
+  "properties": { "solid": true, "hardness": 2.0, "tool": "axe", "harvest_tier": 0 }
+}

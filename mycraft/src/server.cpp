@@ -13,6 +13,7 @@
 #include <SDL3/SDL.h>
 
 #include <chrono>
+#include <cstddef>
 #include <random>
 
 namespace game::server {
@@ -37,7 +38,7 @@ void GameServer::StopWorkers() {
 }
 
 void GameServer::WorkerLoop(uint32_t seed) {
-    TerrainGenerator terrain(seed);   // ★ 每个 worker 独立，避免噪声共享状态
+    TerrainGenerator terrain(seed, m_registry); // ★ 必须把注册表传给生成器
     while (true) {
         ChunkTask task;
         {
@@ -53,7 +54,7 @@ void GameServer::WorkerLoop(uint32_t seed) {
         ChunkResult r;
         r.key   = task.key;
         r.chunk = terrain.GenerateChunk(task.cx, task.cz);
-        LightEngine::InitRegion(r.chunk, nullptr, nullptr, nullptr, nullptr);
+        LightEngine::InitRegion(m_registry, r.chunk, nullptr, nullptr, nullptr, nullptr); // ★ 传注册表
 
         {
             std::lock_guard lk(m_resultMutex);
@@ -68,13 +69,23 @@ void GameServer::SendChunkTo(int clientId, const Chunk& chunk) {
     w.Write<int32_t>(chunk.chunk_x);
     w.Write<int32_t>(chunk.chunk_z);
     w.Write<uint16_t>(CHUNK_SIZE_Y);
+    
+    // 1. 方块数据
     w.WriteBytes(reinterpret_cast<const uint8_t*>(chunk.blocks.data()),
-                 chunk.blocks.size() * sizeof(BlockType));
+                 chunk.blocks.size() * sizeof(BlockId));
+                 
+    // 2. 天空光数组 (65536 字节)
+    w.WriteBytes(chunk.sky.data(), chunk.sky.size());
+    
+    // 3. 方块光数组 (65536 * 3 字节)
+    w.WriteBytes(reinterpret_cast<const uint8_t*>(chunk.block.data()), 
+                 chunk.block.size() * sizeof(LightRGB));
+
     m_server->SendTo(clientId, w.GetBuffer());
 }
 
 void GameServer::DrainChunkResults() {
-    constexpr int kMaxSendsPerTick = 32;
+    constexpr int kMaxSendsPerTick = 4;
 
     int sends = 0;
     for (;;) {
@@ -91,7 +102,7 @@ void GameServer::DrainChunkResults() {
             for (const auto& c : cit->second) {
                 int lx = c.x & 15;
                 int lz = c.z & 15;
-                ChunkSet(r.chunk, lx, c.y, lz, (BlockType)c.block);
+                ChunkSet(r.chunk, lx, c.y, lz, c.block); // ★ 直接传 uint16_t 的 BlockId
             }
         }
 
@@ -113,6 +124,9 @@ void GameServer::DrainChunkResults() {
 
 bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory) {
     if (m_running.load()) return false;
+
+    // 服务端初始化注册表
+    m_registry.LoadAll("assets/block");
 
     // ---- 存档 ----
     m_save = std::make_unique<WorldSave>(saveDir);
@@ -159,6 +173,7 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
     }
 
     m_server->SetConnectCallback([this](int id) {
+        std::lock_guard<std::mutex> lock(m_playersMutex);
         ServerPlayer p;
         p.id = (uint32_t)id;
         m_players.push_back(p);
@@ -179,13 +194,13 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
             m_server->SendTo(id, w.GetBuffer());
         }
 
-        // ★ 补发所有现有掉落物
+        // 补发所有现有掉落物
         for (auto& [eid, e] : m_entities) {
             Eng::MessageWriter w;
             w.Write(static_cast<uint8_t>(net::MessageType::EntitySpawn));
             w.Write<uint32_t>(eid);
             w.WriteVec3(e.position);
-            w.Write<uint16_t>((uint16_t)e.itemType);
+            w.Write<uint16_t>(e.itemType); // ★ BlockId
             m_server->SendTo(id, w.GetBuffer());
         }
 
@@ -197,6 +212,7 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
     });
 
     m_server->SetDisconnectCallback([this](int id) {
+        std::lock_guard<std::mutex> lock(m_playersMutex);
         for (auto& p : m_players) {
             if (p.id == (uint32_t)id) {
                 if (m_save && !p.name.empty()) {
@@ -208,7 +224,6 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
         m_players.erase(std::remove_if(m_players.begin(), m_players.end(),
             [id](const ServerPlayer& p) { return p.id == (uint32_t)id; }), m_players.end());
 
-        // 该 client 的待发 chunk 请求
         std::queue<PendingChunkRequest> keep;
         while (!m_chunkQueue.empty()) {
             if (m_chunkQueue.front().clientId != id) keep.push(m_chunkQueue.front());
@@ -225,18 +240,18 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
 }
 
 void GameServer::Stop() {
-    // 1. 确保运行状态设为 false（即使已经是 false）
     m_running.store(false);
 
-    // 2. 无论如何，只要线程可 join，就必须 join，防止 std::terminate 闪退
+    // 先让网络停止接收和发送，打破子线程的阻塞
+    if (m_server) {
+        m_server->Shutdown();
+    }
+
+    // 然后再等待子线程优雅退出
     if (m_thread.joinable()) {
         m_thread.join();
     }
 
-    // 3. 关闭网络层（确保你的 m_server->Shutdown() 在未初始化时调用也是安全的）
-    m_server->Shutdown();
-
-    // 4. 保存所有玩家数据（去重，合并为一次循环）
     if (m_save) {
         for (auto& p : m_players) {
             if (!p.name.empty()) {
@@ -245,7 +260,6 @@ void GameServer::Stop() {
         }
     }
 
-    // 5. 保存世界方块改动
     if (m_save && m_dirty) {
         std::vector<BlockChange> flat;
         for (auto& [k, v] : m_pendingChanges) {
@@ -270,7 +284,8 @@ void GameServer::Run() {
     auto last = std::chrono::steady_clock::now();
     float accumulator = 0.0f;
 
-    m_terrain = std::make_unique<TerrainGenerator>(m_worldSeed);
+    // 服务端主线程也保留一个 terrain（按需），但 chunk 生成已全在 Worker 里
+    m_terrain = std::make_unique<TerrainGenerator>(m_worldSeed, m_registry); // ★
 
     StartWorkers(m_worldSeed);
 
@@ -285,7 +300,6 @@ void GameServer::Run() {
         while (accumulator >= TICK_INTERVAL) {
             auto tickStart = std::chrono::steady_clock::now();
 
-            // ---- 消费客户端请求，派发给 worker ----
             while (!m_chunkQueue.empty()) {
                 auto req = m_chunkQueue.front();
                 m_chunkQueue.pop();
@@ -293,13 +307,13 @@ void GameServer::Run() {
 
                 auto it = m_chunks.find(key);
                 if (it != m_chunks.end()) {
-                    SendChunkTo(req.clientId, it->second);   // 缓存命中
+                    SendChunkTo(req.clientId, it->second);
                     continue;
                 }
 
-                m_waitingClients[key].push_back(req.clientId);   // 记下等结果的人
+                m_waitingClients[key].push_back(req.clientId);
 
-                if (m_inFlight.count(key)) continue;             // 已在生成
+                if (m_inFlight.count(key)) continue;
                 m_inFlight.insert(key);
                 {
                     std::lock_guard lk(m_taskMutex);
@@ -308,7 +322,6 @@ void GameServer::Run() {
                 m_taskCv.notify_one();
             }
 
-            // ---- 收结果 ----
             DrainChunkResults();
 
             TickWorld(TICK_INTERVAL);
@@ -333,7 +346,7 @@ void GameServer::Run() {
         SDL_Delay(1);
     }
 
-    StopWorkers();   // ★
+    StopWorkers();
 }
 
 void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
@@ -350,7 +363,7 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
             in.jump    = r.Read<uint8_t>() != 0;
             in.dig     = r.Read<uint8_t>() != 0;
             in.place   = r.Read<uint8_t>() != 0;
-            in.placeBlock = r.Read<uint16_t>();
+            in.placeBlock = r.Read<uint16_t>(); // 已经是 BlockId
             in.fly = r.Read<uint8_t>() != 0;
 
             ApplyPlayerInput(clientId, in);
@@ -385,7 +398,6 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
             break;
         }
         default:
-        // 服务端不收 S→C 类消息
             break;
     }
 }
@@ -399,19 +411,20 @@ void GameServer::ApplyPlayerInput(int clientId, const net::PlayerInput& in) {
             p.jump    = in.jump;
             p.flyMode = in.fly;
             if (in.dig)   HandleDig(p);
-            if (in.place) HandlePlace(p, static_cast<BlockType>(in.placeBlock));
+            if (in.place) HandlePlace(p, in.placeBlock); // ★ 直接传 BlockId
             return;
         }
     }
 }
 
 void GameServer::TickWorld(float dt) {
+    std::lock_guard<std::mutex> lock(m_playersMutex);
     for (auto& p : m_players) {
         game::PlayerMotion m;
         m.position = p.position;
         m.velocity = p.velocity;
         m.onGround = p.onGround;
-        m.flyMode  = p.flyMode;   // ★
+        m.flyMode  = p.flyMode;
 
         game::StepPlayer(m, p.moveDir, p.jump, dt,
             [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
@@ -423,7 +436,7 @@ void GameServer::TickWorld(float dt) {
     }
 }
 
-void GameServer::SpawnItemDrop(const glm::vec3& pos, BlockType type) {
+void GameServer::SpawnItemDrop(const glm::vec3& pos, BlockId id) {
     static thread_local std::mt19937 s_rng(std::random_device{}());
     static thread_local std::uniform_real_distribution<float> s_dist(-1.0f, 1.0f);
     ItemEntity e;
@@ -431,15 +444,15 @@ void GameServer::SpawnItemDrop(const glm::vec3& pos, BlockType type) {
     e.position = pos;
     e.velocity = glm::vec3(s_dist(s_rng) * 2.0f, 2.5f, s_dist(s_rng) * 2.0f);
     e.pickupDelay = 0.5f;
-    e.itemType    = type;
+    e.itemType    = id; // ★
 
     m_entities[e.id] = e;
 
     Eng::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::EntitySpawn));
     w.Write<uint32_t>(e.id);
-    w.WriteVec3(e.position);                       // ★ e.pos → e.position
-    w.Write<uint16_t>(static_cast<uint16_t>(type));
+    w.WriteVec3(e.position);
+    w.Write<uint16_t>(e.itemType); // ★
     m_server->Broadcast(w.GetBuffer());
 }
 
@@ -447,24 +460,20 @@ void GameServer::TickEntities(float dt) {
     std::vector<uint32_t> toRemove;
 
     for (auto& [id, e] : m_entities) {
-        // ★ 直接传 e —— 它已经继承自 PointEntity
         game::StepPointEntity(e, dt,
             [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
 
-        // 计时器
         if (e.pickupDelay > 0) e.pickupDelay -= dt;
         e.age += dt;
 
-        // 广播位置
         {
             Eng::MessageWriter w;
             w.Write(static_cast<uint8_t>(game::net::MessageType::EntityUpdate));
             w.Write<uint32_t>(id);
-            w.WriteVec3(e.position);              // ★ e.pos → e.position
+            w.WriteVec3(e.position);
             m_server->Broadcast(w.GetBuffer());
         }
 
-        // 超时
         if (e.age > 300.0f) {
             Eng::MessageWriter w;
             w.Write(static_cast<uint8_t>(game::net::MessageType::EntityDestroy));
@@ -476,7 +485,6 @@ void GameServer::TickEntities(float dt) {
             continue;
         }
 
-        // 拾取检测
         if (e.pickupDelay <= 0.0f) {
             for (auto& p : m_players) {
                 glm::vec3 center = p.position + glm::vec3(0.0f, 0.9f, 0.0f);
@@ -485,9 +493,9 @@ void GameServer::TickEntities(float dt) {
                     Eng::MessageWriter w;
                     w.Write(static_cast<uint8_t>(game::net::MessageType::EntityDestroy));
                     w.Write<uint32_t>(id);
-                    w.Write<uint8_t>(1);                    // 1 = 被捡走
+                    w.Write<uint8_t>(1);
                     w.WriteU32BE(p.id);
-                    m_server->Broadcast(w.GetBuffer());      // ★ SendTo → Broadcast
+                    m_server->Broadcast(w.GetBuffer());
                     toRemove.push_back(id);
                     break;
                 }
@@ -515,15 +523,15 @@ void GameServer::HandleDig(ServerPlayer& p) {
 
     glm::vec3 eye = p.position + glm::vec3(0.0f, game::PLAYER_EYE, 0.0f);
 
-    auto hit = game::RayCast(eye, front, REACH_DISTANCE,
+    auto hit = game::RayCast(m_registry, eye, front, REACH_DISTANCE,
         [this](int x, int y, int z) { return GetBlockAt(x, y, z); });
     if (!hit.hit) return;
 
-    BlockType oldBlock = GetBlockAt(hit.bx, hit.by, hit.bz);
-    if (oldBlock == BlockType::Air || oldBlock == BlockType::Void) return; // 防止挖空气
+    BlockId oldBlock = GetBlockAt(hit.bx, hit.by, hit.bz);
+    if (oldBlock == AIR_ID || oldBlock == UNKNOWN_ID) return; // 防止挖空气
 
-    SetBlockAt(hit.bx, hit.by, hit.bz, BlockType::Air);
-    BroadcastBlockChange(hit.bx, hit.by, hit.bz, BlockType::Air);
+    SetBlockAt(hit.bx, hit.by, hit.bz, AIR_ID);
+    BroadcastBlockChange(hit.bx, hit.by, hit.bz, AIR_ID);
 
     // 重算服务端光照
     int cx = game::WorldToChunkX(hit.bx);
@@ -532,7 +540,7 @@ void GameServer::HandleDig(ServerPlayer& p) {
     int lz = game::WorldToLocalZ(hit.bz);
     auto it = m_chunks.find(game::ChunkKey(cx, cz));
     if (it != m_chunks.end()) {
-        game::LightEngine::OnBlockChanged(it->second, lx, hit.by, lz, oldBlock, BlockType::Air);
+        game::LightEngine::OnBlockChanged(m_registry, it->second, lx, hit.by, lz, oldBlock, AIR_ID);
     }
 
     // 挖掉非空气方块 → 生成掉落物
@@ -541,7 +549,10 @@ void GameServer::HandleDig(ServerPlayer& p) {
         oldBlock);
 }
 
-void GameServer::HandlePlace(ServerPlayer& p, BlockType type) {
+void GameServer::HandlePlace(ServerPlayer& p, BlockId type) {
+    // ★ 校验方块是否合法
+    if (m_registry.Get(type).id == UNKNOWN_ID) return;
+
     glm::vec3 front;
     front.x = cos(p.yaw) * cos(p.pitch);
     front.y = sin(p.pitch);
@@ -550,8 +561,8 @@ void GameServer::HandlePlace(ServerPlayer& p, BlockType type) {
 
     glm::vec3 eye = p.position + glm::vec3(0.0f, game::PLAYER_EYE, 0.0f);
 
-    auto hit = game::RayCast(eye, front, REACH_DISTANCE,
-        [this](int x, int y, int z) { return GetBlockAt(x, y, z); });
+    auto hit = game::RayCast(m_registry, eye, front, REACH_DISTANCE,
+    [this](int x, int y, int z) { return GetBlockAt(x, y, z); });
     if (!hit.hit) return;
 
     // 放在命中面的外侧
@@ -562,8 +573,8 @@ void GameServer::HandlePlace(ServerPlayer& p, BlockType type) {
     // 别把方块放进自己身体里
     if (IsInsidePlayer(p, px, py, pz)) return;
     
-    BlockType oldBlock = GetBlockAt(px, py, pz);
-    if (oldBlock != BlockType::Air) return;
+    BlockId oldBlock = GetBlockAt(px, py, pz);
+    if (oldBlock != AIR_ID) return;
 
     SetBlockAt(px, py, pz, type);
     BroadcastBlockChange(px, py, pz, type);
@@ -575,22 +586,22 @@ void GameServer::HandlePlace(ServerPlayer& p, BlockType type) {
     int lz = game::WorldToLocalZ(pz);
     auto it = m_chunks.find(game::ChunkKey(cx, cz));
     if (it != m_chunks.end()) {
-        game::LightEngine::OnBlockChanged(it->second, lx, py, lz, oldBlock, type);
+        game::LightEngine::OnBlockChanged(m_registry, it->second, lx, py, lz, oldBlock, type);
     }
 }
 
-BlockType GameServer::GetBlockAt(int wx, int wy, int wz) const {
-    if (wy < 0 || wy >= CHUNK_SIZE_Y) return BlockType::Air;
+BlockId GameServer::GetBlockAt(int wx, int wy, int wz) const {
+    if (wy < 0 || wy >= CHUNK_SIZE_Y) return AIR_ID;
     int cx = wx >> 4;
     int cz = wz >> 4;
     int lx = wx & 15;
     int lz = wz & 15;
     auto it = m_chunks.find(ChunkKey(cx, cz));
-    if (it == m_chunks.end()) return BlockType::Air;
+    if (it == m_chunks.end()) return AIR_ID;
     return ChunkGet(it->second, lx, wy, lz);
 }
 
-void GameServer::SetBlockAt(int wx, int wy, int wz, BlockType bt) {
+void GameServer::SetBlockAt(int wx, int wy, int wz, BlockId bt) {
     if (wy < 0 || wy >= CHUNK_SIZE_Y) return;
     int cx = wx >> 4;
     int cz = wz >> 4;
@@ -600,7 +611,7 @@ void GameServer::SetBlockAt(int wx, int wy, int wz, BlockType bt) {
     if (it == m_chunks.end()) return;
     ChunkSet(it->second, lx, wy, lz, bt);
     // 记录改动（供存档）
-    m_pendingChanges[ChunkKey(cx, cz)].push_back({ wx, wy, wz, (uint16_t)bt });
+    m_pendingChanges[ChunkKey(cx, cz)].push_back({ wx, wy, wz, bt });
     m_dirty = true;
 }
 
@@ -637,11 +648,12 @@ bool GameServer::AABBCollides(const glm::vec3& pos) const {
 }
 
 bool GameServer::IsSolidAt(int wx, int wy, int wz) const {
-    BlockType b = GetBlockAt(wx, wy, wz);
-    return IsPhysicsSolid(b);
+    BlockId b = GetBlockAt(wx, wy, wz);
+    return m_registry.IsSolid(b); // ★ 使用实例
 }
 
 void GameServer::BroadcastWorldState() {
+    std::lock_guard<std::mutex> lock(m_playersMutex);
     Eng::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::WorldState));
     w.WriteU32BE((uint32_t)m_players.size());
@@ -663,13 +675,13 @@ void GameServer::BroadcastWorldState() {
     m_server->Broadcast(w.GetBuffer());
 }
 
-void GameServer::BroadcastBlockChange(int bx, int by, int bz, BlockType type) {
+void GameServer::BroadcastBlockChange(int bx, int by, int bz, BlockId id) {
     Eng::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::BlockChange));
     w.Write<int32_t>(bx);
     w.Write<int32_t>(by);
     w.Write<int32_t>(bz);
-    w.Write<uint16_t>(static_cast<uint16_t>(type));
+    w.Write<uint16_t>(id); // ★
     m_server->Broadcast(w.GetBuffer());
 }
 

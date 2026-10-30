@@ -1,5 +1,4 @@
 #include "game/core/LightEngine.h"
-#include "game/core/Blocks.h"
 #include <algorithm>
 
 namespace game {
@@ -12,7 +11,7 @@ Chunk* LightEngine::RouteChunk(Chunk* current, Chunk* nXm, Chunk* nXp, Chunk* nZ
     return current;
 }
 
-void LightEngine::InitRegion(Chunk& c, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp) {
+void LightEngine::InitRegion(const BlockRegistry& reg, Chunk& c, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp) {
     auto clearLight = [](Chunk* chk) { 
         if(!chk) return; 
         std::fill(chk->sky.begin(), chk->sky.end(), 0);
@@ -29,18 +28,29 @@ void LightEngine::InitRegion(Chunk& c, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk
             for (int z = 0; z < CHUNK_SIZE_Z; ++z) {
                 int lastY = -1;
                 for (int y = CHUNK_SIZE_Y - 1; y >= 0; --y) {
-                    if (IsSolid(ChunkGet(*chk, x, y, z))) break;
+                    // 使用实例的 IsSolid 判断
+                    if (reg.IsSolid(ChunkGet(*chk, x, y, z))) break;
                     chk->sky[ChunkIndex(x, y, z)] = 15;
                     lastY = y;
                 }
                 if (lastY >= 0) {
                     qSky.push({chk, (int16_t)x, (int16_t)lastY, (int16_t)z, 15});
                 }
+                
                 for (int y = 0; y < CHUNK_SIZE_Y; ++y) {
-                    LightEmission em = GetLightEmission(ChunkGet(*chk, x, y, z));
-                    if (em.r || em.g || em.b) {
-                        chk->block[ChunkIndex(x, y, z)] = {em.r, em.g, em.b};
-                        qBlock.push({chk, (int16_t)x, (int16_t)y, (int16_t)z, em.r, em.g, em.b});
+                    BlockId id = ChunkGet(*chk, x, y, z);
+                    const auto& def = reg.Get(id);
+                    
+                    // 基于 luminance 动态生成发光颜色
+                    if (def.render.luminance > 0) {
+                        uint8_t lum = (uint8_t)def.render.luminance;
+                        // 按火把原比例 (14, 10, 6) 进行缩放
+                        uint8_t r = lum;
+                        uint8_t g = (uint8_t)((float)lum * (10.0f / 14.0f));
+                        uint8_t b = (uint8_t)((float)lum * (6.0f / 14.0f));
+                        
+                        chk->block[ChunkIndex(x, y, z)] = {r, g, b};
+                        qBlock.push({chk, (int16_t)x, (int16_t)y, (int16_t)z, r, g, b});
                     }
                 }
             }
@@ -49,17 +59,17 @@ void LightEngine::InitRegion(Chunk& c, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk
 
     seedChunk(&c); seedChunk(nXm); seedChunk(nXp); seedChunk(nZm); seedChunk(nZp);
 
-    PropagateSky(qSky, nXm, nXp, nZm, nZp);
-    PropagateBlock(qBlock, nXm, nXp, nZm, nZp);
+    PropagateSky(reg, qSky, nXm, nXp, nZm, nZp);
+    PropagateBlock(reg, qBlock, nXm, nXp, nZm, nZp);
 }
 
-void LightEngine::OnBlockChanged(Chunk& c, [[maybe_unused]] int lx, [[maybe_unused]] int ly, [[maybe_unused]] int lz, BlockType oldB, BlockType newB) {
+void LightEngine::OnBlockChanged(const BlockRegistry& reg, Chunk& c, [[maybe_unused]] int lx, [[maybe_unused]] int ly, [[maybe_unused]] int lz, BlockId oldB, BlockId newB) {
     if (oldB == newB) return;
     // 服务端暂不传邻居，只做单块全量重算；客户端会在 Worker 里用 InitRegion 跨块计算
-    InitRegion(c, nullptr, nullptr, nullptr, nullptr);
+    InitRegion(reg, c, nullptr, nullptr, nullptr, nullptr);
 }
 
-void LightEngine::PropagateSky(std::queue<NodeSky>& q, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp) {
+void LightEngine::PropagateSky(const BlockRegistry& reg, std::queue<NodeSky>& q, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp) {
     static constexpr int DX[6] = { 1, -1, 0,  0, 0,  0 };
     static constexpr int DY[6] = { 0,  0, 1, -1, 0,  0 };
     static constexpr int DZ[6] = { 0,  0, 0,  0, 1, -1 };
@@ -72,7 +82,9 @@ void LightEngine::PropagateSky(std::queue<NodeSky>& q, Chunk* nXm, Chunk* nXp, C
             int nx = n.x + DX[i], ny = n.y + DY[i], nz = n.z + DZ[i];
             Chunk* target = RouteChunk(n.chunk, nXm, nXp, nZm, nZp, nx, nz);
             if (!target || ny < 0 || ny >= CHUNK_SIZE_Y) continue;
-            if (IsSolid(ChunkGet(*target, nx, ny, nz))) continue;
+            
+            // ★ 实例查表
+            if (reg.IsSolid(ChunkGet(*target, nx, ny, nz))) continue;
 
             int idx = ChunkIndex(nx, ny, nz);
             uint8_t targetVal = n.v - 1;
@@ -84,7 +96,7 @@ void LightEngine::PropagateSky(std::queue<NodeSky>& q, Chunk* nXm, Chunk* nXp, C
     }
 }
 
-void LightEngine::PropagateBlock(std::queue<NodeBlock>& q, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp) {
+void LightEngine::PropagateBlock(const BlockRegistry& reg, std::queue<NodeBlock>& q, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp) {
     static constexpr int DX[6] = { 1, -1, 0,  0, 0,  0 };
     static constexpr int DY[6] = { 0,  0, 1, -1, 0,  0 };
     static constexpr int DZ[6] = { 0,  0, 0,  0, 1, -1 };
@@ -96,7 +108,9 @@ void LightEngine::PropagateBlock(std::queue<NodeBlock>& q, Chunk* nXm, Chunk* nX
             int nx = n.x + DX[i], ny = n.y + DY[i], nz = n.z + DZ[i];
             Chunk* target = RouteChunk(n.chunk, nXm, nXp, nZm, nZp, nx, nz);
             if (!target || ny < 0 || ny >= CHUNK_SIZE_Y) continue;
-            if (IsSolid(ChunkGet(*target, nx, ny, nz))) continue;
+            
+            // ★ 实例查表
+            if (reg.IsSolid(ChunkGet(*target, nx, ny, nz))) continue;
 
             int idx = ChunkIndex(nx, ny, nz);
             LightRGB cur = target->block[idx];

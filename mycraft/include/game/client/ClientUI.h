@@ -1,7 +1,7 @@
 #pragma once
 #include "Engine.h"
 #include <imgui.h>
-#include "../core/Blocks.h"
+#include "../core/BlockRegistry.h" // ★ 引入 BlockId 和 BlockRegistry
 
 namespace game {
 class MyGame; // 前置声明
@@ -22,8 +22,8 @@ private:
     void DrawRotatedText(ImDrawList* dl, ImVec2 center, const char* text, float angleRad, ImU32 color);
     bool DrawButton(const char* label, ImVec2 size);
     
-    // 3D 等距图标（用于物品栏）
-    void DrawIsometricBlock(ImDrawList* dl, ImVec2 center, float size, BlockType type, ImTextureID texId);
+    // 3D 等距图标（用于物品栏）★ 改为 BlockId 并传入 BlockRegistry
+    void DrawIsometricBlock(ImDrawList* dl, ImVec2 center, float size, BlockId id, ImTextureID texId, const BlockRegistry& reg);
 };
 
 } // namespace client

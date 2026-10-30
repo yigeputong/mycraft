@@ -1,0 +1,8 @@
+{
+  "id": 10, "name": "mycraft:oak_leaves", "display_name": "Oak Leaves",
+  "render": {
+    "tiles": { "all": { "tile": "oak_leaves", "tint": "foliage" } },
+    "opaque": false, "leaves": true
+  },
+  "properties": { "solid": true, "hardness": 0.2, "tool": "none", "harvest_tier": 0 }
+}

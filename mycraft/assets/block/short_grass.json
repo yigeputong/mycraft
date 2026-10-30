@@ -1,0 +1,8 @@
+{
+  "id": 12, "name": "mycraft:short_grass", "display_name": "Short Grass",
+  "render": {
+    "tiles": { "all": { "tile": "short_grass", "tint": "grass" } },
+    "opaque": false, "cross": true
+  },
+  "properties": { "solid": false, "hardness": 0.0, "tool": "none", "harvest_tier": 0 }
+}

@@ -1,0 +1,5 @@
+{
+  "id": 6, "name": "mycraft:ice", "display_name": "Ice",
+  "render": { "tiles": { "all": "ice" }, "opaque": false },
+  "properties": { "solid": true, "hardness": 0.5, "tool": "pickaxe", "harvest_tier": 0 }
+}

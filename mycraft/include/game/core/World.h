@@ -1,9 +1,9 @@
 #pragma once
-#include "../core/Blocks.h"
+#include "Blocks.h"
+#include "BlockRegistry.h"
 #include <array>
 
 namespace game {
-
 
 constexpr int CHUNK_SIZE_X = 16;
 constexpr int CHUNK_SIZE_Y = 256;   // 世界高度
@@ -18,7 +18,7 @@ struct Chunk {
     int chunk_z = 0;
 
     // 方块数据
-    std::array<BlockType, CHUNK_VOLUME> blocks{};
+    std::array<BlockId, CHUNK_VOLUME> blocks; 
 
     // 光照数据（随 chunk 加载/卸载）
     std::array<uint8_t, CHUNK_VOLUME>  sky{};
@@ -30,22 +30,21 @@ constexpr int ChunkIndex(int lx, int ly, int lz) {
     return ly * CHUNK_SIZE_X * CHUNK_SIZE_Z + lz * CHUNK_SIZE_X + lx;
 }
 
-// 读取（越界返回 Void）
-inline BlockType ChunkGet(const Chunk& c, int lx, int ly, int lz) {
+// 读取（越界返回 UNKNOWN_ID）
+inline BlockId ChunkGet(const Chunk& c, int lx, int ly, int lz) {
     if (lx < 0 || lx >= CHUNK_SIZE_X ||
         ly < 0 || ly >= CHUNK_SIZE_Y ||
-        lz < 0 || lz >= CHUNK_SIZE_Z) return BlockType::Void;
+        lz < 0 || lz >= CHUNK_SIZE_Z) return UNKNOWN_ID; // ★ 修改
     return c.blocks[ChunkIndex(lx, ly, lz)];
 }
 
 // 写入（越界忽略）
-inline void ChunkSet(Chunk& c, int lx, int ly, int lz, BlockType t) {
+inline void ChunkSet(Chunk& c, int lx, int ly, int lz, BlockId t) { // ★ 修改
     if (lx < 0 || lx >= CHUNK_SIZE_X ||
         ly < 0 || ly >= CHUNK_SIZE_Y ||
         lz < 0 || lz >= CHUNK_SIZE_Z) return;
     c.blocks[ChunkIndex(lx, ly, lz)] = t;
 }
-
 
 constexpr static uint64_t ChunkKey(int cx, int cz) {
     return (uint64_t)(uint32_t)cx | ((uint64_t)(uint32_t)cz << 32);

@@ -1,0 +1,8 @@
+{
+  "id": 11, "name": "mycraft:water", "display_name": "Water",
+  "render": {
+    "tiles": { "all": { "tile": "water_still", "tint": "water" } },
+    "opaque": false, "liquid": true
+  },
+  "properties": { "solid": false, "hardness": 100.0, "tool": "none", "harvest_tier": 0 }
+}

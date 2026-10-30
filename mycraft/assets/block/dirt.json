@@ -1,0 +1,5 @@
+{
+  "id": 2, "name": "mycraft:dirt", "display_name": "Dirt",
+  "render": { "tiles": { "all": "dirt" }, "opaque": true },
+  "properties": { "solid": true, "hardness": 0.5, "tool": "shovel", "harvest_tier": 0 }
+}

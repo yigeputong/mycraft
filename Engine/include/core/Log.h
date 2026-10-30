@@ -2,11 +2,11 @@
 #include <string>
 #include <fstream>
 #include <mutex>
-#include <sstream>
+#include <sstream> // IWYU pragma: keep —— LOG_IMPL 宏展开需要 std::ostringstream
 
 namespace Eng {
 
-enum class LogLevel {
+enum class LogLevel : std::uint8_t {
     DEBUG,
     INFO,
     WARNING,
