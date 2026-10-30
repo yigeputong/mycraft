@@ -119,20 +119,17 @@ std::vector<uint8_t> GenerateAtlasPixels() {
         bool success = false;
         
         // 针对需要染色的方块，使用 BlitToAtlasTinted
-        // 这里我们先统一使用平原的颜色，方便你快速看到效果。
+        // 这里我们先统一使用平原的颜
         // 后续你可以根据生物群系动态切换这些常量。
-        if (t == 1) { // 草方块顶面
+        if (t == 1) { // 草方块顶面（灰白贴图，需要染成平原绿）
             success = BlitToAtlasTinted(px, base + "grass_block_top.png", t, PLAINS_GRASS_R, PLAINS_GRASS_G, PLAINS_GRASS_B);
-        } else if (t == 2) { // 草方块侧面
-            // 侧面染色逻辑不变，先用平原草地色
-            success = BlitToAtlasTinted(px, base + "grass_block_side.png", t, PLAINS_GRASS_R, PLAINS_GRASS_G, PLAINS_GRASS_B);
+        } else if (t == 2) { // 草方块侧面（原图已经是绿色，无需染色）
+            success = BlitToAtlasTinted(px, base + "grass_block_side.png", t, 255, 255, 255); // ★ 重点：传 255 即可
         } else if (t == 12) { // 树叶
             success = BlitToAtlasTinted(px, base + "oak_leaves.png", t, PLAINS_LEAF_R, PLAINS_LEAF_G, PLAINS_LEAF_B);
         } else if (t == 16) { // 高草丛
             success = BlitToAtlasTinted(px, base + "short_grass.png", t, PLAINS_GRASS_R, PLAINS_GRASS_G, PLAINS_GRASS_B);
-        } 
-        // ★ 新增：处理水体染色
-        else if (t == 5) { 
+        } else if (t == 5) { 
             // 假设水的原图是灰度的，我们给它染上水的颜色
             success = BlitToAtlasTinted(px, base + "water_still.png", t, WATER_R, WATER_G, WATER_B);
         } else {

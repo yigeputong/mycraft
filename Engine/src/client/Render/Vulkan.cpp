@@ -123,6 +123,13 @@ void VulkanAPI::Shutdown() {
     m_defaultTexture = 0;
 
     // 1. 释放 VMA 分配的资源（Mesh、Texture、FBO、UBO 等）
+    for (const auto& item : m_deletionQueue) {
+        const auto& p = item.p;
+        if (p.vertexAlloc) vmaDestroyBuffer(m_allocator, p.vertexBuffer, p.vertexAlloc);
+        if (p.indexAlloc) vmaDestroyBuffer(m_allocator, p.indexBuffer, p.indexAlloc);
+        if (p.instanceAlloc) vmaDestroyBuffer(m_allocator, p.instanceBuffer, p.instanceAlloc);
+    }
+    m_deletionQueue.clear();
     if (m_skyCubeBuffer != VK_NULL_HANDLE && m_skyCubeAlloc != VK_NULL_HANDLE) {
         vmaDestroyBuffer(m_allocator, m_skyCubeBuffer, m_skyCubeAlloc);
         m_skyCubeBuffer = VK_NULL_HANDLE;
@@ -200,7 +207,7 @@ void VulkanAPI::Shutdown() {
     m_surface = nullptr;
     m_debugMessenger = nullptr;
 
-    // ★ 核心：最后清空 Device、PhysicalDevice 和 Instance
+    // 最后清空 Device、PhysicalDevice 和 Instance
     m_device = nullptr;
     m_physicalDevice = nullptr;
     m_instance = nullptr;
@@ -215,10 +222,18 @@ void VulkanAPI::DestroyMeshInternal(MeshHandle h) {
     if (m_isShutdown) return;
     auto it = m_meshes.find(h);
     if (it == m_meshes.end()) return;
-    vkDeviceWaitIdle(*m_device);
-    if (it->second.vertexAlloc != VK_NULL_HANDLE) vmaDestroyBuffer(m_allocator, it->second.vertexBuffer, it->second.vertexAlloc);
-    if (it->second.indexAlloc != VK_NULL_HANDLE) vmaDestroyBuffer(m_allocator, it->second.indexBuffer, it->second.indexAlloc);
-    if (it->second.instanceAlloc != VK_NULL_HANDLE) vmaDestroyBuffer(m_allocator, it->second.instanceBuffer, it->second.instanceAlloc);
+
+    PendingDestroy p;
+    p.vertexBuffer = it->second.vertexBuffer;
+    p.vertexAlloc = it->second.vertexAlloc;
+    p.indexBuffer = it->second.indexBuffer;
+    p.indexAlloc = it->second.indexAlloc;
+    p.instanceBuffer = it->second.instanceBuffer;
+    p.instanceAlloc = it->second.instanceAlloc;
+
+    // 退休帧 = 当前帧 + 在途帧数
+    m_deletionQueue.push_back({ m_frameCounter + MAX_FRAMES_IN_FLIGHT, p });
+    
     m_meshes.erase(it);
 }
 
@@ -450,10 +465,12 @@ ShaderHandle VulkanAPI::CreateShaderInternal(const ShaderCreateInfo& info) {
         dstColor = vk::BlendFactor::eOne;
     }
 
-    // 颜色格式
-    vk::Format colorFmt = vk::Format::eR8G8B8A8Unorm;
-    if (info.colorFormat == rhi::TextureFormat::RGBA16_SFLOAT) colorFmt = vk::Format::eR16G16B16A16Sfloat;
-    if (info.colorFormat == rhi::TextureFormat::R8_UNORM)      colorFmt = vk::Format::eR8Unorm;
+    vk::Format colorFmt = m_swapChainSurfaceFormat.format; // 默认对齐屏幕
+    if (info.colorFormat == rhi::TextureFormat::RGBA16_SFLOAT) {
+        colorFmt = vk::Format::eR16G16B16A16Sfloat;
+    } else if (info.colorFormat == rhi::TextureFormat::R8_UNORM) {
+        colorFmt = vk::Format::eR8Unorm;
+    }
 
     // ==== Shader stages ====
     vk::PipelineShaderStageCreateInfo stages[2] = {
@@ -480,14 +497,29 @@ ShaderHandle VulkanAPI::CreateShaderInternal(const ShaderCreateInfo& info) {
     };
 
     vk::PipelineVertexInputStateCreateInfo vi{};
-    // 简化处理：如果不是常规地形，就不绑顶点（天空盒等由外部提供特殊网格，此处若有冲突则外部应单独创建）
-    vi.vertexBindingDescriptionCount = (info.cullMode == rhi::CullMode::None && !vkDepthWrite) ? 1 : 2;
-    vi.pVertexBindingDescriptions = bindings;
-    vi.vertexAttributeDescriptionCount = (info.cullMode == rhi::CullMode::None && !vkDepthWrite) ? 1 : 9;
-    vi.pVertexAttributeDescriptions = attrs;
+    
+    // ★ 修复顶点输入未消耗警告
+    if (info.vertPath.find("sky") != std::string::npos) {
+        vi.vertexBindingDescriptionCount   = 1;
+        vi.pVertexBindingDescriptions      = bindings;
+        vi.vertexAttributeDescriptionCount = 1;
+        vi.pVertexAttributeDescriptions    = attrs;
+    } else if (info.vertPath.find("lod") != std::string::npos) {
+        static vk::VertexInputAttributeDescription lodAttrs[5] = {
+            attrs[0], attrs[1], attrs[2], attrs[3], attrs[8]
+        };
+        vi.vertexBindingDescriptionCount   = 1;
+        vi.pVertexBindingDescriptions      = bindings;
+        vi.vertexAttributeDescriptionCount = 5;
+        vi.pVertexAttributeDescriptions    = lodAttrs;
+    } else {
+        vi.vertexBindingDescriptionCount   = 2;
+        vi.pVertexBindingDescriptions      = bindings;
+        vi.vertexAttributeDescriptionCount = 9;
+        vi.pVertexAttributeDescriptions    = attrs;
+    }
 
     vk::PipelineInputAssemblyStateCreateInfo ia{ .topology = vk::PrimitiveTopology::eTriangleList };
-
     vk::DynamicState dynStates[2] = { vk::DynamicState::eViewport, vk::DynamicState::eScissor };
     vk::PipelineDynamicStateCreateInfo dyn{};
     dyn.setDynamicStates(dynStates);
@@ -661,17 +693,35 @@ void VulkanAPI::BeginFrame() {
     }
 
     m_device.resetFences(*m_inFlightFences[m_frameIndex]);
+
+    // 1. 递增帧计数器
+    ++m_frameCounter;
+    // 2. 安全清理到期的资源
+    // 此时所有可能引用该 Buffer 的 CommandBuffer 都已经经历了一次 Reset，绝对安全
+    for (auto it = m_deletionQueue.begin(); it != m_deletionQueue.end(); ) {
+        if (it->retireFrame <= m_frameCounter) {
+            const auto& p = it->p;
+            if (p.vertexAlloc) vmaDestroyBuffer(m_allocator, p.vertexBuffer, p.vertexAlloc);
+            if (p.indexAlloc) vmaDestroyBuffer(m_allocator, p.indexBuffer, p.indexAlloc);
+            if (p.instanceAlloc) vmaDestroyBuffer(m_allocator, p.instanceBuffer, p.instanceAlloc);
+            it = m_deletionQueue.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    // 3. 重置并开始录制当前帧的命令缓冲
     m_commandBuffers[m_frameIndex].reset();
     m_commandBuffers[m_frameIndex].begin({});
 
     m_frameStarted = true;
     m_renderPassActive = false;
+    m_imageInAttachment = false;
 
     // 提交 UBO 数据
     GlobalState uboData{};
     uboData.view = m_globalState.view;
     uboData.projection = m_globalState.projection;
-    uboData.projection[1][1] *= -1.0f; // ★ Vulkan Y 轴翻转
+    uboData.projection[1][1] *= -1.0f; // Vulkan Y 轴翻转
     uboData.viewPos = m_globalState.viewPos;
     uboData.aoStrength = m_globalState.aoStrength;
     uboData.lightDir = glm::normalize(m_globalState.lightDir);
@@ -722,6 +772,13 @@ void VulkanAPI::EndFrame() {
             {}, {},
             vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eBottomOfPipe,
             vk::ImageAspectFlagBits::eColor);
+    } else {
+        // 如果被 ImGui 偷偷改了 Layout，这里安全地转回 PRESENT_SRC
+        transition_image_layout(m_commandBuffers[m_frameIndex], m_swapChainImages[m_imageIndex],
+            vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR,
+            vk::AccessFlagBits2::eColorAttachmentWrite, {},
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::PipelineStageFlagBits2::eBottomOfPipe,
+            vk::ImageAspectFlagBits::eColor);
     }
 
     m_commandBuffers[m_frameIndex].end();
@@ -768,9 +825,11 @@ void VulkanAPI::SetClearColor(float r, float g, float b, float a) {
 void VulkanAPI::Clear(rhi::ClearFlag flags) {
     m_clearPendingFlags |= static_cast<uint32_t>(flags);
 
-    if (m_frameStarted && m_renderPassActive) {
-        m_commandBuffers[m_frameIndex].endRendering();
-        m_renderPassActive = false;
+    if (m_frameStarted) {
+        if (m_renderPassActive) {
+            m_commandBuffers[m_frameIndex].endRendering();
+            m_renderPassActive = false;
+        }
         ensureRenderPassActive();
     }
 }

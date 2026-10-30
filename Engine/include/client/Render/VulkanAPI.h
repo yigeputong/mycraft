@@ -124,6 +124,20 @@ private:
         bool                  hasDepth     = false;
     };
 
+    struct PendingDestroy {
+        VkBuffer vertexBuffer; VmaAllocation vertexAlloc;
+        VkBuffer indexBuffer;  VmaAllocation indexAlloc;
+        VkBuffer instanceBuffer; VmaAllocation instanceAlloc;
+    };
+    // 延迟销毁队列：记录资源的“退休帧”
+    struct DeferredDeletion {
+        uint64_t retireFrame;
+        PendingDestroy p;
+    };
+    std::vector<DeferredDeletion> m_deletionQueue;
+    // 单调递增的帧计数器
+    uint64_t m_frameCounter = 0;
+
     std::unordered_map<MeshHandle, MeshInternal>               m_meshes;
     std::unordered_map<ShaderHandle, ShaderInternal>           m_shaders;
     std::unordered_map<TextureHandle, TextureInternal>         m_textures;
@@ -206,12 +220,6 @@ private:
 
     RenderConfig m_renderConfig;
     WindowConfig m_windowConfig;
-    
-    // 内部销毁接口
-    void DestroyMeshInternal(MeshHandle h);
-    void DestroyTextureInternal(TextureHandle h);
-    void DestroyShaderInternal(ShaderHandle h);
-    void DestroyFramebufferInternal(FramebufferHandle h);
 
     // 初始化
     bool isDeviceSuitable(const vk::raii::PhysicalDevice& pd);
@@ -264,6 +272,12 @@ private:
     TextureHandle CreateTextureInternal(const uint8_t* rgba, int w, int h);
     ShaderHandle CreateShaderInternal(const ShaderCreateInfo& info);
     FramebufferHandle CreateFramebufferInternal(const FramebufferCreateInfo& info);
+    
+    // 内部销毁接口
+    void DestroyMeshInternal(MeshHandle h);
+    void DestroyTextureInternal(TextureHandle h);
+    void DestroyShaderInternal(ShaderHandle h);
+    void DestroyFramebufferInternal(FramebufferHandle h);
 };
 
 } // namespace Eng::client

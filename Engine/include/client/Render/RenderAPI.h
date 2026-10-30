@@ -253,11 +253,12 @@ struct ShaderCreateInfo {
     std::string vertEntry = "main";          /**< SPIR-V 入口点 */
     std::string fragEntry = "main";          /**< SPIR-V 入口点 */
     
-    // ★ 数据驱动的底层渲染状态
     rhi::TextureFormat colorFormat = rhi::TextureFormat::RGBA8_UNORM; /**< 输出目标格式 */
     rhi::CullMode      cullMode    = rhi::CullMode::Back;             /**< 面剔除模式 */
     rhi::DepthMode     depthMode   = rhi::DepthMode::Normal;          /**< 深度测试模式 */
     rhi::BlendMode     blendMode   = rhi::BlendMode::None;            /**< 混合模式 */
+
+    bool useInstancing = true;
 
     std::vector<std::pair<std::string, std::string>> defines; /**< 预编译宏 */
 };

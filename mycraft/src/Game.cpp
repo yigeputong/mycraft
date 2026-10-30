@@ -322,6 +322,7 @@ Eng::client::ShaderPtr MyGame::CreateShaderByName(const std::string& name, bool 
     Eng::client::ShaderCreateInfo ci;
     ci.vertPath = base + "vert" + ext;
     ci.fragPath = base + "frag" + ext;
+    ci.useInstancing = (!isSky && name != "lod");
 
     if (isSky) {
         ci.cullMode  = Eng::client::rhi::CullMode::None;
