@@ -18,18 +18,22 @@ namespace game::client {
 
 struct LodKey {
     int8_t level;
-    int32_t cx, cz;
-    bool operator==(const LodKey& o) const { return level == o.level && cx == o.cx && cz == o.cz; }
+    int32_t unitX; // ★ 语义明确：这是 LOD 网格的 X 索引，而不是区块坐标
+    int32_t unitZ; // ★ 语义明确：这是 LOD 网格的 Z 索引
+    bool operator==(const LodKey& o) const { 
+        return level == o.level && unitX == o.unitX && unitZ == o.unitZ; 
+    }
 };
+
 struct LodKeyHash {
     size_t operator()(const LodKey& k) const {
-        return std::hash<int>()(k.level) ^ (std::hash<int>()(k.cx) << 1) ^ (std::hash<int>()(k.cz) << 2);
+        return std::hash<int>()(k.level) ^ (std::hash<int>()(k.unitX) << 1) ^ (std::hash<int>()(k.unitZ) << 2);
     }
 };
 
 struct LodUnit {
     int level;
-    int cx, cz;
+    int unitX, unitZ;
     Eng::client::MeshPtr mesh;
     glm::vec3 aabbMin, aabbMax;
 };
@@ -41,14 +45,14 @@ public:
     void Update(const glm::vec3& cameraPos, const ClientWorld& world, int renderDistance, Eng::client::IRenderAPI* renderer);
     void CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::client::MeshPtr>& outMeshes) const;
     void Clear();
-    
-    // ★ 新增：注入注册表
     void SetRegistry(const BlockRegistry* reg) { m_registry = reg; }
 
 private:
-    struct LodTask { int level, cx, cz; };
+    struct LodTask { 
+        int level, unitX, unitZ; 
+    };
     struct LodResult {
-        int level, cx, cz;
+        int level, unitX, unitZ;
         std::vector<Eng::client::Vertex> vertices;
         std::vector<uint32_t> indices;
         glm::vec3 aabbMin, aabbMax;
@@ -56,14 +60,14 @@ private:
 
     void WorkerLoop(uint32_t seed);
     void DrainResults(Eng::client::IRenderAPI* renderer);
-    void BuildLodUnit(const game::server::TerrainGenerator& terrain, int level, int ucx, int ucz,
+    void BuildLodUnit(const game::server::TerrainGenerator& terrain, int level, int unitX, int unitZ,
                       std::vector<Eng::client::Vertex>& outV, std::vector<uint32_t>& outI,
                       glm::vec3& outMin, glm::vec3& outMax) const;
     void BuildLod1FromChunks(const LodKey& key, const ClientWorld& world,
                              std::vector<Eng::client::Vertex>& outV, std::vector<uint32_t>& outI,
                              glm::vec3& outMin, glm::vec3& outMax);
 
-    const BlockRegistry* m_registry = nullptr; // ★
+    const BlockRegistry* m_registry = nullptr;
 
     std::unique_ptr<game::server::TerrainGenerator> m_terrain;
     std::vector<std::thread> m_workers;
@@ -80,11 +84,10 @@ private:
     size_t m_needCursor = 0;
 
     int m_lastRenderDistance = -1;
-
-    int m_lastPcx = INT_MIN, m_lastPcz = INT_MIN;
+    int m_lastPlayerChunkX = INT_MIN, m_lastPlayerChunkZ = INT_MIN;
 
     static constexpr int kLodLevels = 3;
-    static constexpr int kLodUnitSize = 8;
+    static constexpr int kLodUnitSize = 8; // 这里的 8 代表每个 LOD 块在 X/Z 轴上采样 8 个点
 };
 
 } // namespace game::client

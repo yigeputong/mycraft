@@ -1,6 +1,5 @@
 #include "game/client/ClientWorld.h"
 #include "game/core/BlockRegistry.h"
-#include "game/core/LightEngine.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -31,19 +30,20 @@ void ClientWorld::AddChunk(int cx, int cz, const std::vector<BlockId>& blocksDat
     cc.chunk->chunk_z = cz;
     
     std::memcpy(cc.chunk->blocks.data(), blocksData.data(), CHUNK_VOLUME * sizeof(BlockId));
-    
     cc.chunk->sky = skyData;
     cc.chunk->block = blockLightData;
-    
     cc.mesh = std::move(mesh);
 
-    // 计算高度图和 AABB
+    // 用纯指针直接读取，千万不要用 ChunkGet，消除所有越界检查开销
+    const BlockId* pBlocks = cc.chunk->blocks.data();
+    
     for (int lx = 0; lx < 16; ++lx) {
         for (int lz = 0; lz < 16; ++lz) {
             int topY = 0;
             BlockId topB = AIR_ID;
+            // 从 255 往下扫，扫到非空气立刻 break，通常地表在 60-100 层，只需几十次循环
             for (int y = CHUNK_SIZE_Y - 1; y >= 0; --y) {
-                BlockId b = ChunkGet(*cc.chunk, lx, y, lz);
+                BlockId b = pBlocks[y * 256 + lz * 16 + lx];
                 if (b != AIR_ID && b != UNKNOWN_ID) {
                     topY = y;
                     topB = b;
@@ -60,7 +60,7 @@ void ClientWorld::AddChunk(int cx, int cz, const std::vector<BlockId>& blocksDat
     m_chunks[ChunkKey(cx, cz)] = std::move(cc);
     m_pending.erase(ChunkKey(cx, cz));
 
-    // 只轻量级触发邻居重建
+    // 触发邻居重建
     RebuildNeighbor(cx - 1, cz);
     RebuildNeighbor(cx + 1, cz);
     RebuildNeighbor(cx, cz - 1);

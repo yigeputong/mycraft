@@ -44,16 +44,16 @@ void LodManager::WorkerLoop(uint32_t seed) {
             m_taskQueue.pop();
         }
 
-        LodResult r;
-        r.level = task.level;
-        r.cx = task.cx;
-        r.cz = task.cz;
+        LodResult result;
+        result.level = task.level;
+        result.unitX = task.unitX;
+        result.unitZ = task.unitZ;
         
-        BuildLodUnit(terrain, task.level, task.cx, task.cz, r.vertices, r.indices, r.aabbMin, r.aabbMax);
+        BuildLodUnit(terrain, task.level, task.unitX, task.unitZ, result.vertices, result.indices, result.aabbMin, result.aabbMax);
 
         {
             std::lock_guard lk(m_resultMutex);
-            m_resultQueue.push(std::move(r));
+            m_resultQueue.push(std::move(result));
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
@@ -62,50 +62,67 @@ void LodManager::WorkerLoop(uint32_t seed) {
 void LodManager::Update(const glm::vec3& cameraPos, [[maybe_unused]] const ClientWorld& world, int renderDistance, Eng::client::IRenderAPI* renderer) {
     if (!m_terrain) return;
 
-    int pcx = static_cast<int>(std::floor(cameraPos.x)) >> 4;
-    int pcz = static_cast<int>(std::floor(cameraPos.z)) >> 4;
+    int playerChunkX = static_cast<int>(std::floor(cameraPos.x)) >> 4;
+    int playerChunkZ = static_cast<int>(std::floor(cameraPos.z)) >> 4;
 
-    if (pcx != m_lastPcx || pcz != m_lastPcz || renderDistance != m_lastRenderDistance) {
-        m_lastPcx = pcx;
-        m_lastPcz = pcz;
+    if (playerChunkX != m_lastPlayerChunkX || playerChunkZ != m_lastPlayerChunkZ || renderDistance != m_lastRenderDistance) {
+        m_lastPlayerChunkX = playerChunkX;
+        m_lastPlayerChunkZ = playerChunkZ;
         m_lastRenderDistance = renderDistance;
 
-        m_wanted.clear(); // ★ 清空当前需要的列表
+        // 原生渲染的绝对区块范围 [min, max] (闭区间)
+        int nativeMinChunkX = playerChunkX - renderDistance;
+        int nativeMaxChunkX = playerChunkX + renderDistance;
+        int nativeMinChunkZ = playerChunkZ - renderDistance;
+        int nativeMaxChunkZ = playerChunkZ + renderDistance;
+
+        m_wanted.clear();
         struct Need { LodKey k; int d2; };
         std::vector<Need> need;
 
         for (int level = 1; level <= kLodLevels; ++level) {
-            int unitChunks = 1 << level;
-            int pu = pcx / unitChunks;
-            int pv = pcz / unitChunks;
-            int outerUnits = (renderDistance / unitChunks) + 6; // 稍微缩短外围范围，提高性能
+            int sampleStep = 1 << level;
+            // 当前 LOD 块覆盖了多少个区块
+            int chunkWidth = (kLodUnitSize * sampleStep) / 16;
 
-            for (int dv = -outerUnits; dv <= outerUnits; ++dv) {
-                for (int du = -outerUnits; du <= outerUnits; ++du) {
+            // 算出原生边缘对应的 LOD 网格索引
+            int minUnitX = nativeMinChunkX / chunkWidth;
+            int maxUnitX = nativeMaxChunkX / chunkWidth;
+            int minUnitZ = nativeMinChunkZ / chunkWidth;
+            int maxUnitZ = nativeMaxChunkZ / chunkWidth;
+
+            int padding = 4; 
+
+            for (int unitX = minUnitX - padding; unitX <= maxUnitX + padding; ++unitX) {
+                for (int unitZ = minUnitZ - padding; unitZ <= maxUnitZ + padding; ++unitZ) {
                     
-                    int lodCxMin = (pu + du) * unitChunks;
-                    int lodCxMax = lodCxMin + unitChunks;
-                    int lodCzMin = (pv + dv) * unitChunks;
-                    int lodCzMax = lodCzMin + unitChunks;
+                    // 算出当前 LOD 块的绝对区块范围 [min, max) (左闭右开)
+                    int lodMinChunkX = unitX * chunkWidth;
+                    int lodMaxChunkX = lodMinChunkX + chunkWidth;
+                    int lodMinChunkZ = unitZ * chunkWidth;
+                    int lodMaxChunkZ = lodMinChunkZ + chunkWidth;
 
-                    int rd = renderDistance;
-                    // ★ 如果 LOD 的 AABB 碰到了真实地形范围，直接跳过
-                    if (lodCxMin < pcx + rd && lodCxMax > pcx - rd &&
-                        lodCzMin < pcz + rd && lodCzMax > pcz - rd) {
-                        continue;
+                    // 严格 AABB 碰撞：如果 LOD 块和原生渲染范围有一丝一毫的重叠，直接跳过
+                    if (lodMaxChunkX > nativeMinChunkX && lodMinChunkX <= nativeMaxChunkX &&
+                        lodMaxChunkZ > nativeMinChunkZ && lodMinChunkZ <= nativeMaxChunkZ) {
+                        continue; 
                     }
 
-                    LodKey k{ (int8_t)level, pu + du, pv + dv };
-                    m_wanted.insert(k); // ★ 记录下来
-                    if (m_units.count(k)) continue;
-                    if (m_pending.count(k)) continue;
-                    
-                    need.push_back({ k, du*du + dv*dv });
+                    LodKey key{ (int8_t)level, unitX, unitZ };
+                    m_wanted.insert(key);
+                    if (m_units.count(key)) continue;
+                    if (m_pending.count(key)) continue;
+
+                    int centerUnitX = playerChunkX / chunkWidth;
+                    int centerUnitZ = playerChunkZ / chunkWidth;
+                    int dx = unitX - centerUnitX;
+                    int dz = unitZ - centerUnitZ;
+                    need.push_back({ key, dx*dx + dz*dz });
                 }
             }
         }
 
-        // 清理已经废弃的 LOD
+        // 清理废弃的 LOD
         for (auto it = m_units.begin(); it != m_units.end(); ) {
             if (!m_wanted.count(it->first)) {
                 it = m_units.erase(it);
@@ -119,17 +136,17 @@ void LodManager::Update(const glm::vec3& cameraPos, [[maybe_unused]] const Clien
         m_needCursor = 0;
     }
 
-    // 提交任务 (限制生成速度)
+    // 提交任务（一帧只发 2 个，防止卡顿）
     constexpr int K_PER_FRAME = 2;
     int sent = 0;
     while (m_needCursor < m_needQueue.size() && sent < K_PER_FRAME) {
-        LodKey k = m_needQueue[m_needCursor];
-        if (m_units.count(k) || m_pending.count(k)) { ++m_needCursor; continue; }
+        LodKey key = m_needQueue[m_needCursor];
+        if (m_units.count(key) || m_pending.count(key)) { ++m_needCursor; continue; }
 
-        m_pending.insert(k);
+        m_pending.insert(key);
         {
             std::lock_guard lk(m_taskMutex);
-            m_taskQueue.push({ k.level, k.cx, k.cz });
+            m_taskQueue.push({ key.level, key.unitX, key.unitZ });
         }
         m_taskCv.notify_one();
         ++m_needCursor;
@@ -143,35 +160,35 @@ void LodManager::DrainResults(Eng::client::IRenderAPI* renderer) {
     constexpr int K = 4; // 防止主线程卡顿
     int done = 0;
     for (;;) {
-        LodResult r;
+        LodResult result;
         {
             std::lock_guard lk(m_resultMutex);
             if (m_resultQueue.empty() || done >= K) break;
-            r = std::move(m_resultQueue.front());
+            result = std::move(m_resultQueue.front());
             m_resultQueue.pop();
         }
 
-        LodKey k{ static_cast<int8_t>(r.level), r.cx, r.cz };
-        m_pending.erase(k);
+        LodKey key{ static_cast<int8_t>(result.level), result.unitX, result.unitZ };
+        m_pending.erase(key);
 
         // 如果这个 LOD 不在当前 wanted 列表里，说明玩家已经飞走了，直接丢弃！
-        if (!m_wanted.count(k)) continue;
+        if (!m_wanted.count(key)) continue;
 
-        if (r.vertices.empty()) continue;
+        if (result.vertices.empty()) continue;
 
         Eng::client::MeshData data;
-        data.vertices = std::move(r.vertices);
-        data.indices  = std::move(r.indices);
+        data.vertices = std::move(result.vertices);
+        data.indices  = std::move(result.indices);
         auto mesh = renderer->CreateMesh(data);
 
-        LodUnit u;
-        u.level   = r.level;
-        u.cx      = r.cx;
-        u.cz      = r.cz;
-        u.mesh    = std::move(mesh);
-        u.aabbMin = r.aabbMin;
-        u.aabbMax = r.aabbMax;
-        m_units[k] = std::move(u);
+        LodUnit unit;
+        unit.level   = result.level;
+        unit.unitX   = result.unitX;
+        unit.unitZ   = result.unitZ;
+        unit.mesh    = std::move(mesh);
+        unit.aabbMin = result.aabbMin;
+        unit.aabbMax = result.aabbMax;
+        m_units[key] = std::move(unit);
         ++done;
     }
 }
@@ -179,19 +196,19 @@ void LodManager::DrainResults(Eng::client::IRenderAPI* renderer) {
 void LodManager::CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::client::MeshPtr>& outMeshes) const {
     outMeshes.clear();
     outMeshes.reserve(m_units.size());
-    for (const auto& [key, u] : m_units) {
-        if (!u.mesh) continue;
+    for (const auto& [key, unit] : m_units) {
+        if (!unit.mesh) continue;
 
         bool visible = true;
         for (const auto& p : frustum.planes) {
             glm::vec3 n = glm::vec3(p);
             float d = p.w;
-            glm::vec3 v(n.x >= 0 ? u.aabbMax.x : u.aabbMin.x,
-                        n.y >= 0 ? u.aabbMax.y : u.aabbMin.y,
-                        n.z >= 0 ? u.aabbMax.z : u.aabbMin.z);
+            glm::vec3 v(n.x >= 0 ? unit.aabbMax.x : unit.aabbMin.x,
+                        n.y >= 0 ? unit.aabbMax.y : unit.aabbMin.y,
+                        n.z >= 0 ? unit.aabbMax.z : unit.aabbMin.z);
             if (glm::dot(n, v) + d < 0.0f) { visible = false; break; }
         }
-        if (visible) outMeshes.push_back(u.mesh);
+        if (visible) outMeshes.push_back(unit.mesh);
     }
 }
 
@@ -204,23 +221,28 @@ void LodManager::Clear() {
     }
     m_needQueue.clear();
     m_needCursor = 0;
-    m_lastPcx = INT_MIN;
-    m_lastPcz = INT_MIN;
+    m_lastPlayerChunkX = INT_MIN;
+    m_lastPlayerChunkZ = INT_MIN;
     m_terrain.reset();
 }
 
 void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
-                          int level, int ucx, int ucz,
+                          int level, int unitX, int unitZ,
                           std::vector<Eng::client::Vertex>& outV,
                           std::vector<uint32_t>& outI,
                           glm::vec3& outMin, glm::vec3& outMax) const {
-    const int sampleStep = 1 << level;
-    const int unitSize   = kLodUnitSize * sampleStep;
+    int sampleStep = 1 << level;
+    // ★ 必须和 Update 里的 chunkWidth 公式一模一样
+    int chunkWidth = (kLodUnitSize * sampleStep) / 16;
+    
+    // 算出绝对方块起始坐标
+    int baseChunkX = unitX * chunkWidth;
+    int baseChunkZ = unitZ * chunkWidth;
+    int baseBlockX = baseChunkX * 16;
+    int baseBlockZ = baseChunkZ * 16;
+
     constexpr int N  = kLodUnitSize;
     constexpr int NP = N + 1;
-
-    const int baseX = ucx * unitSize;
-    const int baseZ = ucz * unitSize;
 
     outV.clear(); outI.clear();
     outV.reserve(static_cast<size_t>(N) * N * 32);
@@ -228,15 +250,15 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
     outMin = glm::vec3(1e30f);
     outMax = glm::vec3(-1e30f);
 
-    auto tileForBiome = [&](game::server::Biome bb, int y) -> int {
+    auto tileForBiome = [&](game::server::Biome biome, int y) -> int {
         using B = game::server::Biome;
         std::string tex = "grass_block_top";
 
-        // ★ 修复 1：根据海拔高度强制修正群系（和服务端对齐）
-        if (y > 175) bb = B::Snow;
-        else if (y > 155) bb = B::Mountain;
+        // ★ 根据海拔高度强制修正群系（和服务端对齐）
+        if (y > 175) biome = B::Snow;
+        else if (y > 155) biome = B::Mountain;
 
-        switch (bb) {
+        switch (biome) {
             case B::Ocean:    tex = "water_still"; break;
             case B::Beach:
             case B::Desert:   tex = "sand"; break;
@@ -248,27 +270,27 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
         return t < 0 ? 0 : t;
     };
 
-    static thread_local int     hP[NP][NP];
-    static thread_local uint8_t bP[NP][NP];
+    static thread_local int     heightMap[NP][NP];
+    static thread_local uint8_t biomeMap[NP][NP];
     for (int j = 0; j < NP; ++j)
         for (int i = 0; i < NP; ++i) {
-            int wx = baseX + i * sampleStep;
-            int wz = baseZ + j * sampleStep;
-            hP[j][i] = terrain.GetSurfaceY(wx, wz);
-            bP[j][i] = (uint8_t)terrain.GetBiome(wx, wz);
+            int worldBlockX = baseBlockX + i * sampleStep;
+            int worldBlockZ = baseBlockZ + j * sampleStep;
+            heightMap[j][i] = terrain.GetSurfaceY(worldBlockX, worldBlockZ);
+            biomeMap[j][i] = (uint8_t)terrain.GetBiome(worldBlockX, worldBlockZ);
         }
 
     auto cellY = [&](int i, int j) -> float {
-        return (float)std::max(hP[j][i] + 1, SEA_LEVEL);
+        return (float)std::max(heightMap[j][i] + 1, SEA_LEVEL);
     };
     auto cellTile = [&](int i, int j) -> int {
-        int h = hP[j][i];
-        auto b = (game::server::Biome)bP[j][i];
+        int h = heightMap[j][i];
+        auto b = (game::server::Biome)biomeMap[j][i];
         if (h < SEA_LEVEL) b = game::server::Biome::Ocean;
-        return tileForBiome(b, h); // ★ 传入高度
+        return tileForBiome(b, h);
     };
     
-    auto pushV = [&](const glm::vec3& p, const glm::vec3& n, const glm::vec2& uv, const glm::vec4& uvInfo) {
+    auto pushVertex = [&](const glm::vec3& p, const glm::vec3& n, const glm::vec2& uv, const glm::vec4& uvInfo) {
         Eng::client::Vertex v;
         v.position = p; v.normal = n; v.uv = uv; v.ao = 1.0f;
         v.light = uvInfo; 
@@ -301,18 +323,18 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
             
             glm::vec4 uvInfo(1.0f, u0, v0, u1 - u0);
 
-            float x0 = (float)(baseX + i * sampleStep);
-            float x1 = (float)(baseX + (i + 1) * sampleStep);
-            float z0 = (float)(baseZ + j * sampleStep);
-            float z1 = (float)(baseZ + (j + 1) * sampleStep);
+            float x0 = (float)(baseBlockX + i * sampleStep);
+            float x1 = (float)(baseBlockX + (i + 1) * sampleStep);
+            float z0 = (float)(baseBlockZ + j * sampleStep);
+            float z1 = (float)(baseBlockZ + (j + 1) * sampleStep);
 
             // 1. 顶面
             {
                 uint32_t base = (uint32_t)outV.size();
-                pushV({x0, ySelf, z0}, {0,1,0}, {0.0f, stepF}, uvInfo);
-                pushV({x1, ySelf, z0}, {0,1,0}, {stepF, stepF}, uvInfo);
-                pushV({x1, ySelf, z1}, {0,1,0}, {stepF, 0.0f}, uvInfo);
-                pushV({x0, ySelf, z1}, {0,1,0}, {0.0f, 0.0f}, uvInfo);
+                pushVertex({x0, ySelf, z0}, {0,1,0}, {0.0f, stepF}, uvInfo);
+                pushVertex({x1, ySelf, z0}, {0,1,0}, {stepF, stepF}, uvInfo);
+                pushVertex({x1, ySelf, z1}, {0,1,0}, {stepF, 0.0f}, uvInfo);
+                pushVertex({x0, ySelf, z1}, {0,1,0}, {0.0f, 0.0f}, uvInfo);
                 outI.push_back(base+0); outI.push_back(base+3); outI.push_back(base+2);
                 outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+1);
             }
@@ -325,10 +347,10 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                     float nu0, nv0, nu1, nv1; getTileUV(nt, nu0, nv0, nu1, nv1);
                     glm::vec4 nUvInfo(1.0f, nu0, nv0, nu1 - nu0);
                     uint32_t base = (uint32_t)outV.size();
-                    pushV({x1, yNb,   z0}, {1,0,0}, {0.0f, stepF}, nUvInfo);
-                    pushV({x1, ySelf, z0}, {1,0,0}, {0.0f, 0.0f}, nUvInfo);
-                    pushV({x1, ySelf, z1}, {1,0,0}, {stepF, 0.0f}, nUvInfo);
-                    pushV({x1, yNb,   z1}, {1,0,0}, {stepF, stepF}, nUvInfo);
+                    pushVertex({x1, yNb,   z0}, {1,0,0}, {0.0f, stepF}, nUvInfo);
+                    pushVertex({x1, ySelf, z0}, {1,0,0}, {0.0f, 0.0f}, nUvInfo);
+                    pushVertex({x1, ySelf, z1}, {1,0,0}, {stepF, 0.0f}, nUvInfo);
+                    pushVertex({x1, yNb,   z1}, {1,0,0}, {stepF, stepF}, nUvInfo);
                     outI.push_back(base+0); outI.push_back(base+1); outI.push_back(base+2);
                     outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+3);
                 }
@@ -342,16 +364,16 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                     float nu0, nv0, nu1, nv1; getTileUV(nt, nu0, nv0, nu1, nv1);
                     glm::vec4 nUvInfo(1.0f, nu0, nv0, nu1 - nu0);
                     uint32_t base = (uint32_t)outV.size();
-                    pushV({x0, yNb,   z1}, {-1,0,0}, {0.0f, stepF}, nUvInfo);
-                    pushV({x0, ySelf, z1}, {-1,0,0}, {0.0f, 0.0f}, nUvInfo);
-                    pushV({x0, ySelf, z0}, {-1,0,0}, {stepF, 0.0f}, nUvInfo);
-                    pushV({x0, yNb,   z0}, {-1,0,0}, {stepF, stepF}, nUvInfo);
+                    pushVertex({x0, yNb,   z1}, {-1,0,0}, {0.0f, stepF}, nUvInfo);
+                    pushVertex({x0, ySelf, z1}, {-1,0,0}, {0.0f, 0.0f}, nUvInfo);
+                    pushVertex({x0, ySelf, z0}, {-1,0,0}, {stepF, 0.0f}, nUvInfo);
+                    pushVertex({x0, yNb,   z0}, {-1,0,0}, {stepF, stepF}, nUvInfo);
                     outI.push_back(base+0); outI.push_back(base+1); outI.push_back(base+2);
                     outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+3);
                 }
             }
 
-            // 4. +Z 侧面 (前，法线朝 +Z)
+            // 4. +Z 侧面
             if (j + 1 < N) {
                 float yNb = cellY(i, j + 1);
                 if (ySelf > yNb + 0.01f) {
@@ -359,19 +381,16 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                     float nu0, nv0, nu1, nv1; getTileUV(nt, nu0, nv0, nu1, nv1);
                     glm::vec4 nUvInfo(1.0f, nu0, nv0, nu1 - nu0);
                     uint32_t base = (uint32_t)outV.size();
-                    
-                    // ★ 修复 2：修正了 +Z 面的绕序
-                    pushV({x0, yNb,   z1}, {0,0,1}, {0.0f, stepF}, nUvInfo);
-                    pushV({x0, ySelf, z1}, {0,0,1}, {0.0f, 0.0f}, nUvInfo);
-                    pushV({x1, ySelf, z1}, {0,0,1}, {stepF, 0.0f}, nUvInfo);
-                    pushV({x1, yNb,   z1}, {0,0,1}, {stepF, stepF}, nUvInfo);
-                    
+                    pushVertex({x0, yNb,   z1}, {0,0,1}, {0.0f, stepF}, nUvInfo);
+                    pushVertex({x0, ySelf, z1}, {0,0,1}, {0.0f, 0.0f}, nUvInfo);
+                    pushVertex({x1, ySelf, z1}, {0,0,1}, {stepF, 0.0f}, nUvInfo);
+                    pushVertex({x1, yNb,   z1}, {0,0,1}, {stepF, stepF}, nUvInfo);
                     outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+1);
                     outI.push_back(base+0); outI.push_back(base+3); outI.push_back(base+2);
                 }
             }
 
-            // 5. -Z 侧面 (后，法线朝 -Z)
+            // 5. -Z 侧面
             if (j - 1 >= 0) {
                 float yNb = cellY(i, j - 1);
                 if (ySelf > yNb + 0.01f) {
@@ -379,10 +398,10 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                     float nu0, nv0, nu1, nv1; getTileUV(nt, nu0, nv0, nu1, nv1);
                     glm::vec4 nUvInfo(1.0f, nu0, nv0, nu1 - nu0);
                     uint32_t base = (uint32_t)outV.size();
-                    pushV({x1, yNb,   z0}, {0,0,-1}, {0.0f, stepF}, nUvInfo);
-                    pushV({x1, ySelf, z0}, {0,0,-1}, {0.0f, 0.0f}, nUvInfo);
-                    pushV({x0, ySelf, z0}, {0,0,-1}, {stepF, 0.0f}, nUvInfo);
-                    pushV({x0, yNb,   z0}, {0,0,-1}, {stepF, stepF}, nUvInfo);
+                    pushVertex({x1, yNb,   z0}, {0,0,-1}, {0.0f, stepF}, nUvInfo);
+                    pushVertex({x1, ySelf, z0}, {0,0,-1}, {0.0f, 0.0f}, nUvInfo);
+                    pushVertex({x0, ySelf, z0}, {0,0,-1}, {stepF, 0.0f}, nUvInfo);
+                    pushVertex({x0, yNb,   z0}, {0,0,-1}, {stepF, stepF}, nUvInfo);
                     outI.push_back(base+0); outI.push_back(base+1); outI.push_back(base+2);
                     outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+3);
                 }
@@ -397,8 +416,9 @@ void LodManager::BuildLod1FromChunks(const LodKey& key, const ClientWorld& world
                                      std::vector<uint32_t>& outI,
                                      glm::vec3& outMin, glm::vec3& outMax) {
     constexpr int CELLS = 32;
-    const int baseX = key.cx * CELLS;
-    const int baseZ = key.cz * CELLS;
+    // 这里改用 unitX 和 unitZ
+    const int baseX = key.unitX * CELLS;
+    const int baseZ = key.unitZ * CELLS;
 
     outV.clear();
     outI.clear();
@@ -411,9 +431,10 @@ void LodManager::BuildLod1FromChunks(const LodKey& key, const ClientWorld& world
         auto it = world.GetChunks().find(ChunkKey(cx, cz));
         return it == world.GetChunks().end() ? nullptr : &it->second;
     };
+    // 注意这里也换成了 unitX / unitZ
     const game::client::ClientChunk* cs[2][2] = {
-        { getChunk(key.cx*2+0, key.cz*2+0), getChunk(key.cx*2+0, key.cz*2+1) },
-        { getChunk(key.cx*2+1, key.cz*2+0), getChunk(key.cx*2+1, key.cz*2+1) },
+        { getChunk(key.unitX*2+0, key.unitZ*2+0), getChunk(key.unitX*2+0, key.unitZ*2+1) },
+        { getChunk(key.unitX*2+1, key.unitZ*2+0), getChunk(key.unitX*2+1, key.unitZ*2+1) },
     };
 
     auto blockToTile = [&](BlockId b) -> int {

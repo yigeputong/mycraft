@@ -1115,15 +1115,7 @@ void MyGame::AddToInventory(BlockId id, int count) { // ★
 // Mesh 结果汇聚
 // ============================================================
 void MyGame::DrainMeshResults() {
-    // ★ 每帧最多只给上传 Mesh 分配 3 毫秒的预算
-    auto startTime = std::chrono::steady_clock::now();
-    
-    m_meshManager.DrainResults([this, startTime](game::client::MeshResult&& r) {
-        // 检查是否超时
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
-        if (elapsed > 3) return; // 超过 3ms 就不管了，下一帧再说
-
+    m_meshManager.DrainResults([this](game::client::MeshResult&& r) {
         auto* cc = m_world.GetChunk(r.chunkKey);
         if (!cc || !cc->chunk) return;
 

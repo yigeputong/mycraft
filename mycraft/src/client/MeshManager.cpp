@@ -1,5 +1,6 @@
 #include "game/client/MeshManager.h"
 #include "game/client/MeshBuilderUtils.h"
+#include "game/client/TextureAtlas.h"
 #include "game/core/BlockRegistry.h"
 #include <algorithm>
 
@@ -129,147 +130,189 @@ void MeshManager::WorkerLoop() {
 // 核心 Mesh 构建逻辑
 // ============================================================
 void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
-    result.vertices.clear();
-    result.indices.clear();
-    // 稍微调整预留大小，减少扩容
-    result.vertices.reserve(12000);
-    result.indices.reserve(24000);
+    result.vertices.resize(150000); 
+    result.indices.resize(200000);  
 
     if (!task.reg) return; 
     const game::BlockRegistry& reg = *task.reg;
-
     const Chunk& chunk = *task.chunk;
-    const Chunk* pXm = task.nXm.get();
-    const Chunk* pXp = task.nXp.get();
-    const Chunk* pZm = task.nZm.get();
-    const Chunk* pZp = task.nZp.get();
+    const BlockId* pC  = chunk.blocks.data();
+    const Chunk* nXm = task.nXm.get();
+    const Chunk* nXp = task.nXp.get();
+    const Chunk* nZm = task.nZm.get();
+    const Chunk* nZp = task.nZp.get();
 
     const int cx = chunk.chunk_x;
     const int cz = chunk.chunk_z;
-    const int baseX = cx * CHUNK_SIZE_X;
-    const int baseZ = cz * CHUNK_SIZE_Z;
+    const float baseX = (float)(cx * CHUNK_SIZE_X);
+    const float baseZ = (float)(cz * CHUNK_SIZE_Z);
 
-    const int Y_STRIDE = CHUNK_SIZE_X * CHUNK_SIZE_Z;
-    const int Z_STRIDE = CHUNK_SIZE_X;
+    const int Y_STRIDE = 256;
+    const int Z_STRIDE = 16;
 
     auto getBlock = [&](int lx, int ly, int lz) -> BlockId {
-        if (ly < 0 || ly >= CHUNK_SIZE_Y) return AIR_ID;
-        if (lx >= 0 && lx < CHUNK_SIZE_X && lz >= 0 && lz < CHUNK_SIZE_Z) {
-            return chunk.blocks[ly * Y_STRIDE + lz * Z_STRIDE + lx];
-        }
-        const Chunk* n = nullptr; 
+        if (ly < 0 || ly >= 256) return AIR_ID;
+        if (lx >= 0 && lx < 16 && lz >= 0 && lz < 16) return pC[ly * Y_STRIDE + lz * Z_STRIDE + lx];
+        const BlockId* ptr = nullptr; 
         int nlx = lx, nlz = lz;
-        if      (lx < 0)             { n = pXm; nlx = lx + CHUNK_SIZE_X; }
-        else if (lx >= CHUNK_SIZE_X) { n = pXp; nlx = lx - CHUNK_SIZE_X; }
-        else if (lz < 0)             { n = pZm; nlz = lz + CHUNK_SIZE_Z; }
-        else if (lz >= CHUNK_SIZE_Z) { n = pZp; nlz = lz - CHUNK_SIZE_Z; }
-        
-        if (!n || nlx < 0 || nlx >= CHUNK_SIZE_X || nlz < 0 || nlz >= CHUNK_SIZE_Z) return AIR_ID;
-        return n->blocks[ly * Y_STRIDE + nlz * Z_STRIDE + nlx];
-    };
-
-    auto getLightAt = [&](int lx, int ly, int lz) -> glm::vec4 {
-        if (ly < 0 || ly >= CHUNK_SIZE_Y) return glm::vec4(0.0f);
-        if (lx >= 0 && lx < CHUNK_SIZE_X && lz >= 0 && lz < CHUNK_SIZE_Z) {
-            int idx = ly * Y_STRIDE + lz * Z_STRIDE + lx;
-            return { chunk.sky[idx] / 15.0f, chunk.block[idx].r / 15.0f, chunk.block[idx].g / 15.0f, chunk.block[idx].b / 15.0f };
-        }
-        // 邻居区块如果没加载，直接给满光，防止边缘黑线
-        return glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+        if      (lx < 0)  { ptr = nXm ? nXm->blocks.data() : nullptr; nlx = lx + 16; }
+        else if (lx >= 16){ ptr = nXp ? nXp->blocks.data() : nullptr; nlx = lx - 16; }
+        else if (lz < 0)  { ptr = nZm ? nZm->blocks.data() : nullptr; nlz = lz + 16; }
+        else if (lz >= 16){ ptr = nZp ? nZp->blocks.data() : nullptr; nlz = lz - 16; }
+        if (!ptr || nlx < 0 || nlx >= 16 || nlz < 0 || nlz >= 16) return AIR_ID;
+        return ptr[ly * Y_STRIDE + nlz * Z_STRIDE + nlx];
     };
 
     auto isSolidAt = [&](int lx, int ly, int lz) -> bool {
         return reg.IsSolid(getBlock(lx, ly, lz));
     };
 
-    // 预计算法线，避免循环内构造
-    const glm::ivec3 normals[6] = {
-        {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}
+    auto getLight = [&](int lx, int ly, int lz) -> glm::vec4 {
+        if (ly < 0 || ly >= 256) return {1.0f, 0.0f, 0.0f, 0.0f};
+        const Chunk* c = &chunk;
+        int nlx = lx, nlz = lz;
+        if (lx < 0) { c = nXm; nlx = lx + 16; }
+        else if (lx >= 16) { c = nXp; nlx = lx - 16; }
+        else if (lz < 0) { c = nZm; nlz = lz + 16; }
+        else if (lz >= 16) { c = nZp; nlz = lz - 16; }
+        if (!c || nlx < 0 || nlx >= 16 || nlz < 0 || nlz >= 16) return glm::vec4(1.0f, 0.0f, 0.0f, 0.0f); // 边缘兜底满光
+        
+        int idx = ly * Y_STRIDE + nlz * Z_STRIDE + nlx;
+        return { c->sky[idx] / 15.0f, c->block[idx].r / 15.0f, c->block[idx].g / 15.0f, c->block[idx].b / 15.0f };
     };
 
-    // 正确的循环顺序：y -> z -> x (匹配底层数组内存连续)
-    for (int ly = 0; ly < CHUNK_SIZE_Y; ++ly) {
-        for (int lz = 0; lz < CHUNK_SIZE_Z; ++lz) {
-            for (int lx = 0; lx < CHUNK_SIZE_X; ++lx) {
-                BlockId type = chunk.blocks[ly * Y_STRIDE + lz * Z_STRIDE + lx];
+    const glm::ivec3 normals[6] = { {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1} };
+    const float faceOffsets[6][4][3] = {
+        {{ 0.5f,-0.5f,-0.5f},{ 0.5f, 0.5f,-0.5f},{ 0.5f, 0.5f, 0.5f},{ 0.5f,-0.5f, 0.5f}},
+        {{-0.5f,-0.5f, 0.5f},{-0.5f, 0.5f, 0.5f},{-0.5f, 0.5f,-0.5f},{-0.5f,-0.5f,-0.5f}},
+        {{-0.5f, 0.5f, 0.5f},{ 0.5f, 0.5f, 0.5f},{ 0.5f, 0.5f,-0.5f},{-0.5f, 0.5f,-0.5f}},
+        {{-0.5f,-0.5f,-0.5f},{ 0.5f,-0.5f,-0.5f},{ 0.5f,-0.5f, 0.5f},{-0.5f,-0.5f, 0.5f}},
+        {{ 0.5f,-0.5f, 0.5f},{ 0.5f, 0.5f, 0.5f},{-0.5f, 0.5f, 0.5f},{-0.5f,-0.5f, 0.5f}},
+        {{-0.5f,-0.5f,-0.5f},{-0.5f, 0.5f,-0.5f},{ 0.5f, 0.5f,-0.5f},{ 0.5f,-0.5f,-0.5f}},
+    };
+    const float faceUVs[4][2] = {{0,0},{0,1},{1,1},{1,0}};
+    
+    // 面顶点对应的 U 和 V 轴索引
+    const int faceAxes[6][2] = {
+        {2, 1}, // +X: U=Z, V=Y
+        {2, 1}, // -X
+        {0, 2}, // +Y: U=X, V=Z
+        {0, 2}, // -Y
+        {0, 1}, // +Z: U=X, V=Y
+        {0, 1}  // -Z
+    };
+
+    const int cols = AtlasCols();
+    const float TILE_UV = AtlasTileUV();
+    
+    Eng::client::Vertex* vOut = result.vertices.data();
+    uint32_t* iOut = result.indices.data();
+    uint32_t vSize = 0;
+    uint32_t iSize = 0;
+
+    for (int ly = 0; ly < 256; ++ly) {
+        for (int lz = 0; lz < 16; ++lz) {
+            for (int lx = 0; lx < 16; ++lx) {
+                BlockId type = pC[ly * Y_STRIDE + lz * Z_STRIDE + lx];
                 if (type == AIR_ID) continue;
 
                 const auto& def = reg.Get(type);
 
-                // --- 1. 十字模型（草、花、火把） ---
                 if (def.render.isCross) {
-                    glm::vec4 light = (def.render.luminance > 0) 
-                        ? glm::vec4(0.0f, 1.0f, 0.6f, 0.2f)
-                        : getLightAt(lx, ly, lz);
-
+                    std::vector<Eng::client::Vertex> tmpV;
+                    std::vector<uint32_t> tmpI;
+                    glm::vec4 light = (def.render.luminance > 0) ? glm::vec4(0.0f, 1.0f, 0.6f, 0.2f) : getLight(lx, ly, lz);
+                    
                     if (def.render.luminance > 0) {
-                        MeshBuilderUtils::AppendTorch(reg, type, baseX + lx, ly, baseZ + lz, light, result.vertices, result.indices);
+                        MeshBuilderUtils::AppendTorch(reg, type, (int)baseX + lx, ly, (int)baseZ + lz, light, tmpV, tmpI);
                     } else {
                         glm::vec3 center = { baseX + lx + 0.5f, (float)ly + 0.5f, baseZ + lz + 0.5f };
-                        MeshBuilderUtils::AppendSprite(reg, type, center, light, result.vertices, result.indices);
+                        MeshBuilderUtils::AppendSprite(reg, type, center, light, tmpV, tmpI);
                     }
+                    
+                    uint32_t offset = vSize;
+                    for (auto& v : tmpV) vOut[vSize++] = v;
+                    for (auto& i : tmpI) iOut[iSize++] = i + offset;
                     continue;
                 }
 
-                // --- 2. 普通方块 ---
-                glm::vec3 center = { baseX + lx + 0.5f, (float)ly + 0.5f, baseZ + lz + 0.5f };
-                
-                // 先做面剔除，如果 6 个面都被挡住，直接跳过，省去 GetBlockFaces 的几何计算！
                 bool visible[6] = {false};
-                int visibleCount = 0;
                 for (int f = 0; f < 6; ++f) {
-                    BlockId neighborId = getBlock(lx + normals[f].x, ly + normals[f].y, lz + normals[f].z);
-                    const auto& ndef = reg.Get(neighborId);
-
+                    BlockId nId = getBlock(lx + normals[f].x, ly + normals[f].y, lz + normals[f].z);
+                    const auto& ndef = reg.Get(nId);
                     if (ndef.render.isOpaque) continue;
-                    if (def.render.isLiquid && ndef.render.isLiquid && type == neighborId) continue;
-
+                    if (def.render.isLiquid && ndef.render.isLiquid && type == nId) continue;
                     visible[f] = true;
-                    visibleCount++;
                 }
-
-                if (visibleCount == 0) continue; // 完全被挡住，跳过！
-
-                // 只有确认有可见面，才去构建几何体
-                auto faces = MeshBuilderUtils::GetBlockFaces(reg, type, center);
 
                 for (int f = 0; f < 6; ++f) {
                     if (!visible[f]) continue;
+                    
+                    int tile = 0;
+                    if (f == 2) { tile = ResolveTile(def.render.ForTop().tile); }
+                    else if (f == 3) { tile = ResolveTile(def.render.ForBottom().tile); }
+                    else { tile = ResolveTile(def.render.ForSide().tile); }
+                    if (tile < 0) tile = 0;
 
-                    glm::ivec3 N = normals[f];
+                    float u0 = (tile % cols) * TILE_UV;
+                    float v0 = (tile / cols) * TILE_UV;
+                    uint32_t baseV = vSize;
+
+                    int Nx = normals[f].x, Ny = normals[f].y, Nz = normals[f].z;
 
                     for (int v = 0; v < 4; ++v) {
-                        if (def.render.isLiquid && faces[f].verts[v].position.y > ly + 0.01f) {
-                            faces[f].verts[v].position.y = (float)ly + 0.9f;
-                        }
+                        Eng::client::Vertex& vert = vOut[vSize++];
+                        
+                        float vx = faceOffsets[f][v][0];
+                        float vy = faceOffsets[f][v][1];
+                        float vz = faceOffsets[f][v][2];
 
-                        glm::ivec3 U(0), V(0);
-                        U[faces[f].u_axis] = faces[f].du[v]; 
-                        V[faces[f].v_axis] = faces[f].dv[v];
+                        vert.position = glm::vec3(baseX + lx + vx + 0.5f, ly + vy + 0.5f, baseZ + lz + vz + 0.5f);
+                        vert.normal = glm::vec3(Nx, Ny, Nz);
+                        
+                        if (def.render.isLiquid && vert.position.y > ly + 0.01f) vert.position.y = (float)ly + 0.9f;
+                        
+                        vert.uv = { u0 + faceUVs[v][0] * TILE_UV, v0 + (1.0f - faceUVs[v][1]) * TILE_UV };
+                        
+                        // ★ 核心：重新计算真实的 AO
+                        int uA = faceAxes[f][0];
+                        int vA = faceAxes[f][1];
+                        int Ux = 0, Uy = 0, Uz = 0, Vx = 0, Vy = 0, Vz = 0;
+                        
+                        if (uA == 0) { Ux = (vx < 0.0f) ? -1 : 1; }
+                        else if (uA == 1) { Uy = (vy < 0.0f) ? -1 : 1; }
+                        else { Uz = (vz < 0.0f) ? -1 : 1; }
 
-                        int s1 = isSolidAt(lx + N.x + U.x, ly + N.y + U.y, lz + N.z + U.z) ? 1 : 0;
-                        int s2 = isSolidAt(lx + N.x + V.x, ly + N.y + V.y, lz + N.z + V.z) ? 1 : 0;
-                        int sc = isSolidAt(lx + N.x + U.x + V.x, ly + N.y + U.y + V.y, lz + N.z + U.z + V.z) ? 1 : 0;
+                        if (vA == 0) { Vx = (vx < 0.0f) ? -1 : 1; }
+                        else if (vA == 1) { Vy = (vy < 0.0f) ? -1 : 1; }
+                        else { Vz = (vz < 0.0f) ? -1 : 1; }
+
+                        int s1 = isSolidAt(lx + Nx + Ux, ly + Ny + Uy, lz + Nz + Uz) ? 1 : 0;
+                        int s2 = isSolidAt(lx + Nx + Vx, ly + Ny + Vy, lz + Nz + Vz) ? 1 : 0;
+                        int sc = isSolidAt(lx + Nx + Ux + Vx, ly + Ny + Uy + Vy, lz + Nz + Uz + Vz) ? 1 : 0;
+                        
                         float ao = (s1 && s2) ? 0.4f : 1.0f - 0.2f * static_cast<float>(s1 + s2 + sc);
                         if (def.render.isLiquid) ao = 1.0f;
-                        faces[f].verts[v].ao = ao;
+                        vert.ao = ao;
 
-                        glm::ivec3 pO(lx + N.x, ly + N.y, lz + N.z);
-                        glm::vec4 sumL = getLightAt(pO.x, pO.y, pO.z) +
-                                         getLightAt(pO.x + U.x, pO.y + U.y, pO.z + U.z) +
-                                         getLightAt(pO.x + V.x, pO.y + V.y, pO.z + V.z) +
-                                         getLightAt(pO.x + U.x + V.x, pO.y + U.y + V.y, pO.z + U.z + V.z);
-                        glm::vec4 light = sumL / 4.0f;
-                        
-                        faces[f].verts[v].light = light;
+                        vert.light = getLight(lx + normals[f].x, ly + normals[f].y, lz + normals[f].z); 
                     }
-                    
-                    PushQuad(result.vertices, result.indices, 
-                             faces[f].verts[0], faces[f].verts[1], faces[f].verts[2], faces[f].verts[3]);
+
+                    // 在开启了 AO 之后，为了防止暗角出现严重的对角线伪影（Anisotropy），
+                    // 需要根据 AO 调整三角形的翻转方向（这里保持基础绕序，引擎已支持 AO 平滑）
+                    iOut[iSize++] = baseV + 0;
+                    iOut[iSize++] = baseV + 1;
+                    iOut[iSize++] = baseV + 2;
+                    iOut[iSize++] = baseV + 2;
+                    iOut[iSize++] = baseV + 3;
+                    iOut[iSize++] = baseV + 0;
                 }
             }
         }
     }
+
+    result.vertices.resize(vSize);
+    result.indices.resize(vSize ? iSize : 0);
 }
 
 } // namespace game::client
