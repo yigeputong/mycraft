@@ -55,11 +55,7 @@ public:
     ClientChunk* GetChunk(uint64_t key);
     const std::unordered_map<uint64_t, ClientChunk>& GetChunks() const { return m_chunks; }
     size_t GetMeshCount() const {
-        size_t count = 0;
-        for (const auto& [k, v] : m_chunks) {
-            if (v.mesh) count++;
-        }
-        return count;
+        return m_chunks.size();
     }
     void Clear();
 

@@ -12,6 +12,8 @@
 #include "client/AssetManager.h"
 #include <memory>
 #include <unordered_map>
+#include <vector>
+#include <array>
 
 namespace game {
 
@@ -23,10 +25,8 @@ public:
     void OnShutdown(Eng::Engine& engine) override;
 
 private:
-    // ==================== 引擎资源与状态 ====================
     bool m_useVulkan = false;
 
-    // ==================== 初始化流程 ====================
     bool StartLocalServer(bool useMemory = false, bool createClient = true);
     bool ConnectToServer(const std::string& host, uint16_t port);
     bool SetupWindow(Eng::Engine& engine);
@@ -34,7 +34,6 @@ private:
     void SetupShaders();
     Eng::client::ShaderPtr CreateShaderByName(const std::string& name, bool isSky);
 
-    // ==================== 核心对象 ====================
     Eng::client::WindowManager* winMgr = nullptr;
     Eng::client::Window*       mainWin = nullptr;
     Eng::client::IRenderAPI*   renderer = nullptr;
@@ -44,14 +43,15 @@ private:
     Eng::client::TexturePtr     m_atlasTexture;
     Eng::client::ShaderPtr      m_skyShader;
     Eng::client::ShaderPtr      m_lodShader;
+    Eng::client::ShaderPtr      m_entityShader;
+    Eng::client::ShaderPtr      m_handShader;
     Eng::client::DeviceInfo     m_deviceInfo;
     Eng::client::FramebufferPtr m_mainFbo;
 
     Eng::client::TexturePtr     m_playerTexture;
-    std::unique_ptr<Eng::client::AssetManager> m_assets;  
+    std::unique_ptr<Eng::client::AssetManager> m_assetManager;  
 
     void RecreateFBOs(int w, int h);
-
     Eng::client::GlobalState    m_globalState;
 
     enum class GameState : std::uint8_t {
@@ -61,21 +61,18 @@ private:
     };
     GameState m_state = GameState::MainMenu;
 
-    // ==================== 主菜单状态 ====================
     bool m_showMultiplayerDialog = false;
     char m_ipBuffer[128]  = "localhost";
     int  m_portInput      = 25565;
     std::string m_statusText;
 
-    // ==================== 网络 ====================
     std::unique_ptr<Eng::IClientTransport> m_client;
     std::unique_ptr<game::server::GameServer> m_server = nullptr;
     uint32_t m_myClientId = 0;
     std::unordered_map<uint32_t, net::PlayerState> m_otherPlayers;
 
-    // ==================== 世界管理 ====================
-    game::BlockRegistry m_blockRegistry;                    // 先构造
-    game::GameContext   m_ctx{ m_blockRegistry };           // 绑引用
+    game::BlockRegistry m_blockRegistry;
+    game::GameContext   m_ctx{ m_blockRegistry };
     game::client::ClientWorld m_world;
     int m_renderDistance = 16;
 
@@ -83,22 +80,28 @@ private:
     static constexpr float kDayLengthSec = 300.0f;
     float m_animTime = 0.0f;
 
-    struct ChunkBuffer {
-        int receivedSections = 0;
-        std::array<BlockId, CHUNK_VOLUME> blocks;
+    // ==================== MDI 全局缓冲与指令 ====================
+    std::vector<Eng::client::Vertex> m_globalVertices;
+    std::vector<uint32_t>            m_globalIndices;
+    bool m_globalGeometryDirty = false;
+    
+    struct ChunkMeshData {
+        uint32_t firstIndex   = 0;
+        int32_t  vertexOffset = 0;
+        uint32_t indexCount   = 0;
     };
-    std::unordered_map<uint64_t, ChunkBuffer> m_chunkBuffers;
+    std::unordered_map<uint64_t, ChunkMeshData> m_chunkMeshes;
+    std::vector<Eng::client::rhi::DrawIndexedIndirectCommand> m_indirectCommands;
+    std::vector<Eng::client::rhi::DrawIndexedIndirectCommand> m_lodIndirectCommands;
 
-    // ==================== 多线程 Mesh ====================
+    std::unordered_map<uint64_t, game::client::MeshResult> m_allMeshes;
+
     client::MeshManager m_meshManager;
     void QueueChunkMeshTask(uint64_t key);
     void DrainMeshResults();
 
-    // ==================== LOD 系统 ====================
     client::LodManager m_lodManager;
 
-    // ==================== 相机与物理 ====================
-    std::vector<Eng::client::MeshPtr> m_visibleChunkMeshes;
     std::vector<Eng::client::MeshPtr> m_visibleLodMeshes;
 
     glm::vec3 cameraPos{0.0f, 40.0f, 0.0f};
@@ -121,7 +124,6 @@ private:
     void UpdateFrustum(const glm::mat4& vp);
     bool AabbInFrustum(const glm::vec3& mn, const glm::vec3& mx) const;
 
-    // ==================== 渲染实体 ====================
     Eng::client::MeshPtr m_playerMesh;
     Eng::client::MeshPtr BuildPlayerMesh();
     Eng::client::MeshPtr m_handMesh;
@@ -131,7 +133,7 @@ private:
 
     struct ClientItemEntity : game::PointEntity {
         uint32_t  id          = 0;
-        BlockId   itemType    = AIR_ID;   // ★ 改为 BlockId
+        BlockId   itemType    = AIR_ID;
         glm::vec3 renderPos{0.0f};
         glm::vec3 prevPos  {0.0f};
         glm::vec3 targetPos{0.0f};
@@ -142,21 +144,19 @@ private:
         uint32_t  pickerId    = 0;
     };
     std::unordered_map<uint32_t, ClientItemEntity> m_itemEntities;
-    std::unordered_map<BlockId, Eng::client::MeshPtr> m_itemMeshCache; // ★ 改为 BlockId
+    std::unordered_map<BlockId, Eng::client::MeshPtr> m_itemMeshCache;
     
-    Eng::client::MeshPtr GetOrCreateItemMesh(BlockId id);  // ★
-    Eng::client::MeshPtr BuildItemCubeMesh(BlockId id);    // ★
+    Eng::client::MeshPtr GetOrCreateItemMesh(BlockId id);
+    Eng::client::MeshPtr BuildItemCubeMesh(BlockId id);
 
-    // ==================== Hotbar 与物品 ====================
     static constexpr int kHotbarSize = 4;
     int m_hotbarIndex = 0;
-    std::array<game::ItemStack, kHotbarSize> m_hotbar{};   // ★ 移除硬编码初始化，改到 OnStart
-    void AddToInventory(BlockId id, int count);            // ★
+    std::array<game::ItemStack, kHotbarSize> m_hotbar{};
+    void AddToInventory(BlockId id, int count);
 
     bool m_inventoryOpen = false;
     std::array<ItemStack, 27> m_inventory{};
 
-    // ==================== 状态与 UI 标志 ====================
     friend class client::ClientUI;
     client::ClientUI m_ui;
 
@@ -169,7 +169,6 @@ private:
     float m_uiScale = 1.0f;
     int m_settingsTab = 0;
 
-    // ==================== 性能指标 ====================
     float m_lastFrameMs = 0.0f;
     float m_fpsTimer      = 0.0f;
     int   m_fpsFrameCount = 0;
@@ -185,7 +184,6 @@ private:
     float m_serverTickAvg = 0.0f;
     float m_serverTickMax = 0.0f;
 
-    // ==================== 位置平滑与冷却 ====================
     glm::vec3 m_positionError{0.0f};
     glm::vec3 m_playerVelocity{0.0f};
     bool      m_playerOnGround = false;
@@ -196,23 +194,19 @@ private:
     static constexpr float kPlaceInterval = 0.2f;
     static constexpr float kDigInterval   = 0.2f;
 
-    // ==================== 配置持久化 ====================
     static constexpr const char* SETTINGS_FILE = "settings.json";
     bool m_apiChanged = false;
 
     void LoadSettings(Eng::Engine& engine);
     void SaveSettings(Eng::Engine& engine);
 
-    // ==================== 日志 ====================
     std::unique_ptr<Eng::Log> logger = std::make_unique<Eng::Log>();
 
-    // ==================== 游戏主流程方法 ====================
     void ReturnToMainMenu();
-
     void HandleServerMessage(const std::vector<uint8_t>& data);
     bool GetInput(float dt);
 
-    BlockId GetBlockAt(int wx, int wy, int wz) const; // ★
+    BlockId GetBlockAt(int wx, int wy, int wz) const;
     bool IsSolidAt(int wx, int wy, int wz) const;
     bool AABBCollides(const glm::vec3& pos) const;
 };

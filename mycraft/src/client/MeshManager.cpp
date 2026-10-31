@@ -6,20 +6,6 @@
 
 namespace game::client {
 
-namespace {
-    void PushQuad(std::vector<Eng::client::Vertex>& vertices, std::vector<uint32_t>& indices,
-                  const Eng::client::Vertex& v0, const Eng::client::Vertex& v1,
-                  const Eng::client::Vertex& v2, const Eng::client::Vertex& v3,
-                  bool doubleSided = false) {
-        uint32_t base = static_cast<uint32_t>(vertices.size());
-        vertices.insert(vertices.end(), { v0, v1, v2, v3 });
-        indices.insert(indices.end(), { base+0, base+1, base+2, base+2, base+3, base+0 });
-        if (doubleSided) {
-            indices.insert(indices.end(), { base+0, base+2, base+1, base+3, base+2, base+0 });
-        }
-    }
-}
-
 // ============================================================
 // 线程生命周期管理
 // ============================================================
@@ -130,8 +116,10 @@ void MeshManager::WorkerLoop() {
 // 核心 Mesh 构建逻辑
 // ============================================================
 void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
-    result.vertices.resize(150000); 
-    result.indices.resize(200000);  
+    result.vertices.clear();
+    result.indices.clear();
+    result.vertices.reserve(150000);
+    result.indices.reserve(200000);
 
     if (!task.reg) return; 
     const game::BlockRegistry& reg = *task.reg;
@@ -175,7 +163,7 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
         else if (lx >= 16) { c = nXp; nlx = lx - 16; }
         else if (lz < 0) { c = nZm; nlz = lz + 16; }
         else if (lz >= 16) { c = nZp; nlz = lz - 16; }
-        if (!c || nlx < 0 || nlx >= 16 || nlz < 0 || nlz >= 16) return glm::vec4(1.0f, 0.0f, 0.0f, 0.0f); // 边缘兜底满光
+        if (!c || nlx < 0 || nlx >= 16 || nlz < 0 || nlz >= 16) return glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
         
         int idx = ly * Y_STRIDE + nlz * Z_STRIDE + nlx;
         return { c->sky[idx] / 15.0f, c->block[idx].r / 15.0f, c->block[idx].g / 15.0f, c->block[idx].b / 15.0f };
@@ -191,24 +179,15 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
         {{-0.5f,-0.5f,-0.5f},{-0.5f, 0.5f,-0.5f},{ 0.5f, 0.5f,-0.5f},{ 0.5f,-0.5f,-0.5f}},
     };
     const float faceUVs[4][2] = {{0,0},{0,1},{1,1},{1,0}};
-    
-    // 面顶点对应的 U 和 V 轴索引
-    const int faceAxes[6][2] = {
-        {2, 1}, // +X: U=Z, V=Y
-        {2, 1}, // -X
-        {0, 2}, // +Y: U=X, V=Z
-        {0, 2}, // -Y
-        {0, 1}, // +Z: U=X, V=Y
-        {0, 1}  // -Z
-    };
+    const int faceAxes[6][2] = { {2, 1}, {2, 1}, {0, 2}, {0, 2}, {0, 1}, {0, 1} };
 
     const int cols = AtlasCols();
     const float TILE_UV = AtlasTileUV();
     
-    Eng::client::Vertex* vOut = result.vertices.data();
-    uint32_t* iOut = result.indices.data();
-    uint32_t vSize = 0;
-    uint32_t iSize = 0;
+    // 防止采样到相邻格子的透明边缘，导致面被 discard 露出黑底
+    const float pad = 0.002f; 
+    const float uScale = TILE_UV - 2.0f * pad;
+    const float vScale = TILE_UV - 2.0f * pad;
 
     for (int ly = 0; ly < 256; ++ly) {
         for (int lz = 0; lz < 16; ++lz) {
@@ -230,9 +209,9 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                         MeshBuilderUtils::AppendSprite(reg, type, center, light, tmpV, tmpI);
                     }
                     
-                    uint32_t offset = vSize;
-                    for (auto& v : tmpV) vOut[vSize++] = v;
-                    for (auto& i : tmpI) iOut[iSize++] = i + offset;
+                    uint32_t offset = static_cast<uint32_t>(result.vertices.size());
+                    for (auto& v : tmpV) result.vertices.push_back(v);
+                    for (auto& i : tmpI) result.indices.push_back(i + offset);
                     continue;
                 }
 
@@ -254,14 +233,16 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                     else { tile = ResolveTile(def.render.ForSide().tile); }
                     if (tile < 0) tile = 0;
 
-                    float u0 = (tile % cols) * TILE_UV;
-                    float v0 = (tile / cols) * TILE_UV;
-                    uint32_t baseV = vSize;
+                    int col = tile % cols;
+                    float u0 = static_cast<float>(col) * TILE_UV + pad;
+                    int row = tile / cols;
+                    float v0 = static_cast<float>(row) * TILE_UV + pad;
+                    auto baseV = static_cast<uint32_t>(result.vertices.size());
 
                     int Nx = normals[f].x, Ny = normals[f].y, Nz = normals[f].z;
 
                     for (int v = 0; v < 4; ++v) {
-                        Eng::client::Vertex& vert = vOut[vSize++];
+                        Eng::client::Vertex vert;
                         
                         float vx = faceOffsets[f][v][0];
                         float vy = faceOffsets[f][v][1];
@@ -272,9 +253,8 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                         
                         if (def.render.isLiquid && vert.position.y > ly + 0.01f) vert.position.y = (float)ly + 0.9f;
                         
-                        vert.uv = { u0 + faceUVs[v][0] * TILE_UV, v0 + (1.0f - faceUVs[v][1]) * TILE_UV };
+                        vert.uv = { u0 + faceUVs[v][0] * uScale, v0 + (1.0f - faceUVs[v][1]) * vScale };
                         
-                        // ★ 核心：重新计算真实的 AO
                         int uA = faceAxes[f][0];
                         int vA = faceAxes[f][1];
                         int Ux = 0, Uy = 0, Uz = 0, Vx = 0, Vy = 0, Vz = 0;
@@ -296,23 +276,20 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                         vert.ao = ao;
 
                         vert.light = getLight(lx + normals[f].x, ly + normals[f].y, lz + normals[f].z); 
+                        
+                        result.vertices.push_back(vert);
                     }
 
-                    // 在开启了 AO 之后，为了防止暗角出现严重的对角线伪影（Anisotropy），
-                    // 需要根据 AO 调整三角形的翻转方向（这里保持基础绕序，引擎已支持 AO 平滑）
-                    iOut[iSize++] = baseV + 0;
-                    iOut[iSize++] = baseV + 1;
-                    iOut[iSize++] = baseV + 2;
-                    iOut[iSize++] = baseV + 2;
-                    iOut[iSize++] = baseV + 3;
-                    iOut[iSize++] = baseV + 0;
+                    result.indices.push_back(baseV + 0);
+                    result.indices.push_back(baseV + 1);
+                    result.indices.push_back(baseV + 2);
+                    result.indices.push_back(baseV + 2);
+                    result.indices.push_back(baseV + 3);
+                    result.indices.push_back(baseV + 0);
                 }
             }
         }
     }
-
-    result.vertices.resize(vSize);
-    result.indices.resize(vSize ? iSize : 0);
 }
 
 } // namespace game::client

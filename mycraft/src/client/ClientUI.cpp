@@ -108,7 +108,6 @@ void ClientUI::DrawIsometricBlock(ImDrawList* dl, ImVec2 center, float size, Blo
 // ==========================================
 void ClientUI::Draw(Eng::Engine& engine, MyGame& game) {
     game.renderer->ImGuiNewFrame();
-    ImGui::NewFrame();
 
     if (game.m_menuOpen || game.m_state == MyGame::GameState::MainMenu) {
         ImDrawList* bgDrawList = ImGui::GetBackgroundDrawList();

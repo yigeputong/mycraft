@@ -51,14 +51,15 @@ add_sanitizer(mycraft-server)
 # Shader 编译（只挂到客户端，服务端不需要）
 # ============================================================
 
-add_glsl_shader(shader_mesh mesh)
-add_glsl_shader(shader_sky  sky)
-add_glsl_shader(shader_post post)
-add_glsl_shader(shader_lod  lod)
+add_glsl_shader(shader_mesh   mesh)
+add_glsl_shader(shader_sky    sky)
+add_glsl_shader(shader_post   post)
+add_glsl_shader(shader_lod    lod)
+add_glsl_shader(shader_entity entity)
 
 # 让 mycraft 依赖所有 shader 编译完成
 add_dependencies(mycraft 
-    shader_mesh shader_sky shader_post shader_lod
+    shader_mesh shader_sky shader_post shader_lod shader_entity
 )
 
 # ============================================================

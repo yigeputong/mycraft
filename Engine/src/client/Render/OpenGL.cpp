@@ -1,6 +1,7 @@
 #include "client/Render/OpenGLAPI.h"
 #include "client/Window.h"
 #include "core/Log.h"
+#include "imgui.h"
 
 #include <SDL3/SDL_pixels.h>
 #include <cstddef>
@@ -8,6 +9,7 @@
 #include <vector>
 #include <fstream>
 #include <sstream>
+#include <array>
 
 #include <SDL3/SDL_video.h>
 #include <SDL3_image/SDL_image.h>
@@ -85,39 +87,39 @@ void OpenGLAPI::Initialize(int width, int height, Window* window) {
     if (m_initialized) return;
     m_window = window;
 
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
-
     SetViewport(0, 0, width, height);
-    m_initialized = true;
-
+    
+    // 创建默认丢失纹理
     auto missingPixels = GenerateMissingTexturePixels();
     m_defaultTexturePtr = CreateTexture(missingPixels.data(), 16, 16);
-    if (!m_defaultTexturePtr) {
-        throw std::runtime_error("Failed to create default missing texture");
-    }
 
-    glGenBuffers(1, &m_globalUBO);
-    glBindBuffer(GL_UNIFORM_BUFFER, m_globalUBO);
-    glBufferData(GL_UNIFORM_BUFFER, sizeof(Eng::client::GlobalState), nullptr, GL_DYNAMIC_DRAW);
+    // ★ 全局 UBO (DSA)
+    glCreateBuffers(1, &m_globalUBO);
+    glNamedBufferData(m_globalUBO, sizeof(GlobalState), nullptr, GL_DYNAMIC_DRAW);
     glBindBufferBase(GL_UNIFORM_BUFFER, 0, m_globalUBO);
 
-    constexpr GLsizeiptr kMaterialUBOSize = sizeof(float) * 4;
-    glGenBuffers(1, &m_materialUBO);
-    glBindBuffer(GL_UNIFORM_BUFFER, m_materialUBO);
-    glBufferData(GL_UNIFORM_BUFFER, kMaterialUBOSize, nullptr, GL_DYNAMIC_DRAW);
+    // ★ 材质 UBO (DSA)
+    glCreateBuffers(1, &m_materialUBO);
+    glNamedBufferData(m_materialUBO, sizeof(float) * 4, nullptr, GL_DYNAMIC_DRAW);
     glBindBufferBase(GL_UNIFORM_BUFFER, 1, m_materialUBO);
+
+    m_initialized = true;
 }
 
 void OpenGLAPI::Shutdown() {
     if (!m_initialized) return;
 
-    if (m_globalUBO)   { glDeleteBuffers(1, &m_globalUBO); m_globalUBO = 0; }
-    if (m_materialUBO) { glDeleteBuffers(1, &m_materialUBO); m_materialUBO = 0; }
-    if (m_fullscreenVAO) { glDeleteVertexArrays(1, &m_fullscreenVAO); m_fullscreenVAO = 0; }
-    if (m_fullscreenVBO) { glDeleteBuffers(1, &m_fullscreenVBO); m_fullscreenVBO = 0; }
+    if (m_globalUBO)   glDeleteBuffers(1, &m_globalUBO);
+    if (m_materialUBO) glDeleteBuffers(1, &m_materialUBO);
+    
+    // 清理全局 MDI 资源
+    if (m_globalVAO)   glDeleteVertexArrays(1, &m_globalVAO);
+    if (m_globalVBO)   glDeleteBuffers(1, &m_globalVBO);
+    if (m_globalIBO)   glDeleteBuffers(1, &m_globalIBO);
+    if (m_indirectVBO) glDeleteBuffers(1, &m_indirectVBO);
+
+    if (m_fullscreenVAO) glDeleteVertexArrays(1, &m_fullscreenVAO);
+    if (m_fullscreenVBO) glDeleteBuffers(1, &m_fullscreenVBO);
 
     m_skyCubeMesh.reset();
 
@@ -141,7 +143,84 @@ void OpenGLAPI::Shutdown() {
     m_shaders.clear();
 
     m_initialized = false;
-    logInfo(m_logger, "[RenderAPI] Shutdown");
+    logInfo(m_logger, "[OpenGL] Shutdown complete");
+}
+
+void OpenGLAPI::InitPipelines() {
+    // 1. 创建全局 VAO，仅此一个，全生命周期不换
+    glCreateVertexArrays(1, &m_globalVAO);
+
+    // 2. 使用 DSA 配置顶点属性 (Location 0: Position)
+    glEnableVertexArrayAttrib(m_globalVAO, 0);
+    glVertexArrayAttribFormat(m_globalVAO, 0, 3, GL_FLOAT, GL_FALSE, offsetof(Vertex, position));
+    glVertexArrayAttribBinding(m_globalVAO, 0, 0);
+
+    // Location 1: Normal
+    glEnableVertexArrayAttrib(m_globalVAO, 1);
+    glVertexArrayAttribFormat(m_globalVAO, 1, 3, GL_FLOAT, GL_FALSE, offsetof(Vertex, normal));
+    glVertexArrayAttribBinding(m_globalVAO, 1, 0);
+
+    // Location 2: UV
+    glEnableVertexArrayAttrib(m_globalVAO, 2);
+    glVertexArrayAttribFormat(m_globalVAO, 2, 2, GL_FLOAT, GL_FALSE, offsetof(Vertex, uv));
+    glVertexArrayAttribBinding(m_globalVAO, 2, 0);
+
+    // Location 3: AO
+    glEnableVertexArrayAttrib(m_globalVAO, 3);
+    glVertexArrayAttribFormat(m_globalVAO, 3, 1, GL_FLOAT, GL_FALSE, offsetof(Vertex, ao));
+    glVertexArrayAttribBinding(m_globalVAO, 3, 0);
+
+    // Location 4: Light (vec4)
+    glEnableVertexArrayAttrib(m_globalVAO, 4);
+    glVertexArrayAttribFormat(m_globalVAO, 4, 4, GL_FLOAT, GL_FALSE, offsetof(Vertex, light));
+    glVertexArrayAttribBinding(m_globalVAO, 4, 0);
+
+    // 3. 预留 MDI 指令缓冲
+    glCreateBuffers(1, &m_indirectVBO);
+    glNamedBufferData(m_indirectVBO, 50000 * sizeof(rhi::DrawIndexedIndirectCommand), nullptr, GL_DYNAMIC_DRAW);
+}
+
+void OpenGLAPI::BindPipeline(rhi::PipelineType type) {
+    switch (type) {
+        case rhi::PipelineType::Opaque:
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL); // 对齐 Vulkan
+            glDepthMask(GL_TRUE);
+            glEnable(GL_CULL_FACE);
+            glCullFace(GL_BACK);
+            glDisable(GL_BLEND);
+            break;
+        case rhi::PipelineType::Transparent:
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL); // 对齐 Vulkan
+            glDepthMask(GL_FALSE);
+            glEnable(GL_CULL_FACE);
+            glCullFace(GL_BACK);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            break;
+        case rhi::PipelineType::Skybox:
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL);
+            glDepthMask(GL_FALSE);
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_BLEND);
+            break;
+        case rhi::PipelineType::Hand:
+            glDisable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
+            glEnable(GL_CULL_FACE);   // 手部还是需要剔除背面，否则立方体会看到内部
+            glCullFace(GL_BACK);
+            glDisable(GL_BLEND);
+            break;
+        case rhi::PipelineType::UI:
+            glDisable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
+            glDisable(GL_CULL_FACE);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            break;
+    }
 }
 
 void OpenGLAPI::SetViewport(int x, int y, int w, int h) {
@@ -169,83 +248,85 @@ void OpenGLAPI::SetGlobalState(const GlobalState& state) {
 }
 
 // ==========================================
-// 内部销毁逻辑
+// MDI 终极接口
 // ==========================================
-void OpenGLAPI::DestroyMeshInternal(MeshHandle h) {
-    auto it = m_meshes.find(h);
-    if (it == m_meshes.end()) return;
-    if (it->second.vao) glDeleteVertexArrays(1, &it->second.vao);
-    if (it->second.vbo) glDeleteBuffers(1, &it->second.vbo);
-    if (it->second.ebo) glDeleteBuffers(1, &it->second.ebo);
-    if (it->second.instanceVBO) glDeleteBuffers(1, &it->second.instanceVBO);
-    m_meshes.erase(it);
+void OpenGLAPI::UploadGlobalGeometry(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) {
+    if (!m_globalVBO) glCreateBuffers(1, &m_globalVBO);
+    if (!m_globalIBO) glCreateBuffers(1, &m_globalIBO);
+
+    // 直接通过 DSA 将数据灌入显存
+    glNamedBufferData(m_globalVBO, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
+    glNamedBufferData(m_globalIBO, indices.size() * sizeof(uint32_t), indices.data(), GL_STATIC_DRAW);
+
+    // 通过 DSA 将 VBO 和 IBO 绑定到全局 VAO
+    glVertexArrayVertexBuffer(m_globalVAO, 0, m_globalVBO, 0, sizeof(Vertex));
+    glVertexArrayElementBuffer(m_globalVAO, m_globalIBO);
 }
 
-void OpenGLAPI::DestroyTextureInternal(TextureHandle h) {
-    auto it = m_textures.find(h);
-    if (it == m_textures.end()) return;
-    if (it->second.textureID) glDeleteTextures(1, &it->second.textureID);
-    m_textures.erase(it);
+void OpenGLAPI::UploadIndirectCommands(const std::vector<rhi::DrawIndexedIndirectCommand>& commands) {
+    glNamedBufferSubData(m_indirectVBO, 0, commands.size() * sizeof(rhi::DrawIndexedIndirectCommand), commands.data());
 }
 
-void OpenGLAPI::DestroyShaderInternal(ShaderHandle h) {
-    auto it = m_shaders.find(h);
-    if (it == m_shaders.end()) return;
-    if (it->second.program) glDeleteProgram(it->second.program);
-    m_shaders.erase(it);
-}
+void OpenGLAPI::DrawMDI(const ShaderPtr& shader, const Material& material, uint32_t commandCount) {
+    if (commandCount == 0) return;
 
-void OpenGLAPI::DestroyFramebufferInternal(FramebufferHandle h) {
-    auto it = m_framebuffers.find(h);
-    if (it == m_framebuffers.end()) return;
+    auto shaderIt = m_shaders.find(shader->GetHandle());
+    if (shaderIt == m_shaders.end()) return;
 
-    glDeleteFramebuffers(1, &it->second.fbo);
-    if (it->second.depthBuf) glDeleteRenderbuffers(1, &it->second.depthBuf);
+    glUseProgram(shaderIt->second.program);
+    BindPipeline(rhi::PipelineType::Opaque);
 
-    auto thIt = m_fbColorHandles.find(h);
-    if (thIt != m_fbColorHandles.end()) {
-        m_fbColorHandles.erase(thIt);
-    }
-    m_framebuffers.erase(it);
+    // 绑定材质 (DSA)
+    glBindTextureUnit(0, ResolveTexture(material.diffuse));
+
+    // 绑定全局 VAO 和 MDI 缓冲
+    glBindVertexArray(m_globalVAO);
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_indirectVBO);
+
+    // ★ 终极杀器：一次性下发所有区块的绘制指令
+    glMultiDrawElementsIndirect(
+        GL_TRIANGLES,
+        GL_UNSIGNED_INT,
+        nullptr,
+        commandCount,
+        0
+    );
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
 }
 
 // ==========================================
-// 资源创建
+// 传统网格创建 (依然使用 DSA)
 // ==========================================
 MeshHandle OpenGLAPI::CreateMeshInternal(const MeshData& data) {
     MeshDataInternal internal;
     glCreateVertexArrays(1, &internal.vao);
     glCreateBuffers(1, &internal.vbo);
     glNamedBufferData(internal.vbo, data.vertices.size() * sizeof(Vertex), data.vertices.data(), GL_STATIC_DRAW);
+    
+    // DSA 绑定 VBO 并配置属性
     glVertexArrayVertexBuffer(internal.vao, 0, internal.vbo, 0, sizeof(Vertex));
-
+    
+    glEnableVertexArrayAttrib(internal.vao, 0);
     glVertexArrayAttribFormat(internal.vao, 0, 3, GL_FLOAT, GL_FALSE, offsetof(Vertex, position));
     glVertexArrayAttribBinding(internal.vao, 0, 0);
-    glEnableVertexArrayAttrib(internal.vao, 0);
+    
+    glEnableVertexArrayAttrib(internal.vao, 1);
     glVertexArrayAttribFormat(internal.vao, 1, 3, GL_FLOAT, GL_FALSE, offsetof(Vertex, normal));
     glVertexArrayAttribBinding(internal.vao, 1, 0);
-    glEnableVertexArrayAttrib(internal.vao, 1);
+    
+    glEnableVertexArrayAttrib(internal.vao, 2);
     glVertexArrayAttribFormat(internal.vao, 2, 2, GL_FLOAT, GL_FALSE, offsetof(Vertex, uv));
     glVertexArrayAttribBinding(internal.vao, 2, 0);
-    glEnableVertexArrayAttrib(internal.vao, 2);
+    
+    glEnableVertexArrayAttrib(internal.vao, 3);
     glVertexArrayAttribFormat(internal.vao, 3, 1, GL_FLOAT, GL_FALSE, offsetof(Vertex, ao));
     glVertexArrayAttribBinding(internal.vao, 3, 0);
-    glEnableVertexArrayAttrib(internal.vao, 3);
 
-    glCreateBuffers(1, &internal.instanceVBO);
-    glm::mat4 identity(1.0f);
-    glNamedBufferData(internal.instanceVBO, sizeof(glm::mat4), &identity, GL_DYNAMIC_DRAW);
-    glVertexArrayVertexBuffer(internal.vao, 1, internal.instanceVBO, 0, sizeof(glm::mat4));
-    for (int i = 0; i < 4; ++i) {
-        glVertexArrayAttribFormat(internal.vao, 4 + i, 4, GL_FLOAT, GL_FALSE, sizeof(glm::vec4) * i);
-        glVertexArrayAttribBinding(internal.vao, 4 + i, 1);
-        glEnableVertexArrayAttrib(internal.vao, 4 + i);
-    }
-    glVertexArrayBindingDivisor(internal.vao, 1, 1);
-
-    glVertexArrayAttribFormat(internal.vao, 8, 4, GL_FLOAT, GL_FALSE, offsetof(Vertex, light));
-    glVertexArrayAttribBinding(internal.vao, 8, 0);
-    glEnableVertexArrayAttrib(internal.vao, 8);
+    glEnableVertexArrayAttrib(internal.vao, 4);
+    glVertexArrayAttribFormat(internal.vao, 4, 4, GL_FLOAT, GL_FALSE, offsetof(Vertex, light));
+    glVertexArrayAttribBinding(internal.vao, 4, 0);
 
     if (!data.indices.empty()) {
         glCreateBuffers(1, &internal.ebo);
@@ -273,6 +354,16 @@ MeshPtr OpenGLAPI::CreateMesh(const MeshData& data) {
     });
 }
 
+void OpenGLAPI::DestroyMeshInternal(MeshHandle h) {
+    auto it = m_meshes.find(h);
+    if (it == m_meshes.end()) return;
+    if (it->second.vao) glDeleteVertexArrays(1, &it->second.vao);
+    if (it->second.vbo) glDeleteBuffers(1, &it->second.vbo);
+    if (it->second.ebo) glDeleteBuffers(1, &it->second.ebo);
+    if (it->second.instanceVBO) glDeleteBuffers(1, &it->second.instanceVBO);
+    m_meshes.erase(it);
+}
+
 TexturePtr OpenGLAPI::CreateTexture(const uint8_t* rgba, int w, int h) {
     TextureHandle th = CreateTextureInternal(rgba, w, h);
     if (th == 0) return nullptr;
@@ -284,25 +375,33 @@ TexturePtr OpenGLAPI::CreateTexture(const uint8_t* rgba, int w, int h) {
 
 TextureHandle OpenGLAPI::CreateTextureInternal(const uint8_t* rgba, int w, int h) {
     GLuint tex;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glCreateTextures(GL_TEXTURE_2D, 1, &tex);
+    glTextureStorage2D(tex, 1, GL_RGBA8, w, h);
+    glTextureSubImage2D(tex, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glTextureParameteri(tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTextureParameteri(tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTextureParameteri(tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTextureParameteri(tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     TextureHandle handle = m_nextTextureHandle++;
     m_textures[handle] = { tex, w, h, GL_RGBA };
     return handle;
 }
 
+void OpenGLAPI::DestroyTextureInternal(TextureHandle h) {
+    auto it = m_textures.find(h);
+    if (it == m_textures.end()) return;
+    if (it->second.textureID) glDeleteTextures(1, &it->second.textureID);
+    m_textures.erase(it);
+}
+
+// ==========================================
+// Shader & FBO 等（精简保留）
+// ==========================================
 ShaderHandle OpenGLAPI::CreateShaderInternal(const ShaderCreateInfo& info) {
     auto isSPV = [](const std::string& p) {
         return p.size() > 4 && p.compare(p.size() - 4, 4, ".spv") == 0;
     };
-
     GLuint vertex = 0, fragment = 0;
     if (isSPV(info.vertPath)) {
         auto spv = ReadBinaryFile(info.vertPath);
@@ -325,8 +424,19 @@ ShaderHandle OpenGLAPI::CreateShaderInternal(const ShaderCreateInfo& info) {
     glDeleteShader(fragment);
     if (!program) return 0;
 
+    ShaderDataInternal internal;
+    internal.program        = program;
+    internal.perObjectMode  = info.perObjectMode;
+    internal.pipelineType   = info.pipelineType;
+
+    // 直接创建 UBO 供 binding point 2 使用，无需查 block index
+    if (info.perObjectMode == rhi::PerObjectMode::Default) {
+        glCreateBuffers(1, &internal.perObjectUBO);
+        glNamedBufferData(internal.perObjectUBO, sizeof(rhi::PerObjectData), nullptr, GL_DYNAMIC_DRAW);
+    }
+
     ShaderHandle handle = m_nextShaderHandle++;
-    m_shaders[handle] = { program, info.cullMode, info.depthMode, info.blendMode }; // ★ 存入状态
+    m_shaders[handle]   = internal;
     return handle;
 }
 
@@ -339,31 +449,14 @@ ShaderPtr OpenGLAPI::CreateShader(const ShaderCreateInfo& info) {
     });
 }
 
-FramebufferHandle OpenGLAPI::CreateFramebufferInternal(const FramebufferCreateInfo& info) {
-    if (!m_fullscreenShader) {
-        ShaderCreateInfo shaderInfo{};
-        shaderInfo.vertPath = "./assets/shaders/build/post/vert.gl.spv";
-        shaderInfo.fragPath = "./assets/shaders/build/post/frag.gl.spv";
-        m_fullscreenShader = CreateShader(shaderInfo);
-    }
-    if (m_fullscreenVAO == 0) {
-        static constexpr float vertices[] = {
-            -1.0f,  1.0f,   0.0f, 1.0f,  -1.0f, -1.0f,   0.0f, 0.0f,
-             1.0f, -1.0f,   1.0f, 0.0f,  -1.0f,  1.0f,   0.0f, 1.0f,
-             1.0f, -1.0f,   1.0f, 0.0f,   1.0f,  1.0f,   1.0f, 1.0f
-        };
-        glCreateVertexArrays(1, &m_fullscreenVAO);
-        glCreateBuffers(1, &m_fullscreenVBO);
-        glNamedBufferData(m_fullscreenVBO, sizeof(vertices), vertices, GL_STATIC_DRAW);
-        glVertexArrayVertexBuffer(m_fullscreenVAO, 0, m_fullscreenVBO, 0, 4 * sizeof(float));
-        glVertexArrayAttribFormat(m_fullscreenVAO, 0, 2, GL_FLOAT, GL_FALSE, 0);
-        glVertexArrayAttribBinding(m_fullscreenVAO, 0, 0);
-        glEnableVertexArrayAttrib(m_fullscreenVAO, 0);
-        glVertexArrayAttribFormat(m_fullscreenVAO, 1, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float));
-        glVertexArrayAttribBinding(m_fullscreenVAO, 1, 0);
-        glEnableVertexArrayAttrib(m_fullscreenVAO, 1);
-    }
+void OpenGLAPI::DestroyShaderInternal(ShaderHandle h) {
+    auto it = m_shaders.find(h);
+    if (it == m_shaders.end()) return;
+    if (it->second.program) glDeleteProgram(it->second.program);
+    m_shaders.erase(it);
+}
 
+FramebufferPtr OpenGLAPI::CreateFramebuffer(const FramebufferCreateInfo& info) {
     GLuint fbo, colorTex;
     glCreateFramebuffers(1, &fbo);
     glCreateTextures(GL_TEXTURE_2D, 1, &colorTex);
@@ -373,11 +466,8 @@ FramebufferHandle OpenGLAPI::CreateFramebufferInternal(const FramebufferCreateIn
     if (info.colorFormat == rhi::TextureFormat::R8_UNORM)      internalFormat = GL_R8;
 
     glTextureStorage2D(colorTex, 1, internalFormat, info.width, info.height);
-    
     glTextureParameteri(colorTex, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTextureParameteri(colorTex, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTextureParameteri(colorTex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTextureParameteri(colorTex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glNamedFramebufferTexture(fbo, GL_COLOR_ATTACHMENT0, colorTex, 0);
 
     GLuint depthBuf = 0;
@@ -393,21 +483,20 @@ FramebufferHandle OpenGLAPI::CreateFramebufferInternal(const FramebufferCreateIn
     TextureHandle texHandle = m_nextTextureHandle++;
     m_textures[texHandle] = { colorTex, info.width, info.height, internalFormat };
     m_fbColorHandles[h] = texHandle;
-    return h;
-}
 
-FramebufferPtr OpenGLAPI::CreateFramebuffer(const FramebufferCreateInfo& info) {
-    FramebufferHandle h = CreateFramebufferInternal(info);
-    if (h == 0) return nullptr;
-
-    TextureHandle texH = m_fbColorHandles[h];
-    TexturePtr colorTex = TexturePtr(new Texture(texH), [this](Texture* t) {
+    TexturePtr colorTexturePtr = TexturePtr(new Texture(texHandle), [this](Texture* t) {
         this->DestroyTextureInternal(t->GetHandle());
         delete t;
     });
 
-    return FramebufferPtr(new Framebuffer(h, colorTex, info.width, info.height), [this](Framebuffer* f) {
-        this->DestroyFramebufferInternal(f->GetHandle());
+    return FramebufferPtr(new Framebuffer(h, colorTexturePtr, info.width, info.height), [this](Framebuffer* f) {
+        auto it = m_framebuffers.find(f->GetHandle());
+        if (it != m_framebuffers.end()) {
+            glDeleteFramebuffers(1, &it->second.fbo);
+            if (it->second.depthBuf) glDeleteRenderbuffers(1, &it->second.depthBuf);
+            m_fbColorHandles.erase(f->GetHandle());
+            m_framebuffers.erase(it);
+        }
         delete f;
     });
 }
@@ -415,9 +504,10 @@ FramebufferPtr OpenGLAPI::CreateFramebuffer(const FramebufferCreateInfo& info) {
 void OpenGLAPI::BindFramebuffer(const FramebufferPtr& fb) {
     if (!fb) return;
     auto it = m_framebuffers.find(fb->GetHandle());
-    if (it == m_framebuffers.end()) return;
-    glBindFramebuffer(GL_FRAMEBUFFER, it->second.fbo);
-    glViewport(0, 0, it->second.width, it->second.height);
+    if (it != m_framebuffers.end()) {
+        glBindFramebuffer(GL_FRAMEBUFFER, it->second.fbo);
+        glViewport(0, 0, it->second.width, it->second.height);
+    }
 }
 
 void OpenGLAPI::UnbindFramebuffer() {
@@ -429,148 +519,49 @@ void OpenGLAPI::UnbindFramebuffer() {
     }
 }
 
-void OpenGLAPI::SetUniform(const ShaderPtr& shader, const std::string& name, const glm::mat4& value) {
-    if (!shader) return;
-    auto it = m_shaders.find(shader->GetHandle());
-    if (it == m_shaders.end() || !it->second.program) return;
-    glUseProgram(it->second.program);
-    GLint loc = glGetUniformLocation(it->second.program, name.c_str());
-    if (loc != -1) glUniformMatrix4fv(loc, 1, GL_FALSE, glm::value_ptr(value));
-}
-
-void OpenGLAPI::SetUniform(const ShaderPtr& shader, const std::string& name, const glm::vec3& value) {
-    if (!shader) return;
-    auto it = m_shaders.find(shader->GetHandle());
-    if (it == m_shaders.end() || !it->second.program) return;
-    glUseProgram(it->second.program);
-    GLint loc = glGetUniformLocation(it->second.program, name.c_str());
-    if (loc != -1) glUniform3fv(loc, 1, glm::value_ptr(value));
-}
-
-void OpenGLAPI::SetUniform(const ShaderPtr& shader, const std::string& name, float value) {
-    if (!shader) return;
-    auto it = m_shaders.find(shader->GetHandle());
-    if (it == m_shaders.end() || !it->second.program) return;
-    glUseProgram(it->second.program);
-    GLint loc = glGetUniformLocation(it->second.program, name.c_str());
-    if (loc != -1) glUniform1f(loc, value);
-}
-
-void OpenGLAPI::SetUniform(const ShaderPtr& shader, const std::string& name, int value) {
-    if (!shader) return;
-    auto it = m_shaders.find(shader->GetHandle());
-    if (it == m_shaders.end() || !it->second.program) return;
-    glUseProgram(it->second.program);
-    GLint loc = glGetUniformLocation(it->second.program, name.c_str());
-    if (loc != -1) glUniform1i(loc, value);
-}
-
-void OpenGLAPI::BeginFrame() {
-    glDisable(GL_SCISSOR_TEST);
-    if (m_window) {
-        int w, h;
-        SDL_GetWindowSizeInPixels(m_window->GetSDLWindow(), &w, &h);
-        glViewport(0, 0, w, h);
-    }
-    if (m_globalUBO) {
-        glNamedBufferSubData(m_globalUBO, 0, sizeof(GlobalState), &m_globalState);
-    }
-}
-
-void OpenGLAPI::ApplyState(const ShaderDataInternal& shaderData) {
-    if (shaderData.depthMode == rhi::DepthMode::Disabled) {
-        glDisable(GL_DEPTH_TEST);
-    } else {
-        glEnable(GL_DEPTH_TEST);
-        if (shaderData.depthMode == rhi::DepthMode::TestOnly) glDepthMask(GL_FALSE);
-        else glDepthMask(GL_TRUE);
-    }
-
-    if (shaderData.cullMode == rhi::CullMode::None) {
-        glDisable(GL_CULL_FACE);
-    } else {
-        glEnable(GL_CULL_FACE);
-        glCullFace(shaderData.cullMode == rhi::CullMode::Back ? GL_BACK : GL_FRONT);
-    }
-
-    if (shaderData.blendMode == rhi::BlendMode::None) {
-        glDisable(GL_BLEND);
-    } else {
-        glEnable(GL_BLEND);
-        if (shaderData.blendMode == rhi::BlendMode::AlphaBlend) {
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        } else if (shaderData.blendMode == rhi::BlendMode::Additive) {
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-        }
-    }
-}
-
-void OpenGLAPI::DrawMesh(const MeshPtr& mesh, const ShaderPtr& shader, const Material& material, const glm::mat4& model) {
+// ==========================================
+// Draw
+// ==========================================
+void OpenGLAPI::DrawMesh(const MeshPtr& mesh, const ShaderPtr& shader,
+                         const Material& material, const rhi::PerObjectData& data) {
     if (!m_initialized || !mesh || !shader) return;
-    auto meshIt = m_meshes.find(mesh->GetHandle());
+    auto meshIt   = m_meshes.find(mesh->GetHandle());
     auto shaderIt = m_shaders.find(shader->GetHandle());
     if (meshIt == m_meshes.end() || shaderIt == m_shaders.end()) return;
 
-    auto& meshData = meshIt->second;
-    glUseProgram(shaderIt->second.program);
-    ApplyState(shaderIt->second);
+    auto& meshData   = meshIt->second;
+    auto& shaderData = shaderIt->second;
+
+    glUseProgram(shaderData.program);
+    BindPipeline(shaderData.pipelineType);
 
     float matData[4] = { material.shininess, 0.0f, 0.0f, 0.0f };
     glNamedBufferSubData(m_materialUBO, 0, sizeof(matData), matData);
-    glNamedBufferSubData(meshData.instanceVBO, 0, sizeof(glm::mat4), &model);
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, ResolveTexture(material.diffuse));
+    // 直接把结构体灌进 UBO，并绑定到 binding 2
+    if (shaderData.perObjectMode == rhi::PerObjectMode::Default && shaderData.perObjectUBO != 0) {
+        glNamedBufferSubData(shaderData.perObjectUBO, 0, sizeof(rhi::PerObjectData), &data);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 2, shaderData.perObjectUBO);
+    }
 
-    glBindVertexArray(meshData.vao);
-    if (meshData.ebo != 0) glDrawElements(GL_TRIANGLES, (GLsizei)meshData.indexCount, meshData.indexType, nullptr);
-    else glDrawArrays(GL_TRIANGLES, 0, (GLsizei)meshData.indexCount);
-    glBindVertexArray(0);
-}
-
-void OpenGLAPI::DrawMeshInstanced(const MeshPtr& mesh, const ShaderPtr& shader, const Material& material, const std::vector<glm::mat4>& transforms) {
-    if (transforms.empty() || !mesh || !shader) return;
-    auto meshIt = m_meshes.find(mesh->GetHandle());
-    auto shaderIt = m_shaders.find(shader->GetHandle());
-    if (meshIt == m_meshes.end() || shaderIt == m_shaders.end()) return;
-
-    auto& meshData = meshIt->second;
-    glUseProgram(shaderIt->second.program);
-    ApplyState(shaderIt->second);
-
-    glNamedBufferData(meshData.instanceVBO, transforms.size() * sizeof(glm::mat4), transforms.data(), GL_DYNAMIC_DRAW);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, ResolveTexture(material.diffuse));
+    glBindTextureUnit(0, ResolveTexture(material.diffuse));
 
     glBindVertexArray(meshData.vao);
-    if (meshData.ebo != 0) glDrawElementsInstanced(GL_TRIANGLES, (GLsizei)meshData.indexCount, meshData.indexType, nullptr, (GLsizei)transforms.size());
-    else glDrawArraysInstanced(GL_TRIANGLES, 0, (GLsizei)meshData.indexCount, (GLsizei)transforms.size());
-    glBindVertexArray(0);
-}
-
-void OpenGLAPI::DrawMeshBatch(const std::vector<MeshPtr>& meshes, const ShaderPtr& shader, const Material& material) {
-    if (meshes.empty() || !shader) return;
-    auto shaderIt = m_shaders.find(shader->GetHandle());
-    if (shaderIt == m_shaders.end()) return;
-
-    glUseProgram(shaderIt->second.program);
-    ApplyState(shaderIt->second);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, ResolveTexture(material.diffuse));
-
-    const glm::mat4 identity(1.0f);
-    for (const auto& m : meshes) {
-        if (!m) continue;
-        auto meshIt = m_meshes.find(m->GetHandle());
-        if (meshIt == m_meshes.end()) continue;
-        auto& meshData = meshIt->second;
-        glNamedBufferSubData(meshData.instanceVBO, 0, sizeof(glm::mat4), &identity);
-        glBindVertexArray(meshData.vao);
-        if (meshData.ebo != 0) glDrawElements(GL_TRIANGLES, (GLsizei)meshData.indexCount, meshData.indexType, nullptr);
-        else glDrawArrays(GL_TRIANGLES, 0, (GLsizei)meshData.indexCount);
+    if (meshData.ebo != 0) {
+        glDrawElements(GL_TRIANGLES, (GLsizei)meshData.indexCount, meshData.indexType, nullptr);
+    } else {
+        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)meshData.indexCount);
     }
     glBindVertexArray(0);
+}
+
+void OpenGLAPI::DrawMeshInstanced(const MeshPtr& mesh, const ShaderPtr& shader,
+                                  const Material& material,
+                                  const std::vector<rhi::PerObjectData>& perObjects) {
+    if (!mesh || !shader || perObjects.empty()) return;
+    for (const auto& data : perObjects) {
+        DrawMesh(mesh, shader, material, data);
+    }
 }
 
 void OpenGLAPI::DrawSkybox(const ShaderPtr& shader) {
@@ -599,7 +590,7 @@ void OpenGLAPI::DrawSkybox(const ShaderPtr& shader) {
     }
 
     glUseProgram(it->second.program);
-    ApplyState(it->second);
+    BindPipeline(rhi::PipelineType::Skybox);
 
     auto meshit = m_meshes.find(m_skyCubeMesh->GetHandle());
     if (meshit != m_meshes.end()) {
@@ -609,12 +600,11 @@ void OpenGLAPI::DrawSkybox(const ShaderPtr& shader) {
     }
 }
 
-void OpenGLAPI::DrawFullscreenQuad(const TexturePtr& texture) {
+void OpenGLAPI::BlitToScreen(const TexturePtr& texture) {
     if (!texture) return;
     
     glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_CULL_FACE);
+    BindPipeline(rhi::PipelineType::UI);
 
     if (m_window) {
         int w, h;
@@ -625,17 +615,98 @@ void OpenGLAPI::DrawFullscreenQuad(const TexturePtr& texture) {
     glClearColor(m_clearColor[0], m_clearColor[1], m_clearColor[2], m_clearColor[3]);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    if (!m_fullscreenShader) return;
-    auto shader = m_shaders.find(m_fullscreenShader->GetHandle())->second.program;
+    if (!m_fullscreenShader) {
+        ShaderCreateInfo shaderInfo{};
+        shaderInfo.vertPath = "./assets/shaders/build/post/vert.gl.spv";
+        shaderInfo.fragPath = "./assets/shaders/build/post/frag.gl.spv";
+        shaderInfo.pipelineType = rhi::PipelineType::UI;
+        m_fullscreenShader = CreateShader(shaderInfo);
+    }
 
+    if (m_fullscreenVAO == 0) {
+        // ★ 全屏三角形：三个顶点恰好覆盖屏幕（范围 [-1, 3]）
+        static constexpr float vertices[] = {
+            // 位置 XY      UV
+            -1.0f, -1.0f,   0.0f, 0.0f,
+             3.0f, -1.0f,   2.0f, 0.0f,
+            -1.0f,  3.0f,   0.0f, 2.0f
+        };
+        glCreateVertexArrays(1, &m_fullscreenVAO);
+        glCreateBuffers(1, &m_fullscreenVBO);
+        glNamedBufferData(m_fullscreenVBO, sizeof(vertices), vertices, GL_STATIC_DRAW);
+        
+        glVertexArrayVertexBuffer(m_fullscreenVAO, 0, m_fullscreenVBO, 0, 4 * sizeof(float));
+        
+        glEnableVertexArrayAttrib(m_fullscreenVAO, 0);
+        glVertexArrayAttribFormat(m_fullscreenVAO, 0, 2, GL_FLOAT, GL_FALSE, 0);
+        glVertexArrayAttribBinding(m_fullscreenVAO, 0, 0);
+        
+        glEnableVertexArrayAttrib(m_fullscreenVAO, 1);
+        glVertexArrayAttribFormat(m_fullscreenVAO, 1, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float));
+        glVertexArrayAttribBinding(m_fullscreenVAO, 1, 0);
+    }
+
+    auto shader = m_shaders.find(m_fullscreenShader->GetHandle())->second.program;
     glUseProgram(shader);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, ResolveTexture(texture));
-    glUniform1i(glGetUniformLocation(shader, "screenTexture"), 0);
+    glBindTextureUnit(0, ResolveTexture(texture));
+    
+    GLint loc = glGetUniformLocation(shader, "screenTexture");
+    if (loc != -1) glUniform1i(loc, 0);
 
     glBindVertexArray(m_fullscreenVAO); 
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glDrawArrays(GL_TRIANGLES, 0, 3); // ★ 只画 3 个顶点
     glBindVertexArray(0);
+}
+
+// ==========================================
+// Uniform 与 帧控制
+// ==========================================
+void OpenGLAPI::SetUniform(const ShaderPtr& shader, const std::string& name, const glm::mat4& value) {
+    if (!shader) return;
+    auto it = m_shaders.find(shader->GetHandle());
+    if (it == m_shaders.end()) return;
+    glUseProgram(it->second.program);
+    GLint loc = glGetUniformLocation(it->second.program, name.c_str());
+    if (loc != -1) glUniformMatrix4fv(loc, 1, GL_FALSE, glm::value_ptr(value));
+}
+
+void OpenGLAPI::SetUniform(const ShaderPtr& shader, const std::string& name, const glm::vec3& value) {
+    if (!shader) return;
+    auto it = m_shaders.find(shader->GetHandle());
+    if (it == m_shaders.end()) return;
+    glUseProgram(it->second.program);
+    GLint loc = glGetUniformLocation(it->second.program, name.c_str());
+    if (loc != -1) glUniform3fv(loc, 1, glm::value_ptr(value));
+}
+
+void OpenGLAPI::SetUniform(const ShaderPtr& shader, const std::string& name, float value) {
+    if (!shader) return;
+    auto it = m_shaders.find(shader->GetHandle());
+    if (it == m_shaders.end()) return;
+    glUseProgram(it->second.program);
+    GLint loc = glGetUniformLocation(it->second.program, name.c_str());
+    if (loc != -1) glUniform1f(loc, value);
+}
+
+void OpenGLAPI::SetUniform(const ShaderPtr& shader, const std::string& name, int value) {
+    if (!shader) return;
+    auto it = m_shaders.find(shader->GetHandle());
+    if (it == m_shaders.end()) return;
+    glUseProgram(it->second.program);
+    GLint loc = glGetUniformLocation(it->second.program, name.c_str());
+    if (loc != -1) glUniform1i(loc, value);
+}
+
+void OpenGLAPI::BeginFrame() {
+    glDisable(GL_SCISSOR_TEST);
+    if (m_window) {
+        int w, h;
+        SDL_GetWindowSizeInPixels(m_window->GetSDLWindow(), &w, &h);
+        glViewport(0, 0, w, h);
+    }
+    if (m_globalUBO) {
+        glNamedBufferSubData(m_globalUBO, 0, sizeof(GlobalState), &m_globalState);
+    }
 }
 
 void OpenGLAPI::EndFrame() {
@@ -699,6 +770,7 @@ void OpenGLAPI::ShutdownImGuiBackend() {
 void OpenGLAPI::ImGuiNewFrame() {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
+    ImGui::NewFrame();
 }
 
 void OpenGLAPI::ImGuiRenderDrawData() {

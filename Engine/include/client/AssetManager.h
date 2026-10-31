@@ -42,11 +42,30 @@ public:
 
     /**
      * @brief 加载（或从缓存获取）着色器。
-     * @param name 着色器名称。内部会自动拼接 `assets/shaders/build/<name>/` 路径，并根据当前后端（OpenGL/Vulkan）自动补全后缀。
-     * @param info 自定义着色器配置（如是否开启深度测试、是否是天空盒）。默认为普通不透明渲染。
-     * @return 着色器智能指针，失败返回 nullptr。
+     * @details 该函数不再负责路径拼装，仅依据传入的 `info` 进行着色器管线创建。
+     *          内部使用 `vertPath + "|" + fragPath` 作为缓存键（Key），确保相同路径的
+     *          着色器不会被重复创建，同时避免同名不同路径的冲突。
+     * @param info 着色器创建信息。调用方必须填写 `vertPath` 和 `fragPath`。
+     *             同时需指定 `pipelineType`（如 Opaque/Transparent/Skybox/UI）和
+     *             `vertexLayout`（如 Standard/Skybox）。
+     * @return 着色器智能指针（ShaderPtr），加载失败返回 nullptr。
+     * @warning `info.vertPath` 和 `info.fragPath` 不能为空。
      */
-    ShaderPtr LoadShader(const std::string& name, const ShaderCreateInfo& info = {});
+    ShaderPtr LoadShader(const ShaderCreateInfo& info);
+
+    /**
+     * @brief 根据着色器名称和状态，构造标准的 ShaderCreateInfo。
+     * @details 自动处理平台差异（Vulkan/OpenGL），拼装引擎默认的着色器路径：
+     *          `assets/shaders/build/<name>/vert.(vk|gl).spv`
+     *          `assets/shaders/build/<name>/frag.(vk|gl).spv`
+     * @param name 着色器名称（对应 assets 下的目录名，如 "mesh", "sky", "water"）。
+     * @param pipelineType 渲染管线类型（默认不透明 Opaque）。
+     * @param vertexLayout 顶点输入布局类型（默认 Standard）。
+     * @return 填充好路径和状态信息的 ShaderCreateInfo，可直接传给 LoadShader。
+     */
+    ShaderCreateInfo MakeShaderCreateInfo(const std::string& name, 
+                                          rhi::PipelineType pipelineType = rhi::PipelineType::Opaque,
+                                          rhi::VertexLayout vertexLayout = rhi::VertexLayout::Standard);
 
     /**
      * @brief 使用 Assimp 加载（或从缓存获取）外部模型。

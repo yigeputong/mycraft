@@ -5,6 +5,7 @@
 #include <glad/glad.h>
 #include <string>
 #include <memory>
+#include <unordered_map>
 
 namespace Eng::client {
 
@@ -13,44 +14,48 @@ public:
     OpenGLAPI();
     ~OpenGLAPI() override;
 
-    // 初始化与销毁
     void Initialize(int width, int height, Window* window) override;
     void Shutdown() override;
 
-    // 视口与清屏
+    void InitPipelines() override;
+    void BindPipeline(rhi::PipelineType type) override;
+
     void SetViewport(int x, int y, int w, int h) override;
     void SetClearColor(float r, float g, float b, float a) override;
     void Clear(rhi::ClearFlag flag = rhi::ClearFlag::All) override;
-
-    // 全局状态
     void SetGlobalState(const GlobalState& state) override;
 
-    // 资源创建
+    // ★ MDI 接口
+    void UploadGlobalGeometry(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) override;
+    void UploadIndirectCommands(const std::vector<rhi::DrawIndexedIndirectCommand>& commands) override;
+    void DrawMDI(const ShaderPtr& shader, const Material& material, uint32_t commandCount) override;
+
+    // 原有资源创建
     MeshPtr CreateMesh(const MeshData& data) override;
     TexturePtr CreateTexture(const uint8_t* rgba, int w, int h) override;
     ShaderPtr CreateShader(const ShaderCreateInfo& info) override;
     FramebufferPtr CreateFramebuffer(const FramebufferCreateInfo& info) override;
 
-    // FBO
     void BindFramebuffer(const FramebufferPtr& fb) override;
     void UnbindFramebuffer() override;
 
-    // 绘制
     void BeginFrame() override;
     void EndFrame() override;
-    void DrawMesh(const MeshPtr& mesh, const ShaderPtr& shader, const Material& material, const glm::mat4& model = glm::mat4(1.0f)) override;
-    void DrawMeshInstanced(const MeshPtr& mesh, const ShaderPtr& shader, const Material& material, const std::vector<glm::mat4>& transforms) override;
-    void DrawMeshBatch(const std::vector<MeshPtr>& meshes, const ShaderPtr& shader, const Material& mat) override;
-    void DrawSkybox(const ShaderPtr& shader) override;
-    void DrawFullscreenQuad(const TexturePtr& texture) override;
 
-    // Uniform
+    void DrawMesh(const MeshPtr& mesh, const ShaderPtr& shader,
+                  const Material& material,
+                  const rhi::PerObjectData& data = {}) override;
+    void DrawMeshInstanced(const MeshPtr& mesh, const ShaderPtr& shader,
+                           const Material& material,
+                           const std::vector<rhi::PerObjectData>& perObjects) override;
+    void DrawSkybox(const ShaderPtr& shader) override;
+    void BlitToScreen(const TexturePtr& texture) override;
+
     void SetUniform(const ShaderPtr& shader, const std::string& name, const glm::mat4& value) override;
     void SetUniform(const ShaderPtr& shader, const std::string& name, const glm::vec3& value) override;
     void SetUniform(const ShaderPtr& shader, const std::string& name, float value) override;
     void SetUniform(const ShaderPtr& shader, const std::string& name, int value) override;
 
-    // ImGui
     bool InitImGuiBackend() override;
     void ShutdownImGuiBackend() override;
     void ImGuiNewFrame() override;
@@ -89,9 +94,9 @@ private:
 
     struct ShaderDataInternal {
         GLuint program = 0;
-        Eng::client::rhi::CullMode  cullMode  = Eng::client::rhi::CullMode::Back;
-        Eng::client::rhi::DepthMode depthMode = Eng::client::rhi::DepthMode::Normal;
-        Eng::client::rhi::BlendMode blendMode = Eng::client::rhi::BlendMode::None;
+        GLuint perObjectUBO = 0;                                       // 仅 Default 模式非零
+        rhi::PerObjectMode perObjectMode = rhi::PerObjectMode::None;   // 新增
+        rhi::PipelineType  pipelineType  = rhi::PipelineType::Opaque;  // 新增，DrawMesh 里用
     };
 
     struct FramebufferInternal {
@@ -109,11 +114,16 @@ private:
     std::unordered_map<FramebufferHandle, TextureHandle>       m_fbColorHandles;
 
     TexturePtr m_defaultTexturePtr = nullptr;
-
     GlobalState m_globalState{};
 
     GLuint m_globalUBO   = 0;
     GLuint m_materialUBO = 0;
+
+    // ★ 核心：全局 DSA 句柄
+    GLuint m_globalVAO = 0;
+    GLuint m_globalVBO = 0;
+    GLuint m_globalIBO = 0;
+    GLuint m_indirectVBO = 0;
 
     MeshPtr m_skyCubeMesh = nullptr;
 
@@ -144,7 +154,6 @@ private:
     GLuint CompileShader(GLenum type, const std::string& source);
     GLuint LinkProgram(GLuint vertexShader, GLuint fragmentShader);
     std::string ReadFile(const std::string& path);
-    void ApplyState(const ShaderDataInternal& shaderData);
     
     GLuint ResolveTexture(const TexturePtr& tex) const {
         if (tex) {
@@ -153,15 +162,13 @@ private:
                 return it->second.textureID;
             }
         }
-        
-        // Fallback：如果传入的 tex 为空或无效，返回默认的紫黑棋盘格
         if (m_defaultTexturePtr) {
             auto it = m_textures.find(m_defaultTexturePtr->GetHandle());
             if (it != m_textures.end()) {
                 return it->second.textureID;
             }
         }
-        return 0; // 极端情况，什么都没有
+        return 0; 
     }
 };
 

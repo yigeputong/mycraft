@@ -8,7 +8,7 @@
             "cacheVariables": {
                 "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
                 "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
-                "BUILD_SHARED_LIBS": "OFF"
+                "BUILD_SHARED_LIBS": "ON"
             }
         },
         {
@@ -17,8 +17,8 @@
             "inherits": "base",
             "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-windows-static",
-                "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+                "VCPKG_TARGET_TRIPLET": "x64-windows",
+                "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
             }
         },
         {
@@ -27,8 +27,7 @@
             "inherits": "base",
             "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux",
-                "CMAKE_EXE_LINKER_FLAGS": "-static"
+                "VCPKG_TARGET_TRIPLET": "x64-linux"
             }
         },
         {
@@ -43,9 +42,7 @@
             "inherits": "windows-base",
             "binaryDir": "${sourceDir}/build/msvc-asan",
             "cacheVariables": {
-                "SANITIZER": "address",
-                "VCPKG_TARGET_TRIPLET": "x64-windows",
-                "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+                "SANITIZER": "address"
             }
         },
         {
@@ -66,9 +63,7 @@
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang-cl",
                 "CMAKE_CXX_COMPILER": "clang-cl",
-                "SANITIZER": "address",
-                "VCPKG_TARGET_TRIPLET": "x64-windows",
-                "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+                "SANITIZER": "address"
             }
         },
         {
@@ -100,6 +95,26 @@
             "displayName": "Linux Clang",
             "inherits": "linux-base",
             "binaryDir": "${sourceDir}/build/clang",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++"
+            }
+        },
+        {
+            "name": "termux-base",
+            "hidden": true,
+            "inherits": "base",
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Android" },
+            "cacheVariables": {
+                "VCPKG_TARGET_TRIPLET": "arm64-android",
+                "BUILD_SHARED_LIBS": "ON"
+            }
+        },
+        {
+            "name": "termux-clang",
+            "displayName": "Termux Android Clang",
+            "inherits": "termux-base",
+            "binaryDir": "${sourceDir}/build/termux",
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++"
@@ -172,6 +187,18 @@
             "displayName": "Linux Clang Debug",
             "configurePreset": "linux-clang",
             "configuration": "Debug"
+        },
+        {
+            "name": "termux-clang-debug",
+            "displayName": "Termux Clang Debug",
+            "configurePreset": "termux-clang",
+            "configuration": "Debug"
+        },
+        {
+            "name": "termux-clang-release",
+            "displayName": "Termux Clang Release",
+            "configurePreset": "termux-clang",
+            "configuration": "Release"
         }
     ]
 }

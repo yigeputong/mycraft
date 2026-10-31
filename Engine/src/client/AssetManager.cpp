@@ -47,32 +47,49 @@ TexturePtr AssetManager::LoadTexture(const std::string& path) {
     return tex;
 }
 
-ShaderPtr AssetManager::LoadShader(const std::string& name, const ShaderCreateInfo& info) {
+ShaderPtr AssetManager::LoadShader(const ShaderCreateInfo& info) {
     if (!m_rhi) {
         logError(m_logger, "[AssetManager] RHI is null, cannot load shader.");
         return nullptr;
     }
 
-    auto it = m_shaderCache.find(name);
+    // 把 pipelineType 加进缓存 Key，保证 Hand 和 Opaque 是独立的
+    const std::string cacheKey = info.vertPath + "|" + info.fragPath + "|" 
+                               + std::to_string(static_cast<int>(info.pipelineType));
+    
+    auto it = m_shaderCache.find(cacheKey);
     if (it != m_shaderCache.end()) {
         return it->second;
     }
 
-    bool isVulkan = (m_rhi->GetDeviceInfo().backend == "Vulkan");
+    // 必须有完整的路径才能加载
+    if (info.vertPath.empty() || info.fragPath.empty()) {
+        logError(m_logger, "[AssetManager] Shader paths cannot be empty.");
+        return nullptr;
+    }
+
+    auto shader = m_rhi->CreateShader(info);
+    if (shader) {
+        m_shaderCache[cacheKey] = shader;
+    } else {
+        logError(m_logger, "[AssetManager] Failed to load shader: " << info.vertPath);
+    }
+    return shader;
+}
+
+ShaderCreateInfo AssetManager::MakeShaderCreateInfo(const std::string& name, 
+                                                    rhi::PipelineType pipelineType, 
+                                                    rhi::VertexLayout vertexLayout) {
+    bool isVulkan = (m_rhi && m_rhi->GetDeviceInfo().backend == "Vulkan");
     std::string ext = isVulkan ? ".vk.spv" : ".gl.spv";
     std::string base = "assets/shaders/build/" + name + "/";
 
-    ShaderCreateInfo finalInfo = info;
-    if (finalInfo.vertPath.empty()) finalInfo.vertPath = base + "vert" + ext;
-    if (finalInfo.fragPath.empty()) finalInfo.fragPath = base + "frag" + ext;
-
-    auto shader = m_rhi->CreateShader(finalInfo);
-    if (shader) {
-        m_shaderCache[name] = shader;
-    } else {
-        logError(m_logger, "[AssetManager] Failed to load shader: " << name);
-    }
-    return shader;
+    ShaderCreateInfo info;
+    info.vertPath = base + "vert" + ext;
+    info.fragPath = base + "frag" + ext;
+    info.pipelineType = pipelineType;
+    info.vertexLayout = vertexLayout;
+    return info;
 }
 
 Model AssetManager::LoadModel(const std::string& path, bool flipUV) {

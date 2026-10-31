@@ -339,8 +339,8 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                 outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+1);
             }
 
-            // 2. +X 侧面
-            if (i + 1 < N) {
+            // 2. +X 侧面 (去掉 i + 1 < N 判断，因为 heightMap 已经存了边缘)
+            {
                 float yNb = cellY(i + 1, j);
                 if (ySelf > yNb + 0.01f) {
                     int nt = cellTile(i + 1, j);
@@ -356,8 +356,8 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                 }
             }
 
-            // 3. -X 侧面
-            if (i - 1 >= 0) {
+            // 3. -X 侧面 (去掉 i - 1 >= 0，交给高度图处理)
+            {
                 float yNb = cellY(i - 1, j);
                 if (ySelf > yNb + 0.01f) {
                     int nt = cellTile(i - 1, j);
@@ -373,8 +373,8 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                 }
             }
 
-            // 4. +Z 侧面
-            if (j + 1 < N) {
+            // 4. +Z 侧面 (去掉 j + 1 < N)
+            {
                 float yNb = cellY(i, j + 1);
                 if (ySelf > yNb + 0.01f) {
                     int nt = cellTile(i, j + 1);
@@ -391,7 +391,7 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
             }
 
             // 5. -Z 侧面
-            if (j - 1 >= 0) {
+            {
                 float yNb = cellY(i, j - 1);
                 if (ySelf > yNb + 0.01f) {
                     int nt = cellTile(i, j - 1);
