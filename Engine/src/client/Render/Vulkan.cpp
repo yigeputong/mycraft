@@ -644,47 +644,81 @@ void VulkanAPI::BindPipeline([[maybe_unused]]rhi::PipelineType type) {
     // Vulkan 在绘制时直接绑定 m_pipelines 里对应的 Pipeline
 }
 
-void VulkanAPI::UploadGlobalGeometry(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) {
+void VulkanAPI::UploadGlobalGeometry(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices,
+                                     size_t& outVboCapacity, size_t& outIboCapacity) {
     if (vertices.empty() || indices.empty()) return;
 
     VkDeviceSize reqVboSize = vertices.size() * sizeof(Vertex);
     VkDeviceSize reqIboSize = indices.size() * sizeof(uint32_t);
 
-    // ★ 遍历所有的飞行帧，让 Frame 0 和 Frame 1 都更新
+    VkDeviceSize newVboSize = std::max(static_cast<VkDeviceSize>(reqVboSize * 2.0f), VkDeviceSize(128 * 1024 * 1024));
+    VkDeviceSize newIboSize = std::max(static_cast<VkDeviceSize>(reqIboSize * 2.0f), VkDeviceSize(32 * 1024 * 1024));
+
+    m_device.waitIdle();
+
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         auto& frameBuf = m_frameMDIBuffers[i];
 
-        auto ensureBuffer = [&](VkBuffer& buffer, VmaAllocation& alloc, void*& mapped, 
-                                VkDeviceSize& currentSize, VkDeviceSize reqSize, 
-                                VkBufferUsageFlags usage, const void* srcData) {
-            if (reqSize > currentSize) {
-                m_device.waitIdle();
-                if (buffer != VK_NULL_HANDLE) {
-                    vmaDestroyBuffer(m_allocator, buffer, alloc);
-                }
-                VkDeviceSize newSize = std::max(reqSize * 2, VkDeviceSize(512 * 1024 * 1024));
-                VkBufferCreateInfo info{};
-                info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-                info.pNext = nullptr;
-                info.size  = newSize;
-                info.usage = usage;
-                VmaAllocationCreateInfo allocInfo{};
-                allocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-                allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-                VmaAllocationInfo allocResult;
-                vmaCreateBuffer(m_allocator, &info, &allocInfo, &buffer, &alloc, &allocResult);
-                mapped = allocResult.pMappedData;
-                currentSize = newSize;
-            }
-            memcpy(mapped, srcData, reqSize);
-            vmaFlushAllocation(m_allocator, alloc, 0, reqSize);
-        };
+        if (frameBuf.vboSize < newVboSize || frameBuf.iboSize < newIboSize) {
+            if (frameBuf.vbo != VK_NULL_HANDLE) vmaDestroyBuffer(m_allocator, frameBuf.vbo, frameBuf.vboAlloc);
+            if (frameBuf.ibo != VK_NULL_HANDLE) vmaDestroyBuffer(m_allocator, frameBuf.ibo, frameBuf.iboAlloc);
 
-        ensureBuffer(frameBuf.vbo, frameBuf.vboAlloc, frameBuf.vboMapped, 
-                     frameBuf.vboSize, reqVboSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vertices.data());
-                     
-        ensureBuffer(frameBuf.ibo, frameBuf.iboAlloc, frameBuf.iboMapped, 
-                     frameBuf.iboSize, reqIboSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, indices.data());
+            vk::BufferCreateInfo info{
+                .size = newVboSize,
+                .usage = vk::BufferUsageFlagBits::eVertexBuffer,
+                .sharingMode = vk::SharingMode::eExclusive
+            };
+            VmaAllocationCreateInfo allocInfo{};
+            allocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+            allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+            VmaAllocationInfo allocResult;
+            vmaCreateBuffer(m_allocator, reinterpret_cast<const VkBufferCreateInfo*>(&info), &allocInfo, &frameBuf.vbo, &frameBuf.vboAlloc, &allocResult);
+            frameBuf.vboMapped = allocResult.pMappedData;
+            frameBuf.vboSize = newVboSize;
+
+            info.size = newIboSize;
+            info.usage = vk::BufferUsageFlagBits::eIndexBuffer;
+            vmaCreateBuffer(m_allocator, reinterpret_cast<const VkBufferCreateInfo*>(&info), &allocInfo, &frameBuf.ibo, &frameBuf.iboAlloc, &allocResult);
+            frameBuf.iboMapped = allocResult.pMappedData;
+            frameBuf.iboSize = newIboSize;
+        }
+
+        // ★ 无论是否扩容，必须强制覆盖写入！
+        memcpy(frameBuf.vboMapped, vertices.data(), reqVboSize);
+        vmaFlushAllocation(m_allocator, frameBuf.vboAlloc, 0, reqVboSize);
+
+        memcpy(frameBuf.iboMapped, indices.data(), reqIboSize);
+        vmaFlushAllocation(m_allocator, frameBuf.iboAlloc, 0, reqIboSize);
+    }
+    
+    outVboCapacity = m_frameMDIBuffers[0].vboSize;
+    outIboCapacity = m_frameMDIBuffers[0].iboSize;
+}
+
+void VulkanAPI::UpdateGlobalGeometry(uint32_t vertexOffset, const std::vector<Vertex>& vertices,
+                                     uint32_t indexOffset, const std::vector<uint32_t>& indices) {
+    if (vertices.empty() || indices.empty()) return;
+
+    size_t reqVboBytes = (vertexOffset + vertices.size()) * sizeof(Vertex);
+    size_t reqIboBytes = (indexOffset + indices.size()) * sizeof(uint32_t);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        auto& frameBuf = m_frameMDIBuffers[i];
+
+        // 核心防御：在每一帧的 Buffer 上校验容量
+        if (reqVboBytes > frameBuf.vboSize || reqIboBytes > frameBuf.iboSize) {
+            std::string err = "[Vulkan] UpdateGlobalGeometry out of bounds! "
+                              "Req VBO: " + std::to_string(reqVboBytes) + " / " + std::to_string(frameBuf.vboSize) + ", "
+                              "Req IBO: " + std::to_string(reqIboBytes) + " / " + std::to_string(frameBuf.iboSize);
+            logFatal(m_logger, err);
+            throw std::out_of_range(err);
+        }
+
+        memcpy(static_cast<char*>(frameBuf.vboMapped) + vertexOffset * sizeof(Vertex), vertices.data(), vertices.size() * sizeof(Vertex));
+        vmaFlushAllocation(m_allocator, frameBuf.vboAlloc, vertexOffset * sizeof(Vertex), vertices.size() * sizeof(Vertex));
+
+        memcpy(static_cast<char*>(frameBuf.iboMapped) + indexOffset * sizeof(uint32_t), indices.data(), indices.size() * sizeof(uint32_t));
+        vmaFlushAllocation(m_allocator, frameBuf.iboAlloc, indexOffset * sizeof(uint32_t), indices.size() * sizeof(uint32_t));
     }
 }
 

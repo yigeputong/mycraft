@@ -352,9 +352,6 @@ void MyGame::SetupShaders() {
     }
 }
 
-// ============================================================
-// OnStart
-// ============================================================
 void MyGame::OnStart(Eng::Engine& engine) {
     if (!logger) logger = std::make_unique<Eng::Log>();
 
@@ -407,9 +404,6 @@ void MyGame::OnStart(Eng::Engine& engine) {
     m_state = GameState::MainMenu;
 }
 
-// ============================================================
-// OnUpdate
-// ============================================================
 bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     if (m_minimized) {
         SDL_Delay(16);
@@ -557,9 +551,6 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     return false;
 }
 
-// ============================================================
-// OnRender
-// ============================================================
 void MyGame::OnRender(Eng::Engine& engine) {
     if (m_minimized) return;
 
@@ -600,7 +591,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
         // 1. 地形 MDI
         // ==========================================================
         if (m_globalGeometryDirty) {
-            renderer->UploadGlobalGeometry(m_globalVertices, m_globalIndices);
+            RebuildGlobalGeometry();
             m_globalGeometryDirty = false;
         }
 
@@ -750,6 +741,8 @@ void MyGame::ReturnToMainMenu() {
     m_globalIndices.clear();
     m_globalGeometryDirty = true;
     m_indirectCommands.clear();
+    m_globalVertexCursor = 0;
+    m_globalIndexCursor = 0;
 
     cameraPos   = glm::vec3(0.0f, 40.0f, 0.0f);
     cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
@@ -787,6 +780,8 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
     m_globalIndices.clear();
     m_globalGeometryDirty = true;
     m_indirectCommands.clear();
+    m_globalVertexCursor = 0;
+    m_globalIndexCursor = 0;
 
     m_mainFbo.reset();
     m_cubeShader.reset();
@@ -1189,39 +1184,133 @@ void MyGame::AddToInventory(BlockId id, int count) { // ★
 // Mesh 结果汇聚
 // ============================================================
 void MyGame::DrainMeshResults() {
-    bool bNeedRebuild = false;
+    std::vector<uint64_t> dirtyKeys;
+    size_t incomingVerts = 0, incomingInds = 0;
 
-    m_meshManager.DrainResults([this, &bNeedRebuild](game::client::MeshResult&& r) {
-        if (r.vertices.empty() || r.indices.empty()) return;
+    m_meshManager.DrainResults([this, &dirtyKeys, &incomingVerts, &incomingInds](game::client::MeshResult&& r) {
+        if (r.vertices.empty() || r.indices.empty()) {
+            auto it = m_chunkMeshes.find(r.chunkKey);
+            if (it != m_chunkMeshes.end() && it->second.indexCount > 0) {
+                m_garbageVertices += it->second.vertexCount;
+                m_garbageIndices  += it->second.indexCount;
+                it->second.indexCount = 0; 
+                it->second.vertexCount = 0;
+            }
+            m_allMeshes.erase(r.chunkKey);
+            return;
+        }
         
-        // 存入持久化的大字典
+        incomingVerts += r.vertices.size();
+        incomingInds += r.indices.size();
+
+        auto oldIt = m_allMeshes.find(r.chunkKey);
+        if (oldIt != m_allMeshes.end()) {
+            m_garbageVertices += oldIt->second.vertices.size();
+            m_garbageIndices  += oldIt->second.indices.size();
+        }
+        
         m_allMeshes[r.chunkKey] = std::move(r);
-        bNeedRebuild = true;
+        dirtyKeys.push_back(r.chunkKey);
     });
 
-    if (bNeedRebuild) {
-        m_globalVertices.clear();
-        m_globalIndices.clear();
-        m_chunkMeshes.clear();
+    if (dirtyKeys.empty()) return;
 
-        m_globalVertices.reserve(m_allMeshes.size() * 10000);
-        m_globalIndices.reserve(m_allMeshes.size() * 15000);
+    size_t maxVertices = m_globalVertexCapacity / sizeof(Eng::client::Vertex);
+    size_t maxIndices  = m_globalIndexCapacity / sizeof(uint32_t);
 
-        // 遍历持久化的 m_allMeshes，而不是临时的 m_pendingMeshes
-        for (auto& [key, meshResult] : m_allMeshes) {
-            ChunkMeshData data;
-            data.firstIndex = static_cast<uint32_t>(m_globalIndices.size());
-            data.vertexOffset = static_cast<int32_t>(m_globalVertices.size());
-            data.indexCount = static_cast<uint32_t>(meshResult.indices.size());
+    bool outOfCapacity = (m_globalVertexCursor + incomingVerts > maxVertices) ||
+                         (m_globalIndexCursor + incomingInds > maxIndices);
+                         
+    // 提高阈值，避免频繁卡顿
+    bool tooMuchGarbage = (m_garbageVertices > m_globalVertexCursor * 0.8) && (m_garbageVertices > 2000000);
 
-            m_globalVertices.insert(m_globalVertices.end(), meshResult.vertices.begin(), meshResult.vertices.end());
+    if (outOfCapacity || tooMuchGarbage || m_globalVertexCursor == 0) {
+        // 走全量重建（注意：这里会同步更新 m_globalVertexCapacity）
+        RebuildGlobalGeometry();
+    } 
+    else {
+        // 增量追加
+        for (uint64_t key : dirtyKeys) {
+            const auto& meshResult = m_allMeshes[key];
+            if (meshResult.vertices.empty()) continue;
+            
+            uint32_t vOffset = m_globalVertexCursor;
+            uint32_t iOffset = m_globalIndexCursor;
+
+            // 生成全局索引
+            std::vector<uint32_t> globalizedIndices;
+            globalizedIndices.reserve(meshResult.indices.size());
             for (uint32_t idx : meshResult.indices) {
-                m_globalIndices.push_back(idx + data.vertexOffset);
+                globalizedIndices.push_back(idx + vOffset);
             }
-            m_chunkMeshes[key] = data;
+
+            try {
+                renderer->UpdateGlobalGeometry(vOffset, meshResult.vertices, iOffset, globalizedIndices);
+            } catch (const std::out_of_range& e) {
+                logWarning(logger, "[MDI] Incremental failed: " << e.what() << ". Triggering rebuild.");
+                m_globalGeometryDirty = true; 
+                // ★ 绝对不要在这里重置游标，直接 return，由 OnRender 的 Rebuild 全量覆盖
+                return; 
+            }
+
+            // 只有 GPU 写入成功，才同步 CPU 端的数据
+            m_globalVertices.insert(m_globalVertices.end(), meshResult.vertices.begin(), meshResult.vertices.end());
+            m_globalIndices.insert(m_globalIndices.end(), globalizedIndices.begin(), globalizedIndices.end());
+            
+            m_chunkMeshes[key] = ChunkMeshData{
+                .firstIndex = iOffset,
+                .vertexOffset = 0,
+                .indexCount = static_cast<uint32_t>(meshResult.indices.size()),
+                .vertexCount = static_cast<uint32_t>(meshResult.vertices.size())
+            };
+            
+            m_globalVertexCursor += meshResult.vertices.size();
+            m_globalIndexCursor  += meshResult.indices.size();
         }
-        m_globalGeometryDirty = true;
     }
+}
+
+void MyGame::RebuildGlobalGeometry() {
+    m_globalVertices.clear();
+    m_globalIndices.clear();
+    m_chunkMeshes.clear();
+    
+    m_globalVertexCursor = 0;
+    m_globalIndexCursor = 0;
+    m_garbageVertices = 0;
+    m_garbageIndices = 0;
+
+    for (auto& [key, meshResult] : m_allMeshes) {
+        if (meshResult.vertices.empty()) continue;
+
+        ChunkMeshData data;
+        data.firstIndex = m_globalIndexCursor;
+        data.vertexOffset = 0; 
+        data.indexCount = static_cast<uint32_t>(meshResult.indices.size());
+        data.vertexCount = static_cast<uint32_t>(meshResult.vertices.size());
+
+        uint32_t vOffset = m_globalVertexCursor;
+        
+        m_globalVertices.insert(m_globalVertices.end(), meshResult.vertices.begin(), meshResult.vertices.end());
+        
+        for (uint32_t idx : meshResult.indices) {
+            m_globalIndices.push_back(idx + vOffset);
+        }
+        
+        m_globalVertexCursor += meshResult.vertices.size();
+        m_globalIndexCursor  += meshResult.indices.size();
+        m_chunkMeshes[key] = data;
+    }
+
+    // ★ 核心修复：让 RHI 重新分配足够大的显存，并返回真实容量
+    renderer->UploadGlobalGeometry(m_globalVertices, m_globalIndices, m_globalVertexCapacity, m_globalIndexCapacity);
+    
+    // ★ 强制锁死主内存 Vector 的容量，绝对不允许后续增量插入时发生重分配
+    m_globalVertices.reserve(m_globalVertexCapacity / sizeof(Eng::client::Vertex));
+    m_globalIndices.reserve(m_globalIndexCapacity / sizeof(uint32_t));
+
+    logInfo(logger, "[MDI] Compacted. Active Verts: " << m_globalVertexCursor 
+            << ", VBO: " << m_globalVertexCapacity / 1024 / 1024 << " MB");
 }
 
 void MyGame::QueueChunkMeshTask(uint64_t key) {

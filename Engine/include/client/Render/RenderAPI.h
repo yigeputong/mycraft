@@ -261,8 +261,11 @@ public:
 
     // ==================== MDI (Multi-Draw Indirect) 支持 ====================
     /** \brief 上传全局的大 VBO 和 IBO（用于地形区块合批） */
-    virtual void UploadGlobalGeometry(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) = 0;
-
+    virtual void UploadGlobalGeometry(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices,
+                                      size_t& outVboCapacity, size_t& outIboCapacity) = 0;
+    /** \brief 局部更新全局几何体（用于流式加载，避免全量拷贝） */
+    virtual void UpdateGlobalGeometry(uint32_t vertexOffset, const std::vector<Vertex>& vertices,
+                                      uint32_t indexOffset, const std::vector<uint32_t>& indices) = 0;
     /** \brief 每帧上传需要渲染的 MDI 指令 */
     virtual void UploadIndirectCommands(const std::vector<rhi::DrawIndexedIndirectCommand>& commands) = 0;
 

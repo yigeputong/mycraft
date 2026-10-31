@@ -26,7 +26,10 @@ public:
     void SetGlobalState(const GlobalState& state) override;
 
     // ★ MDI 接口
-    void UploadGlobalGeometry(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) override;
+    void UploadGlobalGeometry(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices,
+                                size_t& outVboCapacity, size_t& outIboCapacity) override;
+    void UpdateGlobalGeometry(uint32_t vertexOffset, const std::vector<Vertex>& vertices,
+                            uint32_t indexOffset, const std::vector<uint32_t>& indices) override;
     void UploadIndirectCommands(const std::vector<rhi::DrawIndexedIndirectCommand>& commands) override;
     void DrawMDI(const ShaderPtr& shader, const Material& material, uint32_t commandCount) override;
 
@@ -119,11 +122,15 @@ private:
     GLuint m_globalUBO   = 0;
     GLuint m_materialUBO = 0;
 
-    // ★ 核心：全局 DSA 句柄
+    // 核心：全局 DSA 句柄
     GLuint m_globalVAO = 0;
     GLuint m_globalVBO = 0;
     GLuint m_globalIBO = 0;
     GLuint m_indirectVBO = 0;
+
+    // 新增：全局几何体的字节容量，用于底层安全校验
+    size_t m_globalVboCapacity = 0;
+    size_t m_globalIboCapacity = 0;
 
     MeshPtr m_skyCubeMesh = nullptr;
 

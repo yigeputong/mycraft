@@ -89,6 +89,7 @@ private:
         uint32_t firstIndex   = 0;
         int32_t  vertexOffset = 0;
         uint32_t indexCount   = 0;
+        uint32_t vertexCount  = 0;
     };
     std::unordered_map<uint64_t, ChunkMeshData> m_chunkMeshes;
     std::vector<Eng::client::rhi::DrawIndexedIndirectCommand> m_indirectCommands;
@@ -96,9 +97,18 @@ private:
 
     std::unordered_map<uint64_t, game::client::MeshResult> m_allMeshes;
 
+    size_t m_globalVertexCursor   = 0;
+    size_t m_globalIndexCursor    = 0;
+    size_t m_globalVertexCapacity = 0; // 当前 VBO 的容量（顶点数）
+    size_t m_globalIndexCapacity  = 0; // 当前 IBO 的容量（索引数）
+    // 记录废弃的内存量
+    size_t m_garbageVertices = 0;
+    size_t m_garbageIndices  = 0;
+
     client::MeshManager m_meshManager;
     void QueueChunkMeshTask(uint64_t key);
     void DrainMeshResults();
+    void RebuildGlobalGeometry();
 
     client::LodManager m_lodManager;
 

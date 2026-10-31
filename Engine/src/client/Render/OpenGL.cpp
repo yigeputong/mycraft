@@ -23,7 +23,7 @@
 #define CHECK_GL(tag) do { \
     GLenum e; \
     while ((e = glGetError()) != GL_NO_ERROR) \
-        logError(m_logger, "[GL] " << tag << " error=" << e); \
+        logError(m_logger, "[GL] " << (tag) << " error=" << e); \
 } while(0)
 
 namespace {
@@ -117,6 +117,9 @@ void OpenGLAPI::Shutdown() {
     if (m_globalVBO)   glDeleteBuffers(1, &m_globalVBO);
     if (m_globalIBO)   glDeleteBuffers(1, &m_globalIBO);
     if (m_indirectVBO) glDeleteBuffers(1, &m_indirectVBO);
+
+    m_globalVboCapacity = 0;
+    m_globalIboCapacity = 0;
 
     if (m_fullscreenVAO) glDeleteVertexArrays(1, &m_fullscreenVAO);
     if (m_fullscreenVBO) glDeleteBuffers(1, &m_fullscreenVBO);
@@ -250,17 +253,55 @@ void OpenGLAPI::SetGlobalState(const GlobalState& state) {
 // ==========================================
 // MDI 终极接口
 // ==========================================
-void OpenGLAPI::UploadGlobalGeometry(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) {
+void OpenGLAPI::UploadGlobalGeometry(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices,
+                                     size_t& outVboCapacity, size_t& outIboCapacity) {
     if (!m_globalVBO) glCreateBuffers(1, &m_globalVBO);
     if (!m_globalIBO) glCreateBuffers(1, &m_globalIBO);
 
-    // 直接通过 DSA 将数据灌入显存
-    glNamedBufferData(m_globalVBO, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
-    glNamedBufferData(m_globalIBO, indices.size() * sizeof(uint32_t), indices.data(), GL_STATIC_DRAW);
+    size_t reqVboBytes = vertices.size() * sizeof(Vertex);
+    size_t reqIboBytes = indices.size() * sizeof(uint32_t);
 
-    // 通过 DSA 将 VBO 和 IBO 绑定到全局 VAO
-    glVertexArrayVertexBuffer(m_globalVAO, 0, m_globalVBO, 0, sizeof(Vertex));
-    glVertexArrayElementBuffer(m_globalVAO, m_globalIBO);
+    size_t vboBytes = std::max(static_cast<size_t>(reqVboBytes * 2.0f), (size_t)(128 * 1024 * 1024));
+    size_t iboBytes = std::max(static_cast<size_t>(reqIboBytes * 2.0f), (size_t)(32 * 1024 * 1024));
+
+    if (m_globalVboCapacity < vboBytes || m_globalIboCapacity < iboBytes) {
+        glNamedBufferData(m_globalVBO, vboBytes, nullptr, GL_DYNAMIC_DRAW);
+        glNamedBufferData(m_globalIBO, iboBytes, nullptr, GL_DYNAMIC_DRAW);
+        m_globalVboCapacity = vboBytes;
+        m_globalIboCapacity = iboBytes;
+        glVertexArrayVertexBuffer(m_globalVAO, 0, m_globalVBO, 0, sizeof(Vertex));
+        glVertexArrayElementBuffer(m_globalVAO, m_globalIBO);
+    }
+
+    // ★ 无论是否扩容，必须强制覆盖写入！
+    if (!vertices.empty()) glNamedBufferSubData(m_globalVBO, 0, reqVboBytes, vertices.data());
+    if (!indices.empty())  glNamedBufferSubData(m_globalIBO, 0, reqIboBytes, indices.data());
+
+    outVboCapacity = m_globalVboCapacity;
+    outIboCapacity = m_globalIboCapacity;
+}
+
+void OpenGLAPI::UpdateGlobalGeometry(uint32_t vertexOffset, const std::vector<Vertex>& vertices,
+                                     uint32_t indexOffset, const std::vector<uint32_t>& indices) {
+    if (vertices.empty() && indices.empty()) return;
+
+    size_t reqVboBytes = (vertexOffset + vertices.size()) * sizeof(Vertex);
+    size_t reqIboBytes = (indexOffset + indices.size()) * sizeof(uint32_t);
+
+    if (reqVboBytes > m_globalVboCapacity || reqIboBytes > m_globalIboCapacity) {
+        std::string err = "[OpenGL] UpdateGlobalGeometry out of bounds! "
+                          "Req VBO: " + std::to_string(reqVboBytes) + " / " + std::to_string(m_globalVboCapacity) + ", "
+                          "Req IBO: " + std::to_string(reqIboBytes) + " / " + std::to_string(m_globalIboCapacity);
+        logFatal(m_logger, err);
+        throw std::out_of_range(err);
+    }
+
+    if (!vertices.empty()) {
+        glNamedBufferSubData(m_globalVBO, vertexOffset * sizeof(Vertex), vertices.size() * sizeof(Vertex), vertices.data());
+    }
+    if (!indices.empty()) {
+        glNamedBufferSubData(m_globalIBO, indexOffset * sizeof(uint32_t), indices.size() * sizeof(uint32_t), indices.data());
+    }
 }
 
 void OpenGLAPI::UploadIndirectCommands(const std::vector<rhi::DrawIndexedIndirectCommand>& commands) {

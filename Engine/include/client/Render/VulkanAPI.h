@@ -44,7 +44,10 @@ public:
     void SetGlobalState(const GlobalState& state) override;
 
     // ★ MDI 接口
-    void UploadGlobalGeometry(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) override;
+    void UploadGlobalGeometry(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices,
+                                size_t& outVboCapacity, size_t& outIboCapacity) override;
+    void UpdateGlobalGeometry(uint32_t vertexOffset, const std::vector<Vertex>& vertices,
+                            uint32_t indexOffset, const std::vector<uint32_t>& indices) override;
     void UploadIndirectCommands(const std::vector<rhi::DrawIndexedIndirectCommand>& commands) override;
     void DrawMDI(const ShaderPtr& shader, const Material& material, uint32_t commandCount) override;
 
