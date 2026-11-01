@@ -87,8 +87,26 @@ void OpenGLRenderService::Initialize(int width, int height, tool::Window* window
     if (m_initialized) return;
     m_window = window;
 
+    // 1. 创建 GL context（Window 里只创建了带 SDL_WINDOW_OPENGL 的窗口）
+    m_glContext = SDL_GL_CreateContext(m_window->GetSDLWindow());
+    if (!m_glContext) {
+        throw std::runtime_error(std::string("SDL_GL_CreateContext failed: ") + SDL_GetError());
+    }
+    // CreateContext 成功后自动 make current，这里再显式一次以防万一
+    SDL_GL_MakeCurrent(m_window->GetSDLWindow(), m_glContext);
+
+    // 2. VSync 由 WindowConfig 控制（现在也在本类初始化，重启即可生效）
+    SDL_GL_SetSwapInterval(m_window->GetConfigs().vsync ? 1 : 0);
+
+    // 3. 加载 GL 函数指针
+    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) {
+        SDL_GL_DestroyContext(m_glContext);
+        m_glContext = nullptr;
+        throw std::runtime_error("gladLoadGLLoader failed");
+    }
+
     SetViewport(0, 0, width, height);
-    
+
     // 创建默认丢失纹理
     auto missingPixels = GenerateMissingTexturePixels();
     m_defaultTexturePtr = CreateTexture(missingPixels.data(), 16, 16);
@@ -144,6 +162,11 @@ void OpenGLRenderService::Shutdown() {
         if (shader.program) glDeleteProgram(shader.program);
     }
     m_shaders.clear();
+
+    if (m_glContext) {
+        SDL_GL_DestroyContext(m_glContext);
+        m_glContext = nullptr;
+    }
 
     m_initialized = false;
     logInfo(m_logger, "[OpenGL] Shutdown complete");
@@ -793,19 +816,30 @@ GLuint OpenGLRenderService::LinkProgram(GLuint vertexShader, GLuint fragmentShad
 }
 
 bool OpenGLRenderService::InitImGuiBackend() {
+    if (m_imguiInitialized) return true;
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    if (!ImGui_ImplSDL3_InitForOpenGL(m_window->GetSDLWindow(), m_window->GetGLContext())) return false;
-    if (!ImGui_ImplOpenGL3_Init("#version 460 core")) return false;
+
+    if (!ImGui_ImplSDL3_InitForOpenGL(m_window->GetSDLWindow(), m_glContext)) {
+        return false;
+    }
+    if (!ImGui_ImplOpenGL3_Init("#version 460 core")) {
+        ImGui_ImplSDL3_Shutdown();
+        return false;
+    }
+    m_imguiInitialized = true;
     return true;
 }
 
 void OpenGLRenderService::ShutdownImGuiBackend() {
-    if (ImGui::GetCurrentContext() == nullptr) return;
+    if (!m_imguiInitialized) return;
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
+    // 注意：ImGui::DestroyContext 由 Main 或 Engine 统一处理（本类不管）
+    m_imguiInitialized = false;
 }
 
 void OpenGLRenderService::ImGuiNewFrame() {
@@ -837,6 +871,7 @@ DeviceInfo OpenGLRenderService::GetDeviceInfo() const {
 }
 
 void OpenGLRenderService::ApplySettings(const tool::WindowConfig& win, [[maybe_unused]] const tool::RenderConfig& render) {
+    if (!m_glContext) return;
     SDL_GL_SetSwapInterval(win.vsync ? 1 : 0);
 }
 

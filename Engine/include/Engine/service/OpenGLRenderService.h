@@ -3,6 +3,7 @@
 #include "Engine/service/IRenderService.h"
 #include "Engine/tool/Log.h"
 #include <glad/glad.h>
+#include <SDL3/SDL_video.h>
 #include <string>
 #include <memory>
 #include <unordered_map>
@@ -27,13 +28,13 @@ public:
 
     // MDI 接口
     void UploadGlobalGeometry(std::span<const Vertex> vertices, std::span<const uint32_t> indices,
-                                size_t& outVboCapacity, size_t& outIboCapacity) override;
+                              size_t& outVboCapacity, size_t& outIboCapacity) override;
     void UpdateGlobalGeometry(uint32_t vertexOffset, std::span<const Vertex> vertices,
-                                uint32_t indexOffset, std::span<const uint32_t> indices) override;
+                              uint32_t indexOffset, std::span<const uint32_t> indices) override;
     void UploadIndirectCommands(const std::vector<rhi::DrawIndexedIndirectCommand>& commands) override;
     void DrawMDI(const ShaderPtr& shader, const Material& material, uint32_t commandCount) override;
 
-    // 原有资源创建
+    // 资源创建
     MeshPtr CreateMesh(const MeshData& data) override;
     TexturePtr CreateTexture(const uint8_t* rgba, int w, int h) override;
     ShaderPtr CreateShader(const ShaderCreateInfo& info) override;
@@ -74,6 +75,8 @@ public:
 
 private:
     bool m_initialized = false;
+    bool m_imguiInitialized = false;          // ShutdownImGuiBackend 幂等守卫
+    SDL_GLContext m_glContext = nullptr;      // 由本类拥有，取代 Window::m_glContext
 
     MeshHandle m_nextMeshHandle = 1;
     TextureHandle m_nextTextureHandle = 1;
@@ -97,9 +100,9 @@ private:
 
     struct ShaderDataInternal {
         GLuint program = 0;
-        GLuint perObjectUBO = 0;                                       // 仅 Default 模式非零
-        rhi::PerObjectMode perObjectMode = rhi::PerObjectMode::None;   // 新增
-        rhi::PipelineType  pipelineType  = rhi::PipelineType::Opaque;  // 新增，DrawMesh 里用
+        GLuint perObjectUBO = 0;
+        rhi::PerObjectMode perObjectMode = rhi::PerObjectMode::None;
+        rhi::PipelineType  pipelineType  = rhi::PipelineType::Opaque;
     };
 
     struct FramebufferInternal {
@@ -122,13 +125,11 @@ private:
     GLuint m_globalUBO   = 0;
     GLuint m_materialUBO = 0;
 
-    // 核心：全局 DSA 句柄
     GLuint m_globalVAO = 0;
     GLuint m_globalVBO = 0;
     GLuint m_globalIBO = 0;
     GLuint m_indirectVBO = 0;
 
-    // 新增：全局几何体的字节容量，用于底层安全校验
     size_t m_globalVboCapacity = 0;
     size_t m_globalIboCapacity = 0;
 
@@ -141,7 +142,7 @@ private:
     std::unique_ptr<tool::Log> m_logger = std::make_unique<tool::Log>();
     DeviceInfo m_deviceInfo;
 
-    tool::Window* m_window;
+    tool::Window* m_window = nullptr;
     int m_viewportX = 0, m_viewportY = 0;
     int m_viewportWidth = 0, m_viewportHeight = 0;
     float m_clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
@@ -161,7 +162,7 @@ private:
     GLuint CompileShader(GLenum type, const std::string& source);
     GLuint LinkProgram(GLuint vertexShader, GLuint fragmentShader);
     std::string ReadFile(const std::string& path);
-    
+
     GLuint ResolveTexture(const TexturePtr& tex) const {
         if (tex) {
             auto it = m_textures.find(tex->GetHandle());
@@ -175,8 +176,8 @@ private:
                 return it->second.textureID;
             }
         }
-        return 0; 
+        return 0;
     }
 };
 
-}
+} // namespace Eng::service

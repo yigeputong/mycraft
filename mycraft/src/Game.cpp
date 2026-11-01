@@ -209,19 +209,14 @@ void MyGame::RecreateFBOs(int w, int h) {
     m_mainFbo = renderer->CreateFramebuffer(info);
 }
 
-bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
-    renderer = mainWin->GetAPI();
-    if (!renderer) {
-        logError(logger, "[Game] renderer is null");
+bool MyGame::SetupRenderer(Eng::Engine& engine) {
+    if (!engine.CreateRenderService()) {
+        logError(logger, "[Game] Engine failed to create render service");
         return false;
     }
-
-    try {
-        renderer->Initialize(mainWin->GetConfigs().windowWidth,
-                            mainWin->GetConfigs().windowHeight,
-                            mainWin);
-    } catch (const std::exception& e) {
-        logFatal(logger, "[RenderAPI] RenderAPI init failed: " << e.what());
+    renderer = engine.GetRenderService();
+    if (!renderer) {
+        logError(logger, "[Game] renderer is null");
         return false;
     }
 
@@ -236,8 +231,6 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
     logInfo(logger, "[RenderAPI] Shader lang: " << m_deviceInfo.shadingLanguage);
 
     renderer->SetClearColor(0.125f, 0.125f, 0.125f, 0.0f);
-    
-    // 初始化现代化管线（包含了 DSA VAO、MDI Buffer 等）
     renderer->InitPipelines();
 
     if (!renderer->InitImGuiBackend()) {
@@ -292,7 +285,21 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
         logInfo(logger, "[Game] Loaded Unifont with all BMP glyphs at size " << scaledFontSize);
     }
 
-    m_assetManager = std::make_unique<Eng::service::AssetService>(renderer);
+    // ★ 从 Engine 拿 AssetService（生命周期归 Engine）
+    m_assetManager = engine.GetAssetService();
+    if (!m_assetManager) {
+        logError(logger, "[Game] AssetService is null");
+        return false;
+    }
+
+    // ★ 创建 SceneRenderer（构造会加载 'mesh' shader；失败抛异常）
+    try {
+        m_sceneRenderer = std::make_unique<Eng::client::SceneRenderer>(renderer, m_assetManager);
+    } catch (const std::exception& e) {
+        logError(logger, "[Game] SceneRenderer init failed: " << e.what());
+        return false;
+    }
+
     m_playerTexture = m_assetManager->LoadTexture("assets/textures/entity/player.png");
 
     const auto& pixels = client::AtlasPixels();
@@ -304,6 +311,9 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
         return false;
     }
     logInfo(logger, "[MyGame] atlas texture created");
+
+    // ★ 把图集注入 SceneRenderer
+    m_sceneRenderer->SetAtlasTexture(m_atlasTexture);
 
     RecreateFBOs(mainWin->GetConfigs().windowPixelWidth, mainWin->GetConfigs().windowPixelHeight);
     if (!m_mainFbo) {
@@ -318,21 +328,16 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
 // Shader
 // ============================================================
 void MyGame::SetupShaders() {
-    // mesh 和 lod 默认就是 Opaque + Standard，利用默认参数即可
-    m_cubeShader = m_assetManager->LoadShader(
-        m_assetManager->MakeShaderCreateInfo("mesh"));
-        
+    // 'mesh' shader 由 SceneRenderer 内部加载（构造时），此处只加载其余 shader
+
     m_lodShader = m_assetManager->LoadShader(
         m_assetManager->MakeShaderCreateInfo("lod"));
-        
-    // 天空盒必须显式指定 Skybox 管线（关闭深度写入与背面剔除）
-    // 以及 Skybox 顶点布局（只读取 Position 属性）
+
     m_skyShader = m_assetManager->LoadShader(
-        m_assetManager->MakeShaderCreateInfo("sky", 
-            Eng::service::rhi::PipelineType::Skybox, 
+        m_assetManager->MakeShaderCreateInfo("sky",
+            Eng::service::rhi::PipelineType::Skybox,
             Eng::service::rhi::VertexLayout::Skybox));
 
-    // SetupShaders
     m_entityShader = m_assetManager->LoadShader([&]{
         auto ci = m_assetManager->MakeShaderCreateInfo("entity");
         ci.pipelineType   = Eng::service::rhi::PipelineType::Opaque;
@@ -346,13 +351,12 @@ void MyGame::SetupShaders() {
         ci.perObjectMode  = Eng::service::rhi::PerObjectMode::Default;
         return ci;
     }());
-            
-    // 顺手检查一下 Shader 是否加载成功，避免后续绑定空指针
-    if (!m_cubeShader || !m_skyShader || !m_lodShader || !m_entityShader || !m_handShader) {
+
+    if (!m_skyShader || !m_lodShader || !m_entityShader || !m_handShader) {
         std::string err = "核心着色器加载失败！请检查 assets/shaders/build/ 目录下是否存在对应的 SPIR-V (.spv) 文件。";
         logFatal(logger, "[MyGame] " << err);
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Shader Load Error", err.c_str(), nullptr);
-        throw std::runtime_error(err); // 抛出异常，让引擎捕获并退出
+        throw std::runtime_error(err);
     }
 }
 
@@ -534,16 +538,17 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         }
     );
 
-    for (auto it = m_allMeshes.begin(); it != m_allMeshes.end(); ) {
-        if (m_world.GetChunk(it->first) == nullptr) {
-            it = m_allMeshes.erase(it);
-            m_globalGeometryDirty = true; // 需要重新构建大 Buffer
+    // 通知 SceneRenderer 清理已从世界卸载的 chunk
+    for (auto it = m_knownSceneChunks.begin(); it != m_knownSceneChunks.end(); ) {
+        if (m_world.GetChunk(*it) == nullptr) {
+            if (m_sceneRenderer) m_sceneRenderer->OnChunkUnloaded(*it);
+            it = m_knownSceneChunks.erase(it);
         } else {
             ++it;
         }
     }
 
-    auto dirtyKeys = m_world.FetchDirtyChunks(std::numeric_limits<size_t>::max()); 
+    auto dirtyKeys = m_world.FetchDirtyChunks(std::numeric_limits<size_t>::max());
     for (uint64_t key : dirtyKeys) {
         auto* cc = m_world.GetChunk(key);
         if (cc) QueueChunkMeshTask(key);
@@ -579,7 +584,6 @@ void MyGame::OnRender(Eng::Engine& engine) {
     m_globalState.aoStrength  = engine.GetConfig().render.m_aoStrength;
     renderer->SetGlobalState(m_globalState);
 
-    // ★ 清屏颜色必须在 BeginFrame 之前设置（Vulkan 的 BeginFrame 会把它写入 clearValue）
     if (m_state == GameState::Playing) {
         renderer->SetClearColor(0.5f, 0.7f, 1.0f, 1.0f);
     } else {
@@ -589,52 +593,21 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->BeginFrame();
 
     if (m_state == GameState::Playing) {
-        Eng::service::Material mat; mat.diffuse = m_atlasTexture;
-
-        // ==========================================================
-        // 1. 地形 MDI
-        // ==========================================================
-        if (m_globalGeometryDirty) {
-            RebuildGlobalGeometry();
-            m_globalGeometryDirty = false;
+        // 1. 地形（SceneRenderer 内部：视锥剔除 + MDI 提交）
+        if (m_sceneRenderer) {
+            m_sceneRenderer->Render(projection * view, cameraPos);
         }
 
-        m_indirectCommands.clear();
-        for (const auto& [key, cc] : m_world.GetChunks()) {
-            if (!AabbInFrustum(cc.aabbMin, cc.aabbMax)) continue;
-            auto it = m_chunkMeshes.find(key);
-            if (it == m_chunkMeshes.end() || it->second.indexCount == 0) continue;
-
-            Eng::service::rhi::DrawIndexedIndirectCommand cmd{};
-            cmd.indexCount    = it->second.indexCount;
-            cmd.instanceCount = 1;
-            cmd.firstIndex    = it->second.firstIndex;
-            
-            // ★ 核心修复：因为 DrainMeshResults 已经全局化了索引，这里的偏移必须是 0！
-            cmd.vertexOffset  = 0; 
-            
-            m_indirectCommands.push_back(cmd);
-        }
-
-        if (!m_indirectCommands.empty()) {
-            renderer->UploadIndirectCommands(m_indirectCommands);
-            renderer->DrawMDI(m_cubeShader, mat, static_cast<uint32_t>(m_indirectCommands.size()));
-        }
-
-        // ==========================================================
         // 2. LOD
-        // ==========================================================
         Eng::service::Material lodMat; lodMat.diffuse = m_atlasTexture;
         m_lodManager.CollectVisibleMeshes(m_frustum, m_visibleLodMeshes);
         if (!m_visibleLodMeshes.empty()) {
             for (const auto& mesh : m_visibleLodMeshes) {
-                renderer->DrawMesh(mesh, m_lodShader, lodMat); // 不用 PerObject，用默认单位矩阵
+                renderer->DrawMesh(mesh, m_lodShader, lodMat);
             }
         }
 
-        // ==========================================================
         // 3. 其他玩家（entity shader）
-        // ==========================================================
         if (!m_playerMesh) m_playerMesh = BuildPlayerMesh();
         Eng::service::Material playerMat; playerMat.diffuse = m_playerTexture;
         for (auto& [id, ps] : m_otherPlayers) {
@@ -644,9 +617,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
             renderer->DrawMesh(m_playerMesh, m_entityShader, playerMat, data);
         }
 
-        // ==========================================================
         // 4. 掉落物（entity shader）
-        // ==========================================================
         if (!m_itemEntities.empty()) {
             std::unordered_map<BlockId, std::vector<Eng::service::rhi::PerObjectData>> instances;
             for (const auto& [id, e] : m_itemEntities) {
@@ -668,14 +639,10 @@ void MyGame::OnRender(Eng::Engine& engine) {
             }
         }
 
-        // ==========================================================
         // 5. 天空盒
-        // ==========================================================
         renderer->DrawSkybox(m_skyShader);
 
-        // ==========================================================
         // 6. 第一人称手部 / 手持物品（hand shader）
-        // ==========================================================
         if (!m_handMesh) m_handMesh = BuildHandMesh();
 
         glm::vec3 basePos(0.5f, -0.5f, -1.0f);
@@ -709,7 +676,8 @@ void MyGame::OnRender(Eng::Engine& engine) {
                     itemLocalModel = glm::translate(itemLocalModel, glm::vec3(0.0f, 0.2f, -0.5f));
                     itemLocalModel = glm::scale(itemLocalModel, glm::vec3(0.5f));
                     glm::mat4 itemModel = glm::inverse(view) * itemLocalModel;
-                    renderer->DrawMesh(itemMesh, m_handShader, mat, { .model = itemModel });
+                    Eng::service::Material handItemMat; handItemMat.diffuse = m_atlasTexture;
+                    renderer->DrawMesh(itemMesh, m_handShader, handItemMat, { .model = itemModel });
                 }
             }
         }
@@ -739,14 +707,11 @@ void MyGame::ReturnToMainMenu() {
 
     m_lodManager.Clear();
 
-    // ★ 清理 MDI 数据
-    m_chunkMeshes.clear();
-    m_globalVertices.clear();
-    m_globalIndices.clear();
-    m_globalGeometryDirty = true;
-    m_indirectCommands.clear();
-    m_globalVertexCursor = 0;
-    m_globalIndexCursor = 0;
+    // ★ 地形数据下沉到 SceneRenderer，统一清理
+    if (m_sceneRenderer) {
+        m_sceneRenderer->Clear();
+    }
+    m_knownSceneChunks.clear();
 
     cameraPos   = glm::vec3(0.0f, 40.0f, 0.0f);
     cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
@@ -777,18 +742,14 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
     m_world.Clear();
     m_itemEntities.clear();
     m_otherPlayers.clear();
-    
-    // ★ 清理 MDI 数据
-    m_chunkMeshes.clear();
-    m_globalVertices.clear();
-    m_globalIndices.clear();
-    m_globalGeometryDirty = true;
-    m_indirectCommands.clear();
-    m_globalVertexCursor = 0;
-    m_globalIndexCursor = 0;
+
+    // ★ 地形数据下沉到 SceneRenderer，统一清理
+    if (m_sceneRenderer) {
+        m_sceneRenderer->Clear();
+    }
+    m_knownSceneChunks.clear();
 
     m_mainFbo.reset();
-    m_cubeShader.reset();
     m_skyShader.reset();
     m_lodShader.reset();
     m_entityShader.reset();
@@ -798,19 +759,20 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
     m_playerMesh.reset();
     m_handMesh.reset();
     m_itemMeshCache.clear();
-    
-    if (m_assetManager) {
-        m_assetManager.reset(); // 必须在这里 reset 掉 AssetService
-    }
+    m_sceneRenderer.reset();
 
-    auto* safeRenderer = mainWin ? mainWin->GetAPI() : nullptr;
-    if (safeRenderer) {
-        safeRenderer->ShutdownImGuiBackend();
-    }
-
-    renderer = nullptr;
-    winMgr->DestroyWindow(m_win);
-    mainWin = nullptr;
+    // ★ 以下全部删除（Engine 接管）：
+    //   if (m_assetManager) { m_assetManager.reset(); }
+    //   auto* safeRenderer = mainWin ? mainWin->GetAPI() : nullptr; safeRenderer->ShutdownImGuiBackend();
+    //   renderer = nullptr;
+    //   winMgr->DestroyWindow(m_win);
+    //   mainWin = nullptr;
+    // 这里只清空本地引用，防止悬空访问：
+    m_assetManager = nullptr;
+    renderer       = nullptr;
+    mainWin        = nullptr;
+    winMgr         = nullptr;
+    m_win          = 0;
 }
 
 // ============================================================
@@ -1188,133 +1150,32 @@ void MyGame::AddToInventory(BlockId id, int count) { // ★
 // Mesh 结果汇聚
 // ============================================================
 void MyGame::DrainMeshResults() {
-    std::vector<uint64_t> dirtyKeys;
-    size_t incomingVerts = 0, incomingInds = 0;
+    if (!m_sceneRenderer) return;
 
-    m_meshManager.DrainResults([this, &dirtyKeys, &incomingVerts, &incomingInds](game::client::MeshResult&& r) {
+    m_meshManager.DrainResults([this](game::client::MeshResult&& r) {
+        // 空 mesh：该 chunk 现在无可见几何体
         if (r.vertices.empty() || r.indices.empty()) {
-            auto it = m_chunkMeshes.find(r.chunkKey);
-            if (it != m_chunkMeshes.end() && it->second.indexCount > 0) {
-                m_garbageVertices += it->second.vertexCount;
-                m_garbageIndices  += it->second.indexCount;
-                it->second.indexCount = 0; 
-                it->second.vertexCount = 0;
-            }
-            m_allMeshes.erase(r.chunkKey);
+            m_sceneRenderer->OnChunkUnloaded(r.chunkKey);
+            m_knownSceneChunks.erase(r.chunkKey);
             return;
         }
-        
-        incomingVerts += r.vertices.size();
-        incomingInds += r.indices.size();
 
-        auto oldIt = m_allMeshes.find(r.chunkKey);
-        if (oldIt != m_allMeshes.end()) {
-            m_garbageVertices += oldIt->second.vertices.size();
-            m_garbageIndices  += oldIt->second.indices.size();
+        // aabb 从 ClientWorld 取（MeshResult 不带 aabb）
+        auto* cc = m_world.GetChunk(r.chunkKey);
+        if (!cc) {
+            // chunk 已被流式卸载，丢弃结果
+            return;
         }
-        
-        m_allMeshes[r.chunkKey] = std::move(r);
-        dirtyKeys.push_back(r.chunkKey);
+
+        m_sceneRenderer->OnChunkMeshReady(
+            r.chunkKey,
+            std::move(r.vertices),
+            std::move(r.indices),
+            cc->aabbMin,
+            cc->aabbMax);
+
+        m_knownSceneChunks.insert(r.chunkKey);
     });
-
-    if (dirtyKeys.empty()) return;
-
-    size_t maxVertices = m_globalVertexCapacity / sizeof(Eng::service::Vertex);
-    size_t maxIndices  = m_globalIndexCapacity / sizeof(uint32_t);
-
-    bool outOfCapacity = (m_globalVertexCursor + incomingVerts > maxVertices) ||
-                         (m_globalIndexCursor + incomingInds > maxIndices);
-                         
-    // 提高阈值，避免频繁卡顿
-    bool tooMuchGarbage = (m_garbageVertices > m_globalVertexCursor * 0.8) && (m_garbageVertices > 2000000);
-
-    if (outOfCapacity || tooMuchGarbage || m_globalVertexCursor == 0) {
-        // 走全量重建（注意：这里会同步更新 m_globalVertexCapacity）
-        RebuildGlobalGeometry();
-    } 
-    else {
-        // 增量追加
-        for (uint64_t key : dirtyKeys) {
-            const auto& meshResult = m_allMeshes[key];
-            if (meshResult.vertices.empty()) continue;
-            
-            uint32_t vOffset = m_globalVertexCursor;
-            uint32_t iOffset = m_globalIndexCursor;
-
-            // 生成全局索引
-            std::vector<uint32_t> globalizedIndices;
-            globalizedIndices.reserve(meshResult.indices.size());
-            for (uint32_t idx : meshResult.indices) {
-                globalizedIndices.push_back(idx + vOffset);
-            }
-
-            try {
-                renderer->UpdateGlobalGeometry(vOffset, meshResult.vertices, iOffset, globalizedIndices);
-            } catch (const std::out_of_range& e) {
-                logWarning(logger, "[MDI] Incremental failed: " << e.what() << ". Triggering rebuild.");
-                m_globalGeometryDirty = true; 
-                // ★ 绝对不要在这里重置游标，直接 return，由 OnRender 的 Rebuild 全量覆盖
-                return; 
-            }
-
-            // 只有 GPU 写入成功，才同步 CPU 端的数据
-            m_globalVertices.insert(m_globalVertices.end(), meshResult.vertices.begin(), meshResult.vertices.end());
-            m_globalIndices.insert(m_globalIndices.end(), globalizedIndices.begin(), globalizedIndices.end());
-            
-            m_chunkMeshes[key] = ChunkMeshData{
-                .firstIndex = iOffset,
-                .vertexOffset = 0,
-                .indexCount = static_cast<uint32_t>(meshResult.indices.size()),
-                .vertexCount = static_cast<uint32_t>(meshResult.vertices.size())
-            };
-            
-            m_globalVertexCursor += meshResult.vertices.size();
-            m_globalIndexCursor  += meshResult.indices.size();
-        }
-    }
-}
-
-void MyGame::RebuildGlobalGeometry() {
-    m_globalVertices.clear();
-    m_globalIndices.clear();
-    m_chunkMeshes.clear();
-    
-    m_globalVertexCursor = 0;
-    m_globalIndexCursor = 0;
-    m_garbageVertices = 0;
-    m_garbageIndices = 0;
-
-    for (auto& [key, meshResult] : m_allMeshes) {
-        if (meshResult.vertices.empty()) continue;
-
-        ChunkMeshData data;
-        data.firstIndex = m_globalIndexCursor;
-        data.vertexOffset = 0; 
-        data.indexCount = static_cast<uint32_t>(meshResult.indices.size());
-        data.vertexCount = static_cast<uint32_t>(meshResult.vertices.size());
-
-        uint32_t vOffset = m_globalVertexCursor;
-        
-        m_globalVertices.insert(m_globalVertices.end(), meshResult.vertices.begin(), meshResult.vertices.end());
-        
-        for (uint32_t idx : meshResult.indices) {
-            m_globalIndices.push_back(idx + vOffset);
-        }
-        
-        m_globalVertexCursor += meshResult.vertices.size();
-        m_globalIndexCursor  += meshResult.indices.size();
-        m_chunkMeshes[key] = data;
-    }
-
-    // ★ 核心修复：让 RHI 重新分配足够大的显存，并返回真实容量
-    renderer->UploadGlobalGeometry(m_globalVertices, m_globalIndices, m_globalVertexCapacity, m_globalIndexCapacity);
-    
-    // ★ 强制锁死主内存 Vector 的容量，绝对不允许后续增量插入时发生重分配
-    m_globalVertices.reserve(m_globalVertexCapacity / sizeof(Eng::service::Vertex));
-    m_globalIndices.reserve(m_globalIndexCapacity / sizeof(uint32_t));
-
-    logInfo(logger, "[MDI] Compacted. Active Verts: " << m_globalVertexCursor 
-            << ", VBO: " << m_globalVertexCapacity / 1024 / 1024 << " MB");
 }
 
 void MyGame::QueueChunkMeshTask(uint64_t key) {
@@ -1357,20 +1218,6 @@ void MyGame::UpdateFrustum(const glm::mat4& vp) {
         float len = glm::length(glm::vec3(p));
         if (len > 0.0f) p /= len;
     }
-}
-
-bool MyGame::AabbInFrustum(const glm::vec3& mn, const glm::vec3& mx) const {
-    for (const auto& p : m_frustum.planes) {
-        glm::vec3 n = glm::vec3(p);
-        float   d = p.w;
-        glm::vec3 v(
-            n.x >= 0 ? mx.x : mn.x,
-            n.y >= 0 ? mx.y : mn.y,
-            n.z >= 0 ? mx.z : mn.z
-        );
-        if (glm::dot(n, v) + d < 0.0f) return false;
-    }
-    return true;
 }
 
 } // namespace game

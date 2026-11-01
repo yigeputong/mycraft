@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/Engine.h"
+#include "Engine/client/SceneRenderer.h"
 #include "game/Protocol.h"
 #include "Engine/tool/Transport.h"
 #include "game/GameServer.h"
@@ -11,6 +12,7 @@
 #include "Engine/service/AssetService.h"
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <array>
 
@@ -38,8 +40,6 @@ private:
     Eng::service::IRenderService*   renderer = nullptr;
     uint32_t m_win = 0;
 
-    Eng::service::ShaderPtr      m_cubeShader;
-    Eng::service::TexturePtr     m_atlasTexture;
     Eng::service::ShaderPtr      m_skyShader;
     Eng::service::ShaderPtr      m_lodShader;
     Eng::service::ShaderPtr      m_entityShader;
@@ -48,7 +48,8 @@ private:
     Eng::service::FramebufferPtr m_mainFbo;
 
     Eng::service::TexturePtr     m_playerTexture;
-    std::unique_ptr<Eng::service::AssetService> m_assetManager;  
+    Eng::service::TexturePtr     m_atlasTexture;
+    Eng::service::AssetService*  m_assetManager = nullptr;   // ★ 归 Engine 所有
 
     void RecreateFBOs(int w, int h);
     Eng::service::GlobalState    m_globalState;
@@ -79,35 +80,14 @@ private:
     static constexpr float kDayLengthSec = 300.0f;
     float m_animTime = 0.0f;
 
-    // ==================== MDI 全局缓冲与指令 ====================
-    std::vector<Eng::service::Vertex> m_globalVertices;
-    std::vector<uint32_t>            m_globalIndices;
-    bool m_globalGeometryDirty = false;
-    
-    struct ChunkMeshData {
-        uint32_t firstIndex   = 0;
-        int32_t  vertexOffset = 0;
-        uint32_t indexCount   = 0;
-        uint32_t vertexCount  = 0;
-    };
-    std::unordered_map<uint64_t, ChunkMeshData> m_chunkMeshes;
-    std::vector<Eng::service::rhi::DrawIndexedIndirectCommand> m_indirectCommands;
-    std::vector<Eng::service::rhi::DrawIndexedIndirectCommand> m_lodIndirectCommands;
-
-    std::unordered_map<uint64_t, game::client::MeshResult> m_allMeshes;
-
-    size_t m_globalVertexCursor   = 0;
-    size_t m_globalIndexCursor    = 0;
-    size_t m_globalVertexCapacity = 0; // 当前 VBO 的容量（顶点数）
-    size_t m_globalIndexCapacity  = 0; // 当前 IBO 的容量（索引数）
-    // 记录废弃的内存量
-    size_t m_garbageVertices = 0;
-    size_t m_garbageIndices  = 0;
+    // ==================== ★ 地形渲染交给 SceneRenderer ====================
+    std::unique_ptr<Eng::client::SceneRenderer> m_sceneRenderer;
+    // 已提交给 SceneRenderer 的 chunk key（用于检测世界卸载时同步通知）
+    std::unordered_set<uint64_t> m_knownSceneChunks;
 
     client::MeshManager m_meshManager;
     void QueueChunkMeshTask(uint64_t key);
     void DrainMeshResults();
-    void RebuildGlobalGeometry();
 
     client::LodManager m_lodManager;
 
@@ -131,7 +111,6 @@ private:
 
     game::client::Frustum m_frustum;
     void UpdateFrustum(const glm::mat4& vp);
-    bool AabbInFrustum(const glm::vec3& mn, const glm::vec3& mx) const;
 
     Eng::service::MeshPtr m_playerMesh;
     Eng::service::MeshPtr BuildPlayerMesh();
@@ -154,7 +133,7 @@ private:
     };
     std::unordered_map<uint32_t, ClientItemEntity> m_itemEntities;
     std::unordered_map<BlockId, Eng::service::MeshPtr> m_itemMeshCache;
-    
+
     Eng::service::MeshPtr GetOrCreateItemMesh(BlockId id);
     Eng::service::MeshPtr BuildItemCubeMesh(BlockId id);
 

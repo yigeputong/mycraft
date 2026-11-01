@@ -1,35 +1,27 @@
 #include "Engine/tool/Window.h"
 #include "Engine/service/OpenGLRenderService.h"
 #include "Engine/service/VulkanRenderService.h"
+
 #include <SDL3/SDL_video.h>
-#include <glad/glad.h>
-#include <iostream>
+#include <stdexcept>
+#include <format>
 
 namespace Eng::tool {
 
 Window::Window(const WindowConfig& config)
-    :m_config(config) {
-    m_createSuccess = CreateWindow();    
+    : m_config(config) {
+    m_createSuccess = CreateWindow();
 }
 
 Window::~Window() {
-    m_renderapi.reset();
-    if (m_glContext) {
-        SDL_GL_DestroyContext(m_glContext);
-        m_glContext = nullptr;
-    }
     if (m_window) {
         SDL_DestroyWindow(m_window);
         m_window = nullptr;
     }
 }
 
-bool Window::IsValid() {
+bool Window::IsValid() const {
     return m_createSuccess;
-}
-
-void Window::SwapBuffers() {
-    SDL_GL_SwapWindow(m_window);
 }
 
 void Window::SetRelativeMode(bool enabled) {
@@ -40,9 +32,8 @@ void Window::SetFullscreen(bool enabled) {
     SDL_Window* sdlWin = m_window;
 
     if (enabled) {
-        // 保存当前窗口尺寸（用于退出全屏时恢复）
         SDL_GetWindowSize(sdlWin, &m_windowedWidth, &m_windowedHeight);
-        SDL_SetWindowFullscreen(sdlWin, true);   // 就这一行
+        SDL_SetWindowFullscreen(sdlWin, true);
     } else {
         SDL_SetWindowFullscreen(sdlWin, false);
         SDL_SetWindowBordered(sdlWin, true);
@@ -52,14 +43,11 @@ void Window::SetFullscreen(bool enabled) {
 
     SDL_GetWindowSize(sdlWin, &m_config.windowWidth, &m_config.windowHeight);
     SDL_GetWindowSizeInPixels(sdlWin, &m_config.windowPixelWidth, &m_config.windowPixelHeight);
-
-    if (m_renderapi) {
-        m_renderapi->SetViewport(0, 0, m_config.windowPixelWidth, m_config.windowPixelHeight);
-    }
+    // 删除了 m_renderapi->SetViewport(...)：BeginFrame 每帧自动按窗口尺寸刷新
 }
 
 bool Window::CreateWindow() {
-    // ★ 1. 处理 AUTO 和降级逻辑
+    // ★ 1. API 探测（仅决定 apitype，不创建任何 context / RenderService）
     if (m_config.apitype == RenderAPItype::AUTO) {
         auto vk = service::VulkanRenderService::Probe();
         if (vk.available) {
@@ -68,12 +56,10 @@ bool Window::CreateWindow() {
             auto gl = service::OpenGLRenderService::Probe();
             if (gl.available) {
                 m_config.apitype = RenderAPItype::OPENGL;
-                // 记录降级原因，供 MyGame 读取并弹窗
                 m_fallbackReason = "Vulkan 不可用，已自动降级到 OpenGL。\n原因: " + vk.reason;
             } else {
-                // 既然 Probe 的 reason 里已经包含了 (4.5 / 1.4) 等信息，直接拼接即可
                 throw std::runtime_error(std::format(
-                    "硬件不支持任何可用的图形 API。\nVulkan: {}\nOpenGL: {}", 
+                    "硬件不支持任何可用的图形 API。\nVulkan: {}\nOpenGL: {}",
                     vk.reason, gl.reason));
             }
         }
@@ -86,7 +72,7 @@ bool Window::CreateWindow() {
                 m_fallbackReason = "Vulkan 不可用，已自动降级到 OpenGL。\n原因: " + vk.reason;
             } else {
                 throw std::runtime_error(std::format(
-                    "强制使用 Vulkan 失败，且 OpenGL 不可用。\nVulkan: {}\nOpenGL: {}", 
+                    "强制使用 Vulkan 失败，且 OpenGL 不可用。\nVulkan: {}\nOpenGL: {}",
                     vk.reason, gl.reason));
             }
         }
@@ -98,7 +84,7 @@ bool Window::CreateWindow() {
         }
     }
 
-    // ★ 2. 根据决定好的 API 创建窗口
+    // ★ 2. 按 apitype 创建原生窗口
     switch (m_config.apitype) {
     case RenderAPItype::OPENGL:
         return CreateOpenGLWindow();
@@ -110,6 +96,7 @@ bool Window::CreateWindow() {
 }
 
 bool Window::CreateOpenGLWindow() {
+    // 属性留在创建 context 前设置；这些属性是 SDL 全局状态，直到下次修改
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, service::OpenGLRenderService::api_major);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, service::OpenGLRenderService::api_minor);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
@@ -120,28 +107,11 @@ bool Window::CreateOpenGLWindow() {
         m_config.windowHeight,
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
     );
-
     if (!m_window) {
         SDL_Log("SDL_CreateWindow Error: %s", SDL_GetError());
         return false;
     }
-
-    m_glContext = SDL_GL_CreateContext(m_window);
-    if (!m_glContext) {
-        SDL_Log("OpenGL Context Error: %s", SDL_GetError());
-        SDL_DestroyWindow(m_window);
-        SDL_Quit();
-        return false;
-    }
-
-    SDL_GL_SetSwapInterval(m_config.vsync ? 1 : 0);
-
-    if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
-        std::cout << "Failed to initalize GLAD." << '\n';
-        return false;
-    }
-
-    m_renderapi = std::make_unique<service::OpenGLRenderService>();
+    // context / glad / renderapi 全部挪到 OpenGLRenderService::Initialize
     return true;
 }
 
@@ -152,14 +122,11 @@ bool Window::CreateVulkanWindow() {
         m_config.windowHeight,
         SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
     );
-
     if (!m_window) {
         SDL_Log("SDL_CreateWindow Error: %s", SDL_GetError());
         return false;
     }
-
-    m_renderapi = std::make_unique<service::VulkanRenderService>();
     return true;
 }
 
-}
+} // namespace Eng::tool
