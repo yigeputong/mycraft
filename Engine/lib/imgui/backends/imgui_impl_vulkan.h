@@ -32,7 +32,7 @@
 // [Configuration] in order to use a custom Vulkan function loader:
 // (1) You'll need to disable default Vulkan function prototypes.
 //     We provide a '#define IMGUI_IMPL_VULKAN_NO_PROTOTYPES' convenience configuration flag.
-//     In order to make sure this is visible from the imgui_impl_vulkan.cpp compilation unit:
+//     In order to make sure this is visible from the imgui_impl_VulkanRenderService.cpp compilation unit:
 //     - Add '#define IMGUI_IMPL_VULKAN_NO_PROTOTYPES' in your imconfig.h file
 //     - Or as a compilation flag in your build system
 //     - Or uncomment here (not recommended because you'd be modifying imgui sources!)

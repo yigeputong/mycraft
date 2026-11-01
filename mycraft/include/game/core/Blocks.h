@@ -1,5 +1,5 @@
 #pragma once
-#include "BlockRegistry.h"
+#include "game/core/BlockRegistry.h"
 #include <map>
 
 namespace game {

@@ -1,50 +1,52 @@
 # ============================================================
 # engine-core：日志 / 平台 / 配置
-# 无图形、无网络，server / client 都能用
 # ============================================================
 add_library(engine-core STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/Log.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/Platform.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tool/Log.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tool/Platform.cpp
 )
-target_include_directories(engine-core PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+target_link_libraries(engine-core 
+    PUBLIC SDL3::SDL3
+    PRIVATE project_options project_sanitizer
 )
-target_link_libraries(engine-core PUBLIC
-    SDL3::SDL3
-)
-add_sanitizer(engine-core)
+# ★ 指向 include，这样外部写 #include "Engine/tool/xxx" 才能找到
+target_include_directories(engine-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # ============================================================
 # engine-net：网络（依赖 core）
 # ============================================================
 add_library(engine-net STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/NetworkChannel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/NetworkServer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/MemoryTransport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tool/NetworkChannel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tool/NetworkServer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tool/MemoryTransport.cpp
 )
-target_include_directories(engine-net PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+target_link_libraries(engine-net
+    PUBLIC engine-core SDL3_net::SDL3_net
+    PRIVATE project_options project_sanitizer
 )
-target_link_libraries(engine-net PUBLIC
-    engine-core
-    SDL3_net::SDL3_net
-)
-add_sanitizer(engine-net)
+target_include_directories(engine-net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-# ============================================================
-# engine-client：窗口 / 输入 / 渲染 / ImGui / 主循环
-# 依赖 core + net
-# ============================================================
+# =============================================================
+# engine-client：窗口 / 输入 / 渲染 / ImGui
+# =============================================================
 add_library(engine-client STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Engine.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Input.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Window.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/WindowManager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/AssetManager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/OpenGL.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/Vulkan.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Render/VMAImpl.cpp
-
+    
+    # Tool
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tool/Input.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tool/Window.cpp
+    
+    # Service
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/service/WindowService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/service/AssetService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/service/OpenGLRenderService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/service/VulkanRenderService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/service/VMAImpl.cpp
+    
+    # Client (渲染大脑)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/SceneRenderer.cpp
+    
+    # ImGui
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui_demo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui_draw.cpp
@@ -53,11 +55,6 @@ add_library(engine-client STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/backends/imgui_impl_sdl3.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/backends/imgui_impl_opengl3.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/backends/imgui_impl_vulkan.cpp
-)
-target_include_directories(engine-client PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui
-    ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/backends
 )
 target_link_libraries(engine-client
     PUBLIC
@@ -73,5 +70,21 @@ target_link_libraries(engine-client
     PRIVATE
         assimp::assimp
         nlohmann_json::nlohmann_json
+        project_options
+        project_sanitizer
 )
-add_sanitizer(engine-client)
+target_include_directories(engine-client PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/backends
+)
+
+# ASan 运行时拷贝
+if(DEFINED ASAN_DLL_FILE)
+    add_custom_command(TARGET engine-client POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ASAN_DLL_FILE}"
+            "$<TARGET_FILE_DIR:engine-client>/"
+        COMMENT "Copying ASan runtime DLL to engine-client"
+    )
+endif()

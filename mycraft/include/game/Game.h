@@ -1,15 +1,14 @@
 #pragma once
 
-#include "Engine.h"
-#include "Protocol.h"
-#include "core/Transport.h"
+#include "Engine/Engine.h"
+#include "game/Protocol.h"
+#include "Engine/tool/Transport.h"
 #include "game/GameServer.h"
 #include "game/core/GameContext.h"
 #include "game/client/MeshManager.h"
-#include "game/client/ClientWorld.h"
 #include "game/client/ClientUI.h"
 #include "game/client/LODManager.h"
-#include "client/AssetManager.h"
+#include "Engine/service/AssetService.h"
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -32,27 +31,27 @@ private:
     bool SetupWindow(Eng::Engine& engine);
     bool SetupRenderer(Eng::Engine& engine);
     void SetupShaders();
-    Eng::client::ShaderPtr CreateShaderByName(const std::string& name, bool isSky);
+    Eng::service::ShaderPtr CreateShaderByName(const std::string& name, bool isSky);
 
-    Eng::client::WindowManager* winMgr = nullptr;
-    Eng::client::Window*       mainWin = nullptr;
-    Eng::client::IRenderAPI*   renderer = nullptr;
+    Eng::service::WindowService* winMgr = nullptr;
+    Eng::tool::Window*           mainWin = nullptr;
+    Eng::service::IRenderService*   renderer = nullptr;
     uint32_t m_win = 0;
 
-    Eng::client::ShaderPtr      m_cubeShader;
-    Eng::client::TexturePtr     m_atlasTexture;
-    Eng::client::ShaderPtr      m_skyShader;
-    Eng::client::ShaderPtr      m_lodShader;
-    Eng::client::ShaderPtr      m_entityShader;
-    Eng::client::ShaderPtr      m_handShader;
-    Eng::client::DeviceInfo     m_deviceInfo;
-    Eng::client::FramebufferPtr m_mainFbo;
+    Eng::service::ShaderPtr      m_cubeShader;
+    Eng::service::TexturePtr     m_atlasTexture;
+    Eng::service::ShaderPtr      m_skyShader;
+    Eng::service::ShaderPtr      m_lodShader;
+    Eng::service::ShaderPtr      m_entityShader;
+    Eng::service::ShaderPtr      m_handShader;
+    Eng::service::DeviceInfo     m_deviceInfo;
+    Eng::service::FramebufferPtr m_mainFbo;
 
-    Eng::client::TexturePtr     m_playerTexture;
-    std::unique_ptr<Eng::client::AssetManager> m_assetManager;  
+    Eng::service::TexturePtr     m_playerTexture;
+    std::unique_ptr<Eng::service::AssetService> m_assetManager;  
 
     void RecreateFBOs(int w, int h);
-    Eng::client::GlobalState    m_globalState;
+    Eng::service::GlobalState    m_globalState;
 
     enum class GameState : std::uint8_t {
         MainMenu,
@@ -66,7 +65,7 @@ private:
     int  m_portInput      = 25565;
     std::string m_statusText;
 
-    std::unique_ptr<Eng::IClientTransport> m_client;
+    std::unique_ptr<Eng::tool::IClientTransport> m_client;
     std::unique_ptr<game::server::GameServer> m_server = nullptr;
     uint32_t m_myClientId = 0;
     std::unordered_map<uint32_t, net::PlayerState> m_otherPlayers;
@@ -81,7 +80,7 @@ private:
     float m_animTime = 0.0f;
 
     // ==================== MDI 全局缓冲与指令 ====================
-    std::vector<Eng::client::Vertex> m_globalVertices;
+    std::vector<Eng::service::Vertex> m_globalVertices;
     std::vector<uint32_t>            m_globalIndices;
     bool m_globalGeometryDirty = false;
     
@@ -92,8 +91,8 @@ private:
         uint32_t vertexCount  = 0;
     };
     std::unordered_map<uint64_t, ChunkMeshData> m_chunkMeshes;
-    std::vector<Eng::client::rhi::DrawIndexedIndirectCommand> m_indirectCommands;
-    std::vector<Eng::client::rhi::DrawIndexedIndirectCommand> m_lodIndirectCommands;
+    std::vector<Eng::service::rhi::DrawIndexedIndirectCommand> m_indirectCommands;
+    std::vector<Eng::service::rhi::DrawIndexedIndirectCommand> m_lodIndirectCommands;
 
     std::unordered_map<uint64_t, game::client::MeshResult> m_allMeshes;
 
@@ -112,7 +111,7 @@ private:
 
     client::LodManager m_lodManager;
 
-    std::vector<Eng::client::MeshPtr> m_visibleLodMeshes;
+    std::vector<Eng::service::MeshPtr> m_visibleLodMeshes;
 
     glm::vec3 cameraPos{0.0f, 40.0f, 0.0f};
     glm::vec3 cameraFront{0.0f, 0.0f, -1.0f};
@@ -134,10 +133,10 @@ private:
     void UpdateFrustum(const glm::mat4& vp);
     bool AabbInFrustum(const glm::vec3& mn, const glm::vec3& mx) const;
 
-    Eng::client::MeshPtr m_playerMesh;
-    Eng::client::MeshPtr BuildPlayerMesh();
-    Eng::client::MeshPtr m_handMesh;
-    Eng::client::MeshPtr BuildHandMesh();
+    Eng::service::MeshPtr m_playerMesh;
+    Eng::service::MeshPtr BuildPlayerMesh();
+    Eng::service::MeshPtr m_handMesh;
+    Eng::service::MeshPtr BuildHandMesh();
     float m_swingProgress = 0.0f;
     float m_walkDist = 0.0f;
 
@@ -154,10 +153,10 @@ private:
         uint32_t  pickerId    = 0;
     };
     std::unordered_map<uint32_t, ClientItemEntity> m_itemEntities;
-    std::unordered_map<BlockId, Eng::client::MeshPtr> m_itemMeshCache;
+    std::unordered_map<BlockId, Eng::service::MeshPtr> m_itemMeshCache;
     
-    Eng::client::MeshPtr GetOrCreateItemMesh(BlockId id);
-    Eng::client::MeshPtr BuildItemCubeMesh(BlockId id);
+    Eng::service::MeshPtr GetOrCreateItemMesh(BlockId id);
+    Eng::service::MeshPtr BuildItemCubeMesh(BlockId id);
 
     static constexpr int kHotbarSize = 4;
     int m_hotbarIndex = 0;
@@ -210,7 +209,7 @@ private:
     void LoadSettings(Eng::Engine& engine);
     void SaveSettings(Eng::Engine& engine);
 
-    std::unique_ptr<Eng::Log> logger = std::make_unique<Eng::Log>();
+    std::unique_ptr<Eng::tool::Log> logger = std::make_unique<Eng::tool::Log>();
 
     void ReturnToMainMenu();
     void HandleServerMessage(const std::vector<uint8_t>& data);

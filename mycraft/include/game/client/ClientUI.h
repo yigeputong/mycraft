@@ -1,7 +1,7 @@
 #pragma once
-#include "Engine.h"
+#include "Engine/Engine.h"
 #include <imgui.h>
-#include "../core/BlockRegistry.h" // ★ 引入 BlockId 和 BlockRegistry
+#include "game/core/BlockRegistry.h" // ★ 引入 BlockId 和 BlockRegistry
 
 namespace game {
 class MyGame; // 前置声明

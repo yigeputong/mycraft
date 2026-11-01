@@ -198,7 +198,7 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                 const auto& def = reg.Get(type);
 
                 if (def.render.isCross) {
-                    std::vector<Eng::client::Vertex> tmpV;
+                    std::vector<Eng::service::Vertex> tmpV;
                     std::vector<uint32_t> tmpI;
                     glm::vec4 light = (def.render.luminance > 0) ? glm::vec4(0.0f, 1.0f, 0.6f, 0.2f) : getLight(lx, ly, lz);
                     
@@ -242,7 +242,7 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                     int Nx = normals[f].x, Ny = normals[f].y, Nz = normals[f].z;
 
                     for (int v = 0; v < 4; ++v) {
-                        Eng::client::Vertex vert;
+                        Eng::service::Vertex vert;
                         
                         float vx = faceOffsets[f][v][0];
                         float vy = faceOffsets[f][v][1];

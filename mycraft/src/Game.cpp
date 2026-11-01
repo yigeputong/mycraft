@@ -1,12 +1,16 @@
 #include "game/Game.h"
 
-#include "Engine.h"
-#include "client/AssetManager.h"
-#include "client/Render/RenderAPI.h"
-#include "core/Log.h"
-#include "core/MessageWriter.h"
-#include "core/MemoryTransport.h"
-#include "core/NetworkTransport.h"
+#include "Engine/Engine.h"
+#include "Engine/service/AssetService.h"
+#include "Engine/service/IRenderService.h"
+#include "Engine/tool/Log.h"
+#include "Engine/tool/MessageReader.h"
+#include "Engine/tool/MessageWriter.h"
+#include "Engine/tool/Transport.h"
+#include "Engine/tool/MemoryTransport.h"
+#include "Engine/tool/NetworkTransport.h"
+#include "Engine/tool/Input.h"
+#include "Engine/tool/Window.h"
 #include "game/Protocol.h"
 #include "game/GameServer.h"
 #include "game/core/Blocks.h"
@@ -32,7 +36,7 @@ namespace {
                         const glm::vec4& top, const glm::vec4& bottom,
                         const glm::vec4& right, const glm::vec4& left,
                         const glm::vec4& front, const glm::vec4& back,
-                        std::vector<Eng::client::Vertex>& vertices,
+                        std::vector<Eng::service::Vertex>& vertices,
                         std::vector<uint32_t>& indices) {
         const float x0 = c.x - size.x*0.5f, x1 = c.x + size.x*0.5f;
         const float y0 = c.y - size.y*0.5f, y1 = c.y + size.y*0.5f;
@@ -58,7 +62,7 @@ namespace {
             glm::vec4 uvRect = faceUVs[f];
             
             for (int k = 0; k < 4; ++k) {
-                Eng::client::Vertex v;
+                Eng::service::Vertex v;
                 v.position = corners[faces[f][k]];
                 v.normal   = normals[f];
                 float u = uvRect.x + fuv[k][0] * uvRect.z;
@@ -88,7 +92,7 @@ void MyGame::LoadSettings(Eng::Engine& engine) {
         if (j.contains("apitype")) {
             int v = j["apitype"];
             if (v >= 0 && v <= 2) {
-                wcfg.apitype = static_cast<Eng::client::RenderAPItype>(v);
+                wcfg.apitype = static_cast<Eng::tool::RenderAPItype>(v);
             }
         }
 
@@ -128,11 +132,11 @@ bool MyGame::StartLocalServer(bool useMemory, bool createClient) {
 
     if (createClient) {
         if (useMemory) {
-            m_client = std::make_unique<Eng::MemoryClientTransport>(server->GetMemoryPipe());
+            m_client = std::make_unique<Eng::tool::MemoryClientTransport>(server->GetMemoryPipe());
             m_client->Connect("", 0);
             logInfo(logger, "[Game] Started memory transport for single player");
         } else {
-            m_client = std::make_unique<Eng::NetworkClientTransport>();
+            m_client = std::make_unique<Eng::tool::NetworkClientTransport>();
             m_client->Connect("127.0.0.1", 25565);
         }
     }
@@ -142,7 +146,7 @@ bool MyGame::StartLocalServer(bool useMemory, bool createClient) {
 }
 
 bool MyGame::ConnectToServer(const std::string& host, uint16_t port) {
-    m_client = std::make_unique<Eng::NetworkClientTransport>();
+    m_client = std::make_unique<Eng::tool::NetworkClientTransport>();
     if (!m_client->Connect(host, port)) {
         logError(logger, "[Game] Failed to connect to " << host << ":" << port);
         m_client.reset();
@@ -156,7 +160,7 @@ bool MyGame::ConnectToServer(const std::string& host, uint16_t port) {
 // 窗口 & 渲染器
 // ============================================================
 bool MyGame::SetupWindow(Eng::Engine& engine) {
-    Eng::client::WindowConfig windowConfig = {
+    Eng::tool::WindowConfig windowConfig = {
         .apitype      = engine.GetConfig().window.apitype,
         .title        = "Mycraft v" MYCRAFT_VERSION,
         .windowWidth  = 1280,
@@ -170,7 +174,7 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
 
     mainWin->onEvent = [this](const SDL_Event& e) {
         ImGui_ImplSDL3_ProcessEvent(&e);
-        Eng::client::Input::Get().ProcessEvent(e);
+        Eng::tool::Input::Get().ProcessEvent(e);
         switch (e.type) {
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 if (renderer) RecreateFBOs(e.window.data1, e.window.data2);
@@ -189,18 +193,18 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
         }
     };
 
-    Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), false);
+    Eng::tool::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), false);
     m_relativeMode = false;
     return true;
 }
 
 void MyGame::RecreateFBOs(int w, int h) {
     if (w <= 0 || h <= 0) return;
-    Eng::client::FramebufferCreateInfo info{
+    Eng::service::FramebufferCreateInfo info{
         .width = w, 
         .height = h, 
         .hasDepth = true, 
-        .colorFormat = Eng::client::rhi::TextureFormat::RGBA8_UNORM
+        .colorFormat = Eng::service::rhi::TextureFormat::RGBA8_UNORM
     };
     m_mainFbo = renderer->CreateFramebuffer(info);
 }
@@ -288,7 +292,7 @@ bool MyGame::SetupRenderer(Eng::Engine& /*engine*/) {
         logInfo(logger, "[Game] Loaded Unifont with all BMP glyphs at size " << scaledFontSize);
     }
 
-    m_assetManager = std::make_unique<Eng::client::AssetManager>(renderer);
+    m_assetManager = std::make_unique<Eng::service::AssetService>(renderer);
     m_playerTexture = m_assetManager->LoadTexture("assets/textures/entity/player.png");
 
     const auto& pixels = client::AtlasPixels();
@@ -325,21 +329,21 @@ void MyGame::SetupShaders() {
     // 以及 Skybox 顶点布局（只读取 Position 属性）
     m_skyShader = m_assetManager->LoadShader(
         m_assetManager->MakeShaderCreateInfo("sky", 
-            Eng::client::rhi::PipelineType::Skybox, 
-            Eng::client::rhi::VertexLayout::Skybox));
+            Eng::service::rhi::PipelineType::Skybox, 
+            Eng::service::rhi::VertexLayout::Skybox));
 
     // SetupShaders
     m_entityShader = m_assetManager->LoadShader([&]{
         auto ci = m_assetManager->MakeShaderCreateInfo("entity");
-        ci.pipelineType   = Eng::client::rhi::PipelineType::Opaque;
-        ci.perObjectMode  = Eng::client::rhi::PerObjectMode::Default;
+        ci.pipelineType   = Eng::service::rhi::PipelineType::Opaque;
+        ci.perObjectMode  = Eng::service::rhi::PerObjectMode::Default;
         return ci;
     }());
 
     m_handShader = m_assetManager->LoadShader([&]{
         auto ci = m_assetManager->MakeShaderCreateInfo("entity");
-        ci.pipelineType   = Eng::client::rhi::PipelineType::Hand;
-        ci.perObjectMode  = Eng::client::rhi::PerObjectMode::Default;
+        ci.pipelineType   = Eng::service::rhi::PipelineType::Hand;
+        ci.perObjectMode  = Eng::service::rhi::PerObjectMode::Default;
         return ci;
     }());
             
@@ -353,7 +357,7 @@ void MyGame::SetupShaders() {
 }
 
 void MyGame::OnStart(Eng::Engine& engine) {
-    if (!logger) logger = std::make_unique<Eng::Log>();
+    if (!logger) logger = std::make_unique<Eng::tool::Log>();
 
     if (engine.IsDedicatedServer()) {
         if (!StartLocalServer(false, false)) {
@@ -418,7 +422,7 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
 
     const bool wantRelative = (m_state == GameState::Playing) && !m_menuOpen;
     if (wantRelative != m_relativeMode) {
-        Eng::client::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), wantRelative);
+        Eng::tool::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), wantRelative);
         m_relativeMode = wantRelative;
     }
 
@@ -522,7 +526,7 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     // —— 区块流式 ——
     m_world.UpdateStreaming(cameraPos, m_renderDistance,
         [this](int cx, int cz) {
-            Eng::MessageWriter w;
+            Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkRequest));
             w.Write<int32_t>(cx);
             w.Write<int32_t>(cz);
@@ -585,7 +589,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->BeginFrame();
 
     if (m_state == GameState::Playing) {
-        Eng::client::Material mat; mat.diffuse = m_atlasTexture;
+        Eng::service::Material mat; mat.diffuse = m_atlasTexture;
 
         // ==========================================================
         // 1. 地形 MDI
@@ -601,7 +605,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
             auto it = m_chunkMeshes.find(key);
             if (it == m_chunkMeshes.end() || it->second.indexCount == 0) continue;
 
-            Eng::client::rhi::DrawIndexedIndirectCommand cmd{};
+            Eng::service::rhi::DrawIndexedIndirectCommand cmd{};
             cmd.indexCount    = it->second.indexCount;
             cmd.instanceCount = 1;
             cmd.firstIndex    = it->second.firstIndex;
@@ -620,7 +624,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
         // ==========================================================
         // 2. LOD
         // ==========================================================
-        Eng::client::Material lodMat; lodMat.diffuse = m_atlasTexture;
+        Eng::service::Material lodMat; lodMat.diffuse = m_atlasTexture;
         m_lodManager.CollectVisibleMeshes(m_frustum, m_visibleLodMeshes);
         if (!m_visibleLodMeshes.empty()) {
             for (const auto& mesh : m_visibleLodMeshes) {
@@ -632,9 +636,9 @@ void MyGame::OnRender(Eng::Engine& engine) {
         // 3. 其他玩家（entity shader）
         // ==========================================================
         if (!m_playerMesh) m_playerMesh = BuildPlayerMesh();
-        Eng::client::Material playerMat; playerMat.diffuse = m_playerTexture;
+        Eng::service::Material playerMat; playerMat.diffuse = m_playerTexture;
         for (auto& [id, ps] : m_otherPlayers) {
-            Eng::client::rhi::PerObjectData data;
+            Eng::service::rhi::PerObjectData data;
             data.model = glm::translate(glm::mat4(1.0f), ps.position);
             data.model = glm::rotate(data.model, ps.yaw, glm::vec3(0, 1, 0));
             renderer->DrawMesh(m_playerMesh, m_entityShader, playerMat, data);
@@ -644,9 +648,9 @@ void MyGame::OnRender(Eng::Engine& engine) {
         // 4. 掉落物（entity shader）
         // ==========================================================
         if (!m_itemEntities.empty()) {
-            std::unordered_map<BlockId, std::vector<Eng::client::rhi::PerObjectData>> instances;
+            std::unordered_map<BlockId, std::vector<Eng::service::rhi::PerObjectData>> instances;
             for (const auto& [id, e] : m_itemEntities) {
-                Eng::client::rhi::PerObjectData data;
+                Eng::service::rhi::PerObjectData data;
                 data.model = glm::translate(glm::mat4(1.0f), e.renderPos);
                 data.model = glm::rotate(data.model, m_animTime * 2.0f, glm::vec3(0, 1, 0));
                 data.model = glm::translate(data.model,
@@ -655,7 +659,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
                 instances[e.itemType].push_back(data);
             }
 
-            Eng::client::Material itemMat; itemMat.diffuse = m_atlasTexture;
+            Eng::service::Material itemMat; itemMat.diffuse = m_atlasTexture;
             for (const auto& [type, perObjects] : instances) {
                 auto mesh = GetOrCreateItemMesh(type);
                 if (mesh) {
@@ -694,7 +698,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
         glm::mat4 handModel = glm::inverse(view) * handLocalModel;
 
         if (m_handShader) {
-            Eng::client::Material handMat; handMat.diffuse = m_playerTexture;
+            Eng::service::Material handMat; handMat.diffuse = m_playerTexture;
             renderer->DrawMesh(m_handMesh, m_handShader, handMat, { .model = handModel });
 
             auto& curSlot = m_hotbar[m_hotbarIndex];
@@ -796,7 +800,7 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
     m_itemMeshCache.clear();
     
     if (m_assetManager) {
-        m_assetManager.reset(); // 必须在这里 reset 掉 AssetManager
+        m_assetManager.reset(); // 必须在这里 reset 掉 AssetService
     }
 
     auto* safeRenderer = mainWin ? mainWin->GetAPI() : nullptr;
@@ -813,7 +817,7 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
 // 输入
 // ============================================================
 bool MyGame::GetInput(float dt) {
-    using namespace Eng::client;
+    using namespace Eng::tool;
 
     if (Input::IsKeyPressed(KeyCode::Escape)) m_menuOpen = !m_menuOpen;
     if (m_menuOpen) return m_shouldQuit;
@@ -904,7 +908,7 @@ bool MyGame::GetInput(float dt) {
     }
     input.fly = m_flyMode;
 
-    Eng::MessageWriter w;
+    Eng::tool::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::PlayerInput));
     w.WriteVec3(input.moveDir);
     w.WriteVec2(input.look);
@@ -938,7 +942,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
     if (data.empty()) return;
 
     auto type = static_cast<game::net::MessageType>(data[0]);
-    Eng::MessageReader r(std::span<const uint8_t>(data).subspan(1));
+    Eng::tool::MessageReader r(std::span<const uint8_t>(data).subspan(1));
 
     switch (type) {
         case game::net::MessageType::WorldState: {
@@ -1084,7 +1088,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
 // ============================================================
 // Mesh 构建
 // ============================================================
-Eng::client::MeshPtr MyGame::GetOrCreateItemMesh(BlockId id) { // ★
+Eng::service::MeshPtr MyGame::GetOrCreateItemMesh(BlockId id) { // ★
     auto it = m_itemMeshCache.find(id);
     if (it != m_itemMeshCache.end()) return it->second;
 
@@ -1093,13 +1097,13 @@ Eng::client::MeshPtr MyGame::GetOrCreateItemMesh(BlockId id) { // ★
     return mesh;
 }
 
-Eng::client::MeshPtr MyGame::BuildItemCubeMesh(BlockId id) { // ★
-    Eng::client::MeshData data = client::MeshBuilderUtils::BuildItemMeshData(m_blockRegistry, id);
+Eng::service::MeshPtr MyGame::BuildItemCubeMesh(BlockId id) { // ★
+    Eng::service::MeshData data = client::MeshBuilderUtils::BuildItemMeshData(m_blockRegistry, id);
     return renderer->CreateMesh(data);
 }
 
-Eng::client::MeshPtr MyGame::BuildPlayerMesh() {
-    std::vector<Eng::client::Vertex> vertices;
+Eng::service::MeshPtr MyGame::BuildPlayerMesh() {
+    std::vector<Eng::service::Vertex> vertices;
     std::vector<uint32_t> indices;
 
     glm::vec4 h_top(8,0,8,8), h_bot(16,0,8,8), h_right(0,8,8,8), h_left(16,8,8,8), h_front(8,8,8,8), h_back(24,8,8,8);
@@ -1114,20 +1118,20 @@ Eng::client::MeshPtr MyGame::BuildPlayerMesh() {
     AppendPlayerBox({-0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, rl_top, rl_bot, rl_right, rl_left, rl_front, rl_back, vertices, indices);
     AppendPlayerBox({ 0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, rl_top, rl_bot, rl_right, rl_left, rl_front, rl_back, vertices, indices);
 
-    Eng::client::MeshData data;
+    Eng::service::MeshData data;
     data.vertices = std::move(vertices);
     data.indices  = std::move(indices);
     return renderer->CreateMesh(data);
 }
 
-Eng::client::MeshPtr MyGame::BuildHandMesh() {
-    std::vector<Eng::client::Vertex> vertices;
+Eng::service::MeshPtr MyGame::BuildHandMesh() {
+    std::vector<Eng::service::Vertex> vertices;
     std::vector<uint32_t> indices;
 
     glm::vec4 ra_top(44,16,4,4), ra_bot(48,16,4,4), ra_right(40,20,4,12), ra_left(48,20,4,12), ra_front(44,20,4,12), ra_back(52,20,4,12);
     AppendPlayerBox({0.0f, 0.0f, 0.0f}, {0.25f, 0.25f, 0.6f}, ra_top, ra_bot, ra_right, ra_left, ra_front, ra_back, vertices, indices);
 
-    Eng::client::MeshData data;
+    Eng::service::MeshData data;
     data.vertices = std::move(vertices);
     data.indices  = std::move(indices);
     return renderer->CreateMesh(data);
@@ -1215,7 +1219,7 @@ void MyGame::DrainMeshResults() {
 
     if (dirtyKeys.empty()) return;
 
-    size_t maxVertices = m_globalVertexCapacity / sizeof(Eng::client::Vertex);
+    size_t maxVertices = m_globalVertexCapacity / sizeof(Eng::service::Vertex);
     size_t maxIndices  = m_globalIndexCapacity / sizeof(uint32_t);
 
     bool outOfCapacity = (m_globalVertexCursor + incomingVerts > maxVertices) ||
@@ -1306,7 +1310,7 @@ void MyGame::RebuildGlobalGeometry() {
     renderer->UploadGlobalGeometry(m_globalVertices, m_globalIndices, m_globalVertexCapacity, m_globalIndexCapacity);
     
     // ★ 强制锁死主内存 Vector 的容量，绝对不允许后续增量插入时发生重分配
-    m_globalVertices.reserve(m_globalVertexCapacity / sizeof(Eng::client::Vertex));
+    m_globalVertices.reserve(m_globalVertexCapacity / sizeof(Eng::service::Vertex));
     m_globalIndices.reserve(m_globalIndexCapacity / sizeof(uint32_t));
 
     logInfo(logger, "[MDI] Compacted. Active Verts: " << m_globalVertexCursor 

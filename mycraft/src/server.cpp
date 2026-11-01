@@ -1,8 +1,8 @@
-#include "core/Log.h"
-#include "core/MessageReader.h"
-#include "core/MessageWriter.h"
-#include "core/NetworkTransport.h"
-#include "core/MemoryTransport.h"
+#include "Engine/tool/Log.h"
+#include "Engine/tool/MessageReader.h"
+#include "Engine/tool/MessageWriter.h"
+#include "Engine/tool/Transport.h"
+#include "Engine/tool/NetworkTransport.h"
 #include "game/GameServer.h"
 #include "game/Protocol.h"
 #include "game/server/WorldGenerator.h"
@@ -64,7 +64,7 @@ void GameServer::WorkerLoop(uint32_t seed) {
 }
 
 void GameServer::SendChunkTo(int clientId, const Chunk& chunk) {
-    Eng::MessageWriter w;
+    Eng::tool::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkData));
     w.Write<int32_t>(chunk.chunk_x);
     w.Write<int32_t>(chunk.chunk_z);
@@ -162,9 +162,9 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
     }
 
     if (useMemory) {
-        m_server = std::make_unique<Eng::MemoryServerTransport>();
+        m_server = std::make_unique<Eng::tool::MemoryServerTransport>();
     } else {
-        m_server = std::make_unique<Eng::NetworkServerTransport>();
+        m_server = std::make_unique<Eng::tool::NetworkServerTransport>();
     }
     if (!m_server->Listen(port)) {
         logError(m_logger, "[Server] Listen failed");
@@ -180,14 +180,14 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
 
         // 你的 ID
         {
-            Eng::MessageWriter w;
+            Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(net::MessageType::PlayerId));
             w.WriteU32BE((uint32_t)id);
             m_server->SendTo(id, w.GetBuffer());
         }
         // seed
         {
-            Eng::MessageWriter w;
+            Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(net::MessageType::ServerInfo));
             w.WriteU32BE(m_worldSeed);
             w.WriteVec3(m_spawnPos);
@@ -196,7 +196,7 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
 
         // 补发所有现有掉落物
         for (auto& [eid, e] : m_entities) {
-            Eng::MessageWriter w;
+            Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(net::MessageType::EntitySpawn));
             w.Write<uint32_t>(eid);
             w.WriteVec3(e.position);
@@ -272,8 +272,8 @@ void GameServer::Stop() {
     logInfo(m_logger, "[Server] Stopped");
 }
 
-std::shared_ptr<Eng::MemoryPipe> GameServer::GetMemoryPipe() const {
-    if (auto* mem = dynamic_cast<Eng::MemoryServerTransport*>(m_server.get())) {
+std::shared_ptr<Eng::tool::MemoryPipe> GameServer::GetMemoryPipe() const {
+    if (auto* mem = dynamic_cast<Eng::tool::MemoryServerTransport*>(m_server.get())) {
         return mem->m_pipe;
     }
     return nullptr;
@@ -353,7 +353,7 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
     if (data.empty()) return;
 
     auto type = static_cast<game::net::MessageType>(data[0]);
-    Eng::MessageReader r(std::span<const uint8_t>(data).subspan(1));
+    Eng::tool::MessageReader r(std::span<const uint8_t>(data).subspan(1));
 
     switch (type) {
         case game::net::MessageType::PlayerInput: {
@@ -448,7 +448,7 @@ void GameServer::SpawnItemDrop(const glm::vec3& pos, BlockId id) {
 
     m_entities[e.id] = e;
 
-    Eng::MessageWriter w;
+    Eng::tool::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::EntitySpawn));
     w.Write<uint32_t>(e.id);
     w.WriteVec3(e.position);
@@ -467,7 +467,7 @@ void GameServer::TickEntities(float dt) {
         e.age += dt;
 
         {
-            Eng::MessageWriter w;
+            Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(game::net::MessageType::EntityUpdate));
             w.Write<uint32_t>(id);
             w.WriteVec3(e.position);
@@ -475,7 +475,7 @@ void GameServer::TickEntities(float dt) {
         }
 
         if (e.age > 300.0f) {
-            Eng::MessageWriter w;
+            Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(game::net::MessageType::EntityDestroy));
             w.Write<uint32_t>(id);
             w.Write<uint8_t>(0);
@@ -490,7 +490,7 @@ void GameServer::TickEntities(float dt) {
                 glm::vec3 center = p.position + glm::vec3(0.0f, 0.9f, 0.0f);
                 float d2 = glm::distance(e.position, center);
                 if (d2 < 1.5f * 1.5f) {
-                    Eng::MessageWriter w;
+                    Eng::tool::MessageWriter w;
                     w.Write(static_cast<uint8_t>(game::net::MessageType::EntityDestroy));
                     w.Write<uint32_t>(id);
                     w.Write<uint8_t>(1);
@@ -654,7 +654,7 @@ bool GameServer::IsSolidAt(int wx, int wy, int wz) const {
 
 void GameServer::BroadcastWorldState() {
     std::lock_guard<std::mutex> lock(m_playersMutex);
-    Eng::MessageWriter w;
+    Eng::tool::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::WorldState));
     w.WriteU32BE((uint32_t)m_players.size());
     w.Write<float>(m_lastTickMs);
@@ -676,7 +676,7 @@ void GameServer::BroadcastWorldState() {
 }
 
 void GameServer::BroadcastBlockChange(int bx, int by, int bz, BlockId id) {
-    Eng::MessageWriter w;
+    Eng::tool::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::BlockChange));
     w.Write<int32_t>(bx);
     w.Write<int32_t>(by);

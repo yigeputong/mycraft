@@ -26,9 +26,9 @@ struct ResourceLocation {
     ResourceLocation(std::string n, std::string p) 
         : ns(std::move(n)), path(std::move(p)) {}
 
-    [[nodiscard]] std::string toString() const { return ns + ":" + path; }
-    [[nodiscard]] bool isGlobal() const { return ns == "global"; }
-    [[nodiscard]] bool isMycraft() const { return ns == "mycraft"; }
+    std::string toString() const { return ns + ":" + path; }
+    bool isGlobal() const { return ns == "global"; }
+    bool isMycraft() const { return ns == "mycraft"; }
 
     bool operator==(const ResourceLocation& o) const { return ns == o.ns && path == o.path; }
 };

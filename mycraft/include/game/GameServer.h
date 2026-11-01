@@ -1,12 +1,12 @@
 #pragma once
-#include "core/Transport.h"
-#include "core/MemoryTransport.h"
-#include "core/Log.h"
-#include "core/World.h"
+#include "Engine/tool/Transport.h"
+#include "Engine/tool/MemoryTransport.h"
+#include "Engine/tool/Log.h"
+#include "game/core/World.h"
 #include "game/server/WorldGenerator.h"
 #include "game/Protocol.h"
 #include "game/core/Physics.h"
-#include "game/core/BlockRegistry.h" // ★ 引入 BlockRegistry
+#include "game/core/BlockRegistry.h"
 #include "game/server/WorldSave.h"
 #include <memory>
 #include <thread>
@@ -23,7 +23,7 @@ public:
     bool Start(uint16_t port, const std::string& saveDir, bool useMemory = false);
     void Stop();
     bool IsRunning() const { return m_running.load(); }
-    std::shared_ptr<Eng::MemoryPipe> GetMemoryPipe() const;
+    std::shared_ptr<Eng::tool::MemoryPipe> GetMemoryPipe() const;
     size_t GetChunkCount() const { return m_chunks.size(); } 
 private:
     // ==================== 生命周期 ====================
@@ -32,8 +32,8 @@ private:
     std::atomic<bool>  m_running{false};
 
     // ==================== 网络 ====================
-    std::unique_ptr<Eng::IServerTransport> m_server;
-    std::unique_ptr<Eng::Log>              m_logger = std::make_unique<Eng::Log>();
+    std::unique_ptr<Eng::tool::IServerTransport> m_server;
+    std::unique_ptr<Eng::tool::Log>              m_logger = std::make_unique<Eng::tool::Log>();
 
     // ★ 服务端自己的注册表
     game::BlockRegistry m_registry; 

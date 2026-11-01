@@ -1,5 +1,5 @@
 #pragma once
-#include "Engine.h"
+#include "Engine/service/IRenderService.h"
 #include "game/core/BlockRegistry.h"
 #include <vector>
 #include <array>
@@ -7,7 +7,7 @@
 namespace game::client {
 
 struct BlockFace {
-    Eng::client::Vertex verts[4];
+    Eng::service::Vertex verts[4];
     glm::ivec3 normal;
     int u_axis, v_axis;
     int du[4], dv[4];
@@ -20,19 +20,19 @@ public:
 
     static void AppendBlock(
         const BlockRegistry& reg, BlockId id, glm::vec3 center,
-        std::vector<Eng::client::Vertex>& outV, std::vector<uint32_t>& outI);
+        std::vector<Eng::service::Vertex>& outV, std::vector<uint32_t>& outI);
 
     static void AppendSprite(
         const BlockRegistry& reg, BlockId id, glm::vec3 center,
         const glm::vec4& light,
-        std::vector<Eng::client::Vertex>& outV, std::vector<uint32_t>& outI);
+        std::vector<Eng::service::Vertex>& outV, std::vector<uint32_t>& outI);
 
     static void AppendTorch(
         const BlockRegistry& reg, BlockId id, int x, int y, int z,
         glm::vec4 light,
-        std::vector<Eng::client::Vertex>& outV, std::vector<uint32_t>& outI);
+        std::vector<Eng::service::Vertex>& outV, std::vector<uint32_t>& outI);
 
-    static Eng::client::MeshData BuildItemMeshData(
+    static Eng::service::MeshData BuildItemMeshData(
         const BlockRegistry& reg, BlockId id);
 };
 

@@ -1,5 +1,6 @@
-#include "game/client/ClientWorld.h"
+#include "game/core/World.h"
 #include "game/core/BlockRegistry.h"
+#include "game/client/ClientWorld.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -23,7 +24,7 @@ static bool AabbInFrustum(const Frustum& f, const glm::vec3& mn, const glm::vec3
 void ClientWorld::AddChunk(int cx, int cz, const std::vector<BlockId>& blocksData,
                            const std::array<uint8_t, CHUNK_VOLUME>& skyData,
                            const std::array<LightRGB, CHUNK_VOLUME>& blockLightData,
-                           Eng::client::MeshPtr mesh) {
+                           Eng::service::MeshPtr mesh) {
     ClientChunk cc;
     cc.chunk = std::make_shared<Chunk>();
     cc.chunk->chunk_x = cx;
@@ -123,7 +124,7 @@ std::vector<uint64_t> ClientWorld::FetchDirtyChunks(size_t maxCount) {
 }
 
 void ClientWorld::CollectVisibleMeshes(const Frustum& frustum,
-                                       std::vector<Eng::client::MeshPtr>& outMeshes) const {
+                                       std::vector<Eng::service::MeshPtr>& outMeshes) const {
     outMeshes.clear();
     outMeshes.reserve(m_chunks.size());
     for (const auto& [key, cc] : m_chunks) {

@@ -11,7 +11,7 @@
 #include <glm/glm.hpp>
 #include "game/core/BlockRegistry.h"
 #include "game/server/WorldGenerator.h"
-#include "client/Render/RenderAPI.h"
+#include "Engine/service/IRenderService.h"
 #include "game/client/ClientWorld.h"
 
 namespace game::client {
@@ -34,7 +34,7 @@ struct LodKeyHash {
 struct LodUnit {
     int level;
     int unitX, unitZ;
-    Eng::client::MeshPtr mesh;
+    Eng::service::MeshPtr mesh;
     glm::vec3 aabbMin, aabbMax;
 };
 
@@ -42,8 +42,8 @@ class LodManager {
 public:
     void Start(uint32_t seed);
     void Stop();
-    void Update(const glm::vec3& cameraPos, const ClientWorld& world, int renderDistance, Eng::client::IRenderAPI* renderer);
-    void CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::client::MeshPtr>& outMeshes) const;
+    void Update(const glm::vec3& cameraPos, const ClientWorld& world, int renderDistance, Eng::service::IRenderService* renderer);
+    void CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::service::MeshPtr>& outMeshes) const;
     void Clear();
     void SetRegistry(const BlockRegistry* reg) { m_registry = reg; }
 
@@ -53,18 +53,18 @@ private:
     };
     struct LodResult {
         int level, unitX, unitZ;
-        std::vector<Eng::client::Vertex> vertices;
+        std::vector<Eng::service::Vertex> vertices;
         std::vector<uint32_t> indices;
         glm::vec3 aabbMin, aabbMax;
     };
 
     void WorkerLoop(uint32_t seed);
-    void DrainResults(Eng::client::IRenderAPI* renderer);
+    void DrainResults(Eng::service::IRenderService* renderer);
     void BuildLodUnit(const game::server::TerrainGenerator& terrain, int level, int unitX, int unitZ,
-                      std::vector<Eng::client::Vertex>& outV, std::vector<uint32_t>& outI,
+                      std::vector<Eng::service::Vertex>& outV, std::vector<uint32_t>& outI,
                       glm::vec3& outMin, glm::vec3& outMax) const;
     void BuildLod1FromChunks(const LodKey& key, const ClientWorld& world,
-                             std::vector<Eng::client::Vertex>& outV, std::vector<uint32_t>& outI,
+                             std::vector<Eng::service::Vertex>& outV, std::vector<uint32_t>& outI,
                              glm::vec3& outMin, glm::vec3& outMax);
 
     const BlockRegistry* m_registry = nullptr;

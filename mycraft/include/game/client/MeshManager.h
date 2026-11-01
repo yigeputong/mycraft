@@ -1,6 +1,6 @@
 #pragma once
-#include "../core/World.h"
-#include <client/Render/RenderAPI.h>
+#include "game/core/World.h"
+#include <Engine/service/IRenderService.h>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -23,7 +23,7 @@ struct MeshTask {
 
 struct MeshResult {
     uint64_t chunkKey;
-    std::vector<Eng::client::Vertex> vertices;
+    std::vector<Eng::service::Vertex> vertices;
     std::vector<uint32_t>            indices;
 };
 

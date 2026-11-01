@@ -1,6 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
-#include "../core/Blocks.h"
+#include "game/core/Blocks.h"
 
 namespace game {
 

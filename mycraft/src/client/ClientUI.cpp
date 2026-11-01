@@ -1,6 +1,7 @@
 #include "game/client/ClientUI.h"
 #include "game/Game.h"
 #include "game/client/TextureAtlas.h"
+#include "Engine/tool/Window.h"
 #include <cmath>
 #include <cstdio>
 #include <tuple>
@@ -324,7 +325,7 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
             // 图形 API 设置
             const char* apiDesc = "选择渲染使用的图形API。除非有特殊需求需要更改，否则请维持此设置为默认不变！";
             ImVec4 descColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f); 
-            if (ecfg.apitype == Eng::client::RenderAPItype::VULKAN) {
+            if (ecfg.apitype == Eng::tool::RenderAPItype::VULKAN) {
                 apiDesc = "实验性设置。在部分系统上使用可能会降低性能或导致不稳定。";
                 descColor = ImVec4(1.0f, 0.6f, 0.2f, 1.0f);
             }
@@ -339,7 +340,7 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
             int currentApi = static_cast<int>(ecfg.apitype);
             const char* apiItems[] = { "默认", "优先使用 OpenGL", "优先使用 Vulkan" };
             if (ImGui::Combo("##api", &currentApi, apiItems, IM_ARRAYSIZE(apiItems))) {
-                wcfg.apitype = static_cast<Eng::client::RenderAPItype>(currentApi);
+                wcfg.apitype = static_cast<Eng::tool::RenderAPItype>(currentApi);
                 engine.GetConfig().window.apitype = wcfg.apitype;
                 game.m_apiChanged = true;
             }

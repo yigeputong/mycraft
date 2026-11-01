@@ -59,7 +59,7 @@ void LodManager::WorkerLoop(uint32_t seed) {
     }
 }
 
-void LodManager::Update(const glm::vec3& cameraPos, [[maybe_unused]] const ClientWorld& world, int renderDistance, Eng::client::IRenderAPI* renderer) {
+void LodManager::Update(const glm::vec3& cameraPos, [[maybe_unused]] const ClientWorld& world, int renderDistance, Eng::service::IRenderService* renderer) {
     if (!m_terrain) return;
 
     int playerChunkX = static_cast<int>(std::floor(cameraPos.x)) >> 4;
@@ -156,7 +156,7 @@ void LodManager::Update(const glm::vec3& cameraPos, [[maybe_unused]] const Clien
     DrainResults(renderer);
 }
 
-void LodManager::DrainResults(Eng::client::IRenderAPI* renderer) {
+void LodManager::DrainResults(Eng::service::IRenderService* renderer) {
     constexpr int K = 4; // 防止主线程卡顿
     int done = 0;
     for (;;) {
@@ -176,7 +176,7 @@ void LodManager::DrainResults(Eng::client::IRenderAPI* renderer) {
 
         if (result.vertices.empty()) continue;
 
-        Eng::client::MeshData data;
+        Eng::service::MeshData data;
         data.vertices = std::move(result.vertices);
         data.indices  = std::move(result.indices);
         auto mesh = renderer->CreateMesh(data);
@@ -193,7 +193,7 @@ void LodManager::DrainResults(Eng::client::IRenderAPI* renderer) {
     }
 }
 
-void LodManager::CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::client::MeshPtr>& outMeshes) const {
+void LodManager::CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::service::MeshPtr>& outMeshes) const {
     outMeshes.clear();
     outMeshes.reserve(m_units.size());
     for (const auto& [key, unit] : m_units) {
@@ -228,7 +228,7 @@ void LodManager::Clear() {
 
 void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                           int level, int unitX, int unitZ,
-                          std::vector<Eng::client::Vertex>& outV,
+                          std::vector<Eng::service::Vertex>& outV,
                           std::vector<uint32_t>& outI,
                           glm::vec3& outMin, glm::vec3& outMax) const {
     int sampleStep = 1 << level;
@@ -291,7 +291,7 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
     };
     
     auto pushVertex = [&](const glm::vec3& p, const glm::vec3& n, const glm::vec2& uv, const glm::vec4& uvInfo) {
-        Eng::client::Vertex v;
+        Eng::service::Vertex v;
         v.position = p; v.normal = n; v.uv = uv; v.ao = 1.0f;
         v.light = uvInfo; 
         outV.push_back(v);
@@ -412,7 +412,7 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
 
 // ------------------ BuildLod1FromChunks ------------------
 void LodManager::BuildLod1FromChunks(const LodKey& key, const ClientWorld& world,
-                                     std::vector<Eng::client::Vertex>& outV,
+                                     std::vector<Eng::service::Vertex>& outV,
                                      std::vector<uint32_t>& outI,
                                      glm::vec3& outMin, glm::vec3& outMax) {
     constexpr int CELLS = 32;
@@ -483,7 +483,7 @@ void LodManager::BuildLod1FromChunks(const LodKey& key, const ClientWorld& world
             sample(i, j, hM[j][i], tM[j][i]);
 
     auto pushV = [&](glm::vec3 p, glm::vec3 n, glm::vec2 uv) {
-        Eng::client::Vertex v;
+        Eng::service::Vertex v;
         v.position = p; v.normal = n; v.uv = uv; v.ao = 1.0f;
         v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
         outV.push_back(v);

@@ -16,8 +16,7 @@
     "sdl3-net",
 
     "volk",
-    "vulkan-headers",
-    "vulkan-loader",
+    "vulkan",
     "vulkan-memory-allocator"
   ]
 }

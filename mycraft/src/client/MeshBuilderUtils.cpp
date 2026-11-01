@@ -3,28 +3,32 @@
 
 namespace game::client {
 
-static constexpr float faceOffsets[6][4][3] = {
-    {{ 0.5f,-0.5f,-0.5f},{ 0.5f, 0.5f,-0.5f},{ 0.5f, 0.5f, 0.5f},{ 0.5f,-0.5f, 0.5f}},
-    {{-0.5f,-0.5f, 0.5f},{-0.5f, 0.5f, 0.5f},{-0.5f, 0.5f,-0.5f},{-0.5f,-0.5f,-0.5f}},
-    {{-0.5f, 0.5f, 0.5f},{ 0.5f, 0.5f, 0.5f},{ 0.5f, 0.5f,-0.5f},{-0.5f, 0.5f,-0.5f}},
-    {{-0.5f,-0.5f,-0.5f},{ 0.5f,-0.5f,-0.5f},{ 0.5f,-0.5f, 0.5f},{-0.5f,-0.5f, 0.5f}},
-    {{ 0.5f,-0.5f, 0.5f},{ 0.5f, 0.5f, 0.5f},{-0.5f, 0.5f, 0.5f},{-0.5f,-0.5f, 0.5f}},
-    {{-0.5f,-0.5f,-0.5f},{-0.5f, 0.5f,-0.5f},{ 0.5f, 0.5f,-0.5f},{ 0.5f,-0.5f,-0.5f}},
-};
-static constexpr int faceNormals[6][3] = {
-    { 1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}
-};
-static constexpr float faceUVs[4][2] = {
-    {0,0},{0,1},{1,1},{1,0}
-};
+namespace {
 
-// f: 0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z
-static int ResolveFaceTile(const BlockRender& r, int f) {
-    const BlockFaceTex& ft = (f == 2) ? r.ForTop()
-                           : (f == 3) ? r.ForBottom()
-                                      : r.ForSide();
-    if (ft.tile.empty()) return -1;
-    return ResolveTile(ft.tile);
+    static constexpr float faceOffsets[6][4][3] = {
+        {{ 0.5f,-0.5f,-0.5f},{ 0.5f, 0.5f,-0.5f},{ 0.5f, 0.5f, 0.5f},{ 0.5f,-0.5f, 0.5f}},
+        {{-0.5f,-0.5f, 0.5f},{-0.5f, 0.5f, 0.5f},{-0.5f, 0.5f,-0.5f},{-0.5f,-0.5f,-0.5f}},
+        {{-0.5f, 0.5f, 0.5f},{ 0.5f, 0.5f, 0.5f},{ 0.5f, 0.5f,-0.5f},{-0.5f, 0.5f,-0.5f}},
+        {{-0.5f,-0.5f,-0.5f},{ 0.5f,-0.5f,-0.5f},{ 0.5f,-0.5f, 0.5f},{-0.5f,-0.5f, 0.5f}},
+        {{ 0.5f,-0.5f, 0.5f},{ 0.5f, 0.5f, 0.5f},{-0.5f, 0.5f, 0.5f},{-0.5f,-0.5f, 0.5f}},
+        {{-0.5f,-0.5f,-0.5f},{-0.5f, 0.5f,-0.5f},{ 0.5f, 0.5f,-0.5f},{ 0.5f,-0.5f,-0.5f}},
+    };
+    static constexpr int faceNormals[6][3] = {
+        { 1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}
+    };
+    static constexpr float faceUVs[4][2] = {
+        {0,0},{0,1},{1,1},{1,0}
+    };
+
+    // f: 0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z
+    static int ResolveFaceTile(const BlockRender& r, int f) {
+        const BlockFaceTex& ft = (f == 2) ? r.ForTop()
+                            : (f == 3) ? r.ForBottom()
+                                        : r.ForSide();
+        if (ft.tile.empty()) return -1;
+        return ResolveTile(ft.tile);
+    }
+
 }
 
 std::array<BlockFace, 6> MeshBuilderUtils::GetBlockFaces(
@@ -53,7 +57,7 @@ std::array<BlockFace, 6> MeshBuilderUtils::GetBlockFaces(
             faces[f].du[v] = (faceOffsets[f][v][faces[f].u_axis] < 0.0f) ? -1 : 1;
             faces[f].dv[v] = (faceOffsets[f][v][faces[f].v_axis] < 0.0f) ? -1 : 1;
 
-            Eng::client::Vertex vert;
+            Eng::service::Vertex vert;
             vert.position = center + glm::vec3(faceOffsets[f][v][0], faceOffsets[f][v][1], faceOffsets[f][v][2]);
             vert.normal = glm::vec3(faceNormals[f][0], faceNormals[f][1], faceNormals[f][2]);
             vert.uv = { u0 + faceUVs[v][0] * TILE_UV, v0 + (1.0f - faceUVs[v][1]) * TILE_UV };
@@ -67,7 +71,7 @@ std::array<BlockFace, 6> MeshBuilderUtils::GetBlockFaces(
 
 void MeshBuilderUtils::AppendBlock(
     const BlockRegistry& reg, BlockId id, glm::vec3 c,
-    std::vector<Eng::client::Vertex>& outV, std::vector<uint32_t>& outI)
+    std::vector<Eng::service::Vertex>& outV, std::vector<uint32_t>& outI)
 {
     auto faces = GetBlockFaces(reg, id, c);
     for (int f = 0; f < 6; ++f) {
@@ -79,7 +83,7 @@ void MeshBuilderUtils::AppendBlock(
 
 void MeshBuilderUtils::AppendSprite(
     const BlockRegistry& reg, BlockId id, glm::vec3 c, const glm::vec4& light,
-    std::vector<Eng::client::Vertex>& outV, std::vector<uint32_t>& outI)
+    std::vector<Eng::service::Vertex>& outV, std::vector<uint32_t>& outI)
 {
     const auto& def = reg.Get(id);
     const bool isTorch = def.render.isCross && def.render.luminance > 0;
@@ -92,7 +96,7 @@ void MeshBuilderUtils::AppendSprite(
     const int cols = AtlasCols();
     const float TILE_UV = AtlasTileUV();
     float u0 = (tile % cols) * TILE_UV;
-    float v0 = (tile / cols) * TILE_UV;
+    float v0 = (static_cast<float>(tile) / cols) * TILE_UV;
     float u1 = u0 + TILE_UV;
     float v1 = v0 + TILE_UV;
 
@@ -111,7 +115,7 @@ void MeshBuilderUtils::AppendSprite(
                         glm::vec3 p3, glm::vec2 uv3, glm::vec3 p4, glm::vec2 uv4, glm::vec3 n) {
         uint32_t base = static_cast<uint32_t>(outV.size());
         auto pushV = [&](glm::vec3 p, glm::vec2 uv) {
-            Eng::client::Vertex v;
+            Eng::service::Vertex v;
             v.position = p; v.normal = n; v.uv = uv; v.ao = 1.0f;
             v.light = light;
             outV.push_back(v);
@@ -132,7 +136,7 @@ void MeshBuilderUtils::AppendSprite(
 
 void MeshBuilderUtils::AppendTorch(
     const BlockRegistry& reg, BlockId id, int x, int y, int z, glm::vec4 light,
-    std::vector<Eng::client::Vertex>& outV, std::vector<uint32_t>& outI)
+    std::vector<Eng::service::Vertex>& outV, std::vector<uint32_t>& outI)
 {
     const auto& def = reg.Get(id);
     const BlockFaceTex& ft = def.render.ForSide();
@@ -142,18 +146,25 @@ void MeshBuilderUtils::AppendTorch(
     const int cols = AtlasCols();
     const float TILE_UV = AtlasTileUV();
     float u0 = (tile % cols) * TILE_UV;
-    float v0 = (tile / cols) * TILE_UV;
+    float v0 = (static_cast<float>(tile) / cols) * TILE_UV;
 
     // 原图 16x16：木棍在 x∈[7,9]，火焰在 v∈[0,6]
-    float su_min = u0 + (7.0f / 16.0f) * TILE_UV;
-    float su_max = u0 + (9.0f / 16.0f) * TILE_UV;
-    float sv_min = v0 + (6.0f / 16.0f) * TILE_UV;
-    float sv_max = v0 + (16.0f / 16.0f) * TILE_UV;
+    // 像素映射到 0.0~1.0 的常量比例
+    constexpr float PIXEL_7  = 7.0f / 16.0f;
+    constexpr float PIXEL_9  = 9.0f / 16.0f;
+    constexpr float PIXEL_6  = 6.0f / 16.0f;
+    // 16.0f / 16.0f 就是 1.0f，0.0f / 16.0f 就是 0.0f，直接省略
 
-    float tu_min = u0 + (7.0f / 16.0f) * TILE_UV;
-    float tu_max = u0 + (9.0f / 16.0f) * TILE_UV;
-    float tv_min = v0 + (0.0f / 16.0f) * TILE_UV;
-    float tv_max = v0 + (6.0f / 16.0f) * TILE_UV;
+    // 横向（U）：木棍和火焰的宽度完全一致，共用一套变量
+    float su_min = u0 + PIXEL_7 * TILE_UV;
+    float su_max = u0 + PIXEL_9 * TILE_UV;
+
+    // 纵向（V）：木棍占据 [6, 16]，火焰占据 [0, 6]
+    float sv_min = v0 + PIXEL_6 * TILE_UV;
+    float sv_max = v0 + TILE_UV; // 1.0f * TILE_UV
+    
+    float tv_min = v0;           // 0.0f * TILE_UV
+    float tv_max = v0 + PIXEL_6 * TILE_UV;
 
     glm::vec3 c = glm::vec3(x + 0.5f, y + 0.3125f, z + 0.5f);
     float hw = 0.0625f, hh = 0.3125f, hd = 0.0625f;
@@ -172,13 +183,13 @@ void MeshBuilderUtils::AppendTorch(
     addFace({c.x-hw, c.y-hh, c.z+hd}, {c.x-hw, c.y-hh, c.z-hd}, {c.x-hw, c.y+hh, c.z-hd}, {c.x-hw, c.y+hh, c.z+hd}, {-1,0,0}, su_min, su_max, sv_min, sv_max);
     addFace({c.x-hw, c.y-hh, c.z+hd}, {c.x+hw, c.y-hh, c.z+hd}, {c.x+hw, c.y+hh, c.z+hd}, {c.x-hw, c.y+hh, c.z+hd}, {0,0,1}, su_min, su_max, sv_min, sv_max);
     addFace({c.x+hw, c.y-hh, c.z-hd}, {c.x-hw, c.y-hh, c.z-hd}, {c.x-hw, c.y+hh, c.z-hd}, {c.x+hw, c.y+hh, c.z-hd}, {0,0,-1}, su_min, su_max, sv_min, sv_max);
-    addFace({c.x-hw, c.y+hh, c.z-hd}, {c.x+hw, c.y+hh, c.z-hd}, {c.x+hw, c.y+hh, c.z+hd}, {c.x-hw, c.y+hh, c.z+hd}, {0,1,0}, tu_min, tu_max, tv_min, tv_max);
+    addFace({c.x-hw, c.y+hh, c.z-hd}, {c.x+hw, c.y+hh, c.z-hd}, {c.x+hw, c.y+hh, c.z+hd}, {c.x-hw, c.y+hh, c.z+hd}, {0,1,0}, su_min, su_max, tv_min, tv_max);
 }
 
-Eng::client::MeshData MeshBuilderUtils::BuildItemMeshData(
+Eng::service::MeshData MeshBuilderUtils::BuildItemMeshData(
     const BlockRegistry& reg, BlockId id)
 {
-    Eng::client::MeshData data;
+    Eng::service::MeshData data;
     const auto& def = reg.Get(id);
 
     if (def.render.isCross) {

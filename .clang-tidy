@@ -1,48 +1,49 @@
 ---
-Checks: >
-  -*,
-  bugprone-*,
-  performance-*,
-  portability-*,
-  modernize-*,
-  misc-*,
+# 基本检查范围：只启用我们关心的家族
+Checks:
+  - '-*'
+  - bugprone-*
+  - performance-*
+  - portability-*
+  - modernize-*
+  - misc-*
+  - clang-analyzer-*
 
-  -bugprone-easily-swappable-parameters,
-  -bugprone-narrowing-conversions,
-  -bugprone-macro-parentheses,
-  -bugprone-reserved-identifier,
-  -modernize-use-trailing-return-type,
-  -modernize-avoid-c-arrays,
-  -modernize-use-nodiscard,
-  -modernize-use-designated-initializers,
-  -modernize-use-auto,
-  -modernize-use-ranges,
-  -modernize-macro-to-enum,
-  -modernize-return-braced-init-list,
-  -performance-no-int-to-ptr,
-  -performance-enum-size,
-  -portability-avoid-pragma-once,
-  -misc-non-private-member-variables-in-classes,
-  -misc-no-recursion,
-  -misc-use-anonymous-namespace,
-  -misc-use-internal-linkage,
-  -misc-include-cleaner,
-  -misc-const-correctness,
-  -misc-confusable-identifiers,
-  -misc-use-scoped-lock,
-  -bugprone-invalid-enum-default-initialization,
-  -modernize-avoid-c-style-cast,
-  -modernize-use-integer-sign-comparison,
-  -modernize-use-scoped-lock,
-  -modernize-use-std-print,
-  -modernize-pass-by-value,
-  -modernize-use-starts-ends-with,
+  # 1. 禁用强迫改命名的检查
+  - -bugprone-easily-swappable-parameters
+  - -bugprone-narrowing-conversions
+  - -bugprone-macro-parentheses
+  - -bugprone-reserved-identifier
+  - -bugprone-invalid-enum-default-initialization
+
+  # 2. 禁用强迫改写法的检查
+  - -modernize-use-trailing-return-type
+  - -modernize-avoid-c-arrays
+  - -modernize-use-nodiscard
+  - -modernize-use-designated-initializers
+  - -modernize-use-auto
+  - -modernize-use-ranges
+  - -modernize-macro-to-enum
+  - -modernize-return-braced-init-list
+  - -modernize-pass-by-value
+  - -modernize-use-scoped-lock
+
+  # 3. 容忍引擎编程特性
+  - -misc-use-anonymous-namespace
+  - -misc-no-recursion
+  - -misc-non-private-member-variables-in-classes
+  - -misc-use-internal-linkage
+
+  # 4. 保留有用的进阶检查
+  - modernize-use-std-print
+
+WarningsAsErrors: 'performance-*,bugprone-*'
+FormatStyle: file
+SystemHeaders: false
+
+HeaderFilterRegex: '.*(Engine|mycraft)[\/](include|src)[\/].*'
+ExcludeHeaderFilterRegex: '.*vcpkg_installed.*|.*imgui.*|.*glm.*|.*SDL.*|.*volk.*|.*vulkan.*|.*assimp.*|.*nlohmann.*|.*stb.*|.*glad.*|.*vma.*|.*vulkan_raii.*|.*ImGui.*'
 
 CheckOptions:
   - key: performance-unnecessary-value-param.AllowedTypes
     value: ''
-
-WarningsAsErrors: ''
-HeaderFilterRegex: '.*(Engine|mycraft)[\\/](include|src)[\\/].*'
-ExcludeHeaderFilterRegex: 'imgui|vcpkg_installed|vk_mem_alloc|volk|glad|SDL|glm|vulkan|assimp|stb'
-FormatStyle: file

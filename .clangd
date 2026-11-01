@@ -1,14 +1,6 @@
+# 指定编译数据库路径
 CompileFlags:
-  CompilationDatabase: build/clang
+    CompilationDatabase: build/clang
 
-Diagnostics:
-    ClangTidy:
-        Add:
-            - bugprone-*
-            - performance-*
-            - portability-*
-            - modernize-*
-        Remove:
-            - bugprone-easily-swappable-parameters
-            - bugprone-narrowing-conversions
-            - modernize-use-trailing-return-type
+Index:
+    Background: Build

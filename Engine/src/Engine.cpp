@@ -1,9 +1,11 @@
-#include "Engine.h"
-#include "core/Log.h"
+#include "Engine/Engine.h"
+#include "Engine/tool/Log.h"
+#include "Engine/tool/Input.h"
 #include <chrono>
 #include <SDL3/SDL_filesystem.h>
+#include <SDL3_net/SDL_net.h>
 #include <SDL3_image/SDL_image.h>
-#include "core/Platform.h"
+#include "Engine/tool/Platform.h"
 #include <filesystem>
 
 namespace Eng {
@@ -17,8 +19,8 @@ bool Engine::Init(const EngineConfig& config, IGame* game) {
     m_engConfig = config;
     m_game.reset(game);
 
-    EnableAnsiConsole();
-    SetConsoleUTF8Output();
+    tool::EnableAnsiConsole();
+    tool::SetConsoleUTF8Output();
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         logError(m_logger, "[Engine] SDL_Init failed: " << SDL_GetError());
@@ -39,9 +41,9 @@ bool Engine::Init(const EngineConfig& config, IGame* game) {
         logInfo(m_logger, "[Engine] Networking initialized");
     }
 
-    // ★ 只有需要窗口的模式才创建 WindowManager
+    // ★ 只有需要窗口的模式才创建 WindowService
     if (NeedsWindow()) {
-        m_windowManager = std::make_unique<client::WindowManager>();
+        m_windowManager = std::make_unique<service::WindowService>();
     }
 
     // 打一行 mode，方便排查
@@ -63,7 +65,7 @@ void Engine::Run() {
     m_running = true;
 
     auto lastTime = std::chrono::steady_clock::now();
-    m_logger->log(LogLevel::INFO, "[Engine] Run main loop");
+    logInfo(m_logger, "[Engine] Run main loop");
 
     while (m_running) {
         auto currentTime = std::chrono::steady_clock::now();
@@ -73,7 +75,7 @@ void Engine::Run() {
 
         m_deltaTime = deltaTime;
 
-        client::Input::Get().Update();
+        tool::Input::Get().Update();
 
         if (m_windowManager) {
             m_windowManager->PollEvents();

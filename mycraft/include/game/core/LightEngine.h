@@ -1,6 +1,6 @@
 #pragma once
-#include "./World.h"
-#include "BlockRegistry.h"
+#include "game/core/World.h"
+#include "game/core/BlockRegistry.h"
 
 namespace game {
 

@@ -1,6 +1,5 @@
 # ============================================================
-# game-server 静态库（server.cpp + WorldGenerator.cpp）
-# 被 mycraft 客户端 和 mycraft-server 服务端共用
+# game-server 静态库
 # ============================================================
 add_library(game-server STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server.cpp
@@ -12,8 +11,10 @@ add_library(game-server STATIC
 target_include_directories(game-server PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(game-server PUBLIC engine-core engine-net)
-target_link_libraries(game-server PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(game-server 
+    PUBLIC engine-core engine-net
+    PRIVATE nlohmann_json::nlohmann_json project_options project_sanitizer
+)
 
 # ============================================================
 # 客户端
@@ -31,9 +32,18 @@ add_executable(mycraft
 target_include_directories(mycraft PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(mycraft PRIVATE game-server engine-client)
+target_link_libraries(mycraft PRIVATE game-server engine-client project_options project_sanitizer)
 target_compile_definitions(mycraft PRIVATE MYCRAFT_VERSION="${PROJECT_VERSION}")
-add_sanitizer(mycraft)
+
+# ASan 运行时拷贝
+if(DEFINED ASAN_DLL_FILE)
+    add_custom_command(TARGET mycraft POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ASAN_DLL_FILE}"
+            "$<TARGET_FILE_DIR:mycraft>/"
+        COMMENT "Copying ASan runtime DLL to mycraft"
+    )
+endif()
 
 # ============================================================
 # 专用服务端
@@ -44,26 +54,23 @@ add_executable(mycraft-server
 target_include_directories(mycraft-server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(mycraft-server PRIVATE game-server)
-add_sanitizer(mycraft-server)
+target_link_libraries(mycraft-server PRIVATE game-server project_options project_sanitizer)
 
 # ============================================================
-# Shader 编译（只挂到客户端，服务端不需要）
+# Shader 编译
 # ============================================================
-
 add_glsl_shader(shader_mesh   mesh)
 add_glsl_shader(shader_sky    sky)
 add_glsl_shader(shader_post   post)
 add_glsl_shader(shader_lod    lod)
 add_glsl_shader(shader_entity entity)
 
-# 让 mycraft 依赖所有 shader 编译完成
 add_dependencies(mycraft 
     shader_mesh shader_sky shader_post shader_lod shader_entity
 )
 
 # ============================================================
-# assets 同步：整个 assets 目录（含已编译 shader）拷到输出目录
+# assets 同步
 # ============================================================
 add_custom_command(TARGET mycraft POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory

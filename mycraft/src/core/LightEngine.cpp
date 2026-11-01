@@ -1,4 +1,5 @@
 #include "game/core/LightEngine.h"
+#include "game/core/World.h"
 #include <algorithm>
 
 namespace game {

@@ -1,5 +1,5 @@
 #include "game/client/TextureAtlas.h"
-#include "core/Log.h"
+#include "Engine/tool/Log.h"
 #include <SDL3_image/SDL_image.h>
 
 #include <cstddef>
@@ -24,7 +24,7 @@ int s_cols = 8;
 int s_rows = 8;
 std::unordered_map<std::string, int> s_nameToIndex;
 std::vector<uint8_t> s_pixels;
-std::unique_ptr<Eng::Log> s_logger;
+std::unique_ptr<Eng::tool::Log> s_logger;
 
 void TintFromString(const std::string& tint, uint8_t& r, uint8_t& g, uint8_t& b) {
     if      (tint == "grass")   { r = PLAINS_GRASS_R; g = PLAINS_GRASS_G; b = PLAINS_GRASS_B; }
@@ -88,7 +88,7 @@ void FillMissingTile(std::vector<uint8_t>& px, int atlasW, int tileIndex, int co
 } // anonymous
 
 void BuildAtlas(const std::unordered_map<std::string, std::string>& tileTints) {
-    if (!s_logger) s_logger = std::make_unique<Eng::Log>();
+    if (!s_logger) s_logger = std::make_unique<Eng::tool::Log>();
 
     // 1. 收集名字并排序（确定性）
     std::vector<std::string> names;
