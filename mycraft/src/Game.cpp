@@ -312,9 +312,6 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     }
     logInfo(logger, "[MyGame] atlas texture created");
 
-    // ★ 把图集注入 SceneRenderer
-    m_sceneRenderer->SetAtlasTexture(m_atlasTexture);
-
     RecreateFBOs(mainWin->GetConfigs().windowPixelWidth, mainWin->GetConfigs().windowPixelHeight);
     if (!m_mainFbo) {
         logError(logger, "[Game] FBO creation failed!");
@@ -328,7 +325,8 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
 // Shader
 // ============================================================
 void MyGame::SetupShaders() {
-    // 'mesh' shader 由 SceneRenderer 内部加载（构造时），此处只加载其余 shader
+    m_cubeShader = m_assetManager->LoadShader(
+        m_assetManager->MakeShaderCreateInfo("mesh"));
 
     m_lodShader = m_assetManager->LoadShader(
         m_assetManager->MakeShaderCreateInfo("lod"));
@@ -352,7 +350,7 @@ void MyGame::SetupShaders() {
         return ci;
     }());
 
-    if (!m_skyShader || !m_lodShader || !m_entityShader || !m_handShader) {
+        if (!m_cubeShader || !m_skyShader || !m_lodShader || !m_entityShader || !m_handShader) {
         std::string err = "核心着色器加载失败！请检查 assets/shaders/build/ 目录下是否存在对应的 SPIR-V (.spv) 文件。";
         logFatal(logger, "[MyGame] " << err);
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Shader Load Error", err.c_str(), nullptr);
@@ -593,31 +591,26 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->BeginFrame();
 
     if (m_state == GameState::Playing) {
-        // 1. 地形（SceneRenderer 内部：视锥剔除 + MDI 提交）
-        if (m_sceneRenderer) {
-            m_sceneRenderer->Render(projection * view, cameraPos);
-        }
+        m_sceneRenderer->BeginScene();
 
-        // 2. LOD
+        // 1. LOD
         Eng::service::Material lodMat; lodMat.diffuse = m_atlasTexture;
         m_lodManager.CollectVisibleMeshes(m_frustum, m_visibleLodMeshes);
-        if (!m_visibleLodMeshes.empty()) {
-            for (const auto& mesh : m_visibleLodMeshes) {
-                renderer->DrawMesh(mesh, m_lodShader, lodMat);
-            }
+        for (const auto& mesh : m_visibleLodMeshes) {
+            m_sceneRenderer->SubmitMesh(mesh, m_lodShader, lodMat);
         }
 
-        // 3. 其他玩家（entity shader）
+        // 2. 其他玩家
         if (!m_playerMesh) m_playerMesh = BuildPlayerMesh();
         Eng::service::Material playerMat; playerMat.diffuse = m_playerTexture;
         for (auto& [id, ps] : m_otherPlayers) {
             Eng::service::rhi::PerObjectData data;
             data.model = glm::translate(glm::mat4(1.0f), ps.position);
             data.model = glm::rotate(data.model, ps.yaw, glm::vec3(0, 1, 0));
-            renderer->DrawMesh(m_playerMesh, m_entityShader, playerMat, data);
+            m_sceneRenderer->SubmitMesh(m_playerMesh, m_entityShader, playerMat, data);
         }
 
-        // 4. 掉落物（entity shader）
+        // 3. 掉落物
         if (!m_itemEntities.empty()) {
             std::unordered_map<BlockId, std::vector<Eng::service::rhi::PerObjectData>> instances;
             for (const auto& [id, e] : m_itemEntities) {
@@ -634,15 +627,15 @@ void MyGame::OnRender(Eng::Engine& engine) {
             for (const auto& [type, perObjects] : instances) {
                 auto mesh = GetOrCreateItemMesh(type);
                 if (mesh) {
-                    renderer->DrawMeshInstanced(mesh, m_entityShader, itemMat, perObjects);
+                    m_sceneRenderer->SubmitInstancedMesh(mesh, m_entityShader, itemMat, perObjects);
                 }
             }
         }
 
-        // 5. 天空盒
-        renderer->DrawSkybox(m_skyShader);
+        // 4. 天空盒
+        m_sceneRenderer->SubmitSkybox(m_skyShader);
 
-        // 6. 第一人称手部 / 手持物品（hand shader）
+        // 5. 第一人称手部
         if (!m_handMesh) m_handMesh = BuildHandMesh();
 
         glm::vec3 basePos(0.5f, -0.5f, -1.0f);
@@ -666,7 +659,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
 
         if (m_handShader) {
             Eng::service::Material handMat; handMat.diffuse = m_playerTexture;
-            renderer->DrawMesh(m_handMesh, m_handShader, handMat, { .model = handModel });
+            m_sceneRenderer->SubmitMesh(m_handMesh, m_handShader, handMat, { .model = handModel });
 
             auto& curSlot = m_hotbar[m_hotbarIndex];
             if (!curSlot.isEmpty()) {
@@ -677,10 +670,13 @@ void MyGame::OnRender(Eng::Engine& engine) {
                     itemLocalModel = glm::scale(itemLocalModel, glm::vec3(0.5f));
                     glm::mat4 itemModel = glm::inverse(view) * itemLocalModel;
                     Eng::service::Material handItemMat; handItemMat.diffuse = m_atlasTexture;
-                    renderer->DrawMesh(itemMesh, m_handShader, handItemMat, { .model = itemModel });
+                    m_sceneRenderer->SubmitMesh(itemMesh, m_handShader, handItemMat, { .model = itemModel });
                 }
             }
         }
+
+        // ★ 核心：提交所有绘制，并传入地形所需的 Shader 和 贴图
+        m_sceneRenderer->EndScene(projection * view, cameraPos, m_cubeShader, m_atlasTexture);
     }
 
     m_ui.Draw(engine, *this);

@@ -16,51 +16,41 @@ namespace Eng::client {
 /**
  * @brief 现代体素渲染引擎层。
  * @details 负责管理区块大 Buffer、增量更新、异步显存压实、视锥剔除与 MDI 提交。
- *          由业务层（MyGame）创建并拥有；渲染后端（RHI）和资产服务（AssetService）由 Engine 注入。
  */
 class SceneRenderer {
 public:
-    /**
-     * @brief 构造场景渲染器
-     * @param rhi    由 Engine 拥有的渲染后端
-     * @param assets 由 Engine 拥有的资产服务（用于加载标准 mesh shader）
-     * @throw std::runtime_error 当标准 shader 加载失败时
-     */
     SceneRenderer(service::IRenderService* rhi, service::AssetService* assets);
     ~SceneRenderer();
 
     SceneRenderer(const SceneRenderer&) = delete;
     SceneRenderer& operator=(const SceneRenderer&) = delete;
 
-    /**
-     * @brief 注入地形图集纹理（业务层在启动时调用一次，可替换）
-     */
-    void SetAtlasTexture(service::TexturePtr atlas);
-
-    /**
-     * @brief 接收区块的渲染数据（主线程调用）
-     */
+    // ==================== 区块数据接口 ====================
     void OnChunkMeshReady(uint64_t chunkKey,
                           std::vector<service::Vertex>&& vertices,
                           std::vector<uint32_t>&& indices,
                           const glm::vec3& aabbMin,
                           const glm::vec3& aabbMax);
 
-    /**
-     * @brief 卸载区块（丢弃 GPU 视图，延迟释放 GPU 资源）
-     */
     void OnChunkUnloaded(uint64_t chunkKey);
 
-    /**
-     * @brief 渲染一帧地形（含视锥剔除 + MDI 提交）
-     * @param viewProj  业务层维护的 view-projection 矩阵（OpenGL 规范）
-     * @param cameraPos 相机世界坐标（预留：距离排序 / 阴影 / 特殊效果）
-     */
-    void Render(const glm::mat4& viewProj, const glm::vec3& cameraPos);
+    // ==================== 统一渲染接口 ====================
+    void BeginScene();
+    
+    void SubmitMesh(service::MeshPtr mesh, service::ShaderPtr shader, 
+                    const service::Material& material, 
+                    const service::rhi::PerObjectData& data = {});
+                    
+    void SubmitInstancedMesh(service::MeshPtr mesh, service::ShaderPtr shader, 
+                             const service::Material& material, 
+                             const std::vector<service::rhi::PerObjectData>& instances);
+                             
+    void SubmitSkybox(service::ShaderPtr shader);
 
-    /**
-     * @brief 彻底清空所有数据（换关卡 / 回主菜单时调用）
-     */
+    // 业务层传入地形所需的 Shader 和 Atlas，引擎自己决定怎么画 MDI
+    void EndScene(const glm::mat4& viewProj, const glm::vec3& cameraPos,
+                  const service::ShaderPtr& terrainShader, const service::TexturePtr& atlasTexture);
+
     void Clear();
 
 private:
@@ -85,18 +75,23 @@ private:
         size_t indexCursor  = 0;
     };
 
+    // 绘制指令队列
+    struct DrawCommand {
+        enum class Type : std::uint8_t { Mesh, InstancedMesh, Skybox } type;
+        service::MeshPtr mesh = nullptr;
+        service::ShaderPtr shader = nullptr;
+        service::Material material{};
+        service::rhi::PerObjectData data{};
+        std::vector<service::rhi::PerObjectData> instances{};
+    };
+
     void TriggerAsyncRebuild();
     void ProcessPendingRebuild();
     void AppendIncremental(uint64_t key, const ChunkRenderData& data);
     bool TestAABB(const glm::vec3& mn, const glm::vec3& mx, const glm::mat4& viewProj) const;
 
-    // 外部注入（不拥有）
     service::IRenderService* m_rhi = nullptr;
     service::AssetService*   m_assets = nullptr;
-
-    // 内部持有
-    service::ShaderPtr  m_terrainShader;   // 构造时由 m_assets 加载
-    service::TexturePtr m_atlasTexture;    // 业务层通过 SetAtlasTexture 注入
 
     std::unique_ptr<Eng::tool::Log> m_logger = std::make_unique<Eng::tool::Log>();
 
@@ -108,14 +103,13 @@ private:
     size_t m_garbageVertices = 0;
     size_t m_garbageIndices  = 0;
 
-    // 异步重建
     std::mutex m_pendingMutex;
     std::unique_ptr<GlobalGeometry> m_pendingGeometry;
     std::atomic<bool> m_rebuildInProgress{false};
     std::unique_ptr<Eng::tool::RAIIThread> m_rebuildThread;
 
-    // MDI 指令缓冲
     std::vector<service::rhi::DrawIndexedIndirectCommand> m_indirectCommands;
+    std::vector<DrawCommand> m_drawQueue;
 };
 
 } // namespace Eng::client

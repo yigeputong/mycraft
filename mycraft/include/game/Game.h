@@ -40,6 +40,7 @@ private:
     Eng::service::IRenderService*   renderer = nullptr;
     uint32_t m_win = 0;
 
+    Eng::service::ShaderPtr      m_cubeShader;
     Eng::service::ShaderPtr      m_skyShader;
     Eng::service::ShaderPtr      m_lodShader;
     Eng::service::ShaderPtr      m_entityShader;

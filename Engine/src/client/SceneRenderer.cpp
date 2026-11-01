@@ -8,33 +8,15 @@ namespace Eng::client {
 
 SceneRenderer::SceneRenderer(service::IRenderService* rhi, service::AssetService* assets)
     : m_rhi(rhi), m_assets(assets) {
-
-    if (!m_rhi) {
-        throw std::invalid_argument("SceneRenderer: rhi is null");
-    }
-    if (!m_assets) {
-        throw std::invalid_argument("SceneRenderer: assets is null");
-    }
-
-    // 内部自行加载标准地形 shader（Opaque + Standard 顶点布局）
-    m_terrainShader = m_assets->LoadShader(m_assets->MakeShaderCreateInfo("mesh"));
-    if (!m_terrainShader) {
-        throw std::runtime_error(
-            "SceneRenderer: failed to load 'mesh' shader. "
-            "Check assets/shaders/build/mesh/ for vert/frag (.spv) files.");
-    }
-
+    if (!m_rhi) throw std::invalid_argument("SceneRenderer: rhi is null");
+    if (!m_assets) throw std::invalid_argument("SceneRenderer: assets is null");
+    
     m_indirectCommands.reserve(2048);
+    m_drawQueue.reserve(1024);
 }
 
 SceneRenderer::~SceneRenderer() {
-    if (m_rebuildThread) {
-        m_rebuildThread.reset(); // 会自动 request_stop 并 join
-    }
-}
-
-void SceneRenderer::SetAtlasTexture(service::TexturePtr atlas) {
-    m_atlasTexture = std::move(atlas);
+    if (m_rebuildThread) m_rebuildThread.reset();
 }
 
 void SceneRenderer::OnChunkMeshReady(uint64_t chunkKey,
@@ -123,8 +105,6 @@ void SceneRenderer::TriggerAsyncRebuild() {
     if (m_rebuildInProgress.exchange(true)) return;
 
     auto snapshot = m_allChunks;
-
-    // 先重置旧的线程（如果有的话），触发 join
     m_rebuildThread.reset(); 
 
     m_rebuildThread = std::make_unique<Eng::tool::RAIIThread>(
@@ -146,7 +126,6 @@ void SceneRenderer::TriggerAsyncRebuild() {
 
             for (const auto& [key, chunk] : snap) {
                 if (st.stop_requested()) return;
-
                 if (chunk.vertices.empty()) continue;
 
                 uint32_t vOffset = static_cast<uint32_t>(vCursor);
@@ -199,36 +178,78 @@ void SceneRenderer::ProcessPendingRebuild() {
     logInfo(m_logger, std::format("[SceneRenderer] Async Rebuild Complete. Verts: {}", m_liveGeometry.vertexCursor));
 }
 
-void SceneRenderer::Render(const glm::mat4& viewProj, const glm::vec3& cameraPos) {
-    (void)cameraPos;  // 预留：未来距离排序 / 阴影 / 特殊效果
+// ============================================================
+// 统一渲染接口实现
+// ============================================================
 
-    if (!m_rhi || !m_terrainShader || !m_atlasTexture) return;
+void SceneRenderer::BeginScene() {
+    m_drawQueue.clear();
+}
+
+void SceneRenderer::SubmitMesh(service::MeshPtr mesh, service::ShaderPtr shader, const service::Material& material, const service::rhi::PerObjectData& data) {
+    m_drawQueue.push_back({ .type = DrawCommand::Type::Mesh, .mesh = std::move(mesh), .shader = std::move(shader), .material = material, .data = data });
+}
+
+void SceneRenderer::SubmitInstancedMesh(service::MeshPtr mesh, service::ShaderPtr shader, const service::Material& material, const std::vector<service::rhi::PerObjectData>& instances) {
+    m_drawQueue.push_back({ .type = DrawCommand::Type::InstancedMesh, .mesh = std::move(mesh), .shader = std::move(shader), .material = material, .instances = instances });
+}
+
+void SceneRenderer::SubmitSkybox(service::ShaderPtr shader) {
+    m_drawQueue.push_back({ .type = DrawCommand::Type::Skybox, .shader = std::move(shader) });
+}
+
+void SceneRenderer::EndScene(const glm::mat4& viewProj, const glm::vec3& cameraPos,
+                             const service::ShaderPtr& terrainShader, const service::TexturePtr& atlasTexture) {
+    (void)cameraPos;
+
+    if (!m_rhi) return;
 
     ProcessPendingRebuild();
 
-    m_indirectCommands.clear();
-    for (const auto& [key, cc] : m_liveGeometry.chunkMeshes) {
-        if (cc.indexCount == 0) continue;
+    // ==========================================================
+    // 1. 地形 MDI 绘制（由外部传入 Shader 和 图集）
+    // ==========================================================
+    if (terrainShader && atlasTexture) {
+        m_indirectCommands.clear();
+        for (const auto& [key, cc] : m_liveGeometry.chunkMeshes) {
+            if (cc.indexCount == 0) continue;
 
-        // ★ 崩溃修复：m_allChunks 与 m_liveGeometry 可能因异步 rebuild 出现瞬态不一致
-        auto chunkIt = m_allChunks.find(key);
-        if (chunkIt == m_allChunks.end()) continue;
+            auto chunkIt = m_allChunks.find(key);
+            if (chunkIt == m_allChunks.end()) continue;
 
-        if (!TestAABB(chunkIt->second.aabbMin, chunkIt->second.aabbMax, viewProj)) continue;
+            if (!TestAABB(chunkIt->second.aabbMin, chunkIt->second.aabbMax, viewProj)) continue;
 
-        m_indirectCommands.push_back({
-            .indexCount    = cc.indexCount,
-            .instanceCount = 1,
-            .firstIndex    = cc.firstIndex,
-            .vertexOffset  = 0,
-            .firstInstance = 0
-        });
+            m_indirectCommands.push_back({
+                .indexCount    = cc.indexCount,
+                .instanceCount = 1,
+                .firstIndex    = cc.firstIndex,
+                .vertexOffset  = 0,
+                .firstInstance = 0
+            });
+        }
+
+        if (!m_indirectCommands.empty()) {
+            service::Material mat{ .diffuse = atlasTexture };
+            m_rhi->UploadIndirectCommands(m_indirectCommands);
+            m_rhi->DrawMDI(terrainShader, mat, static_cast<uint32_t>(m_indirectCommands.size()));
+        }
     }
 
-    if (!m_indirectCommands.empty()) {
-        service::Material mat{ .diffuse = m_atlasTexture };
-        m_rhi->UploadIndirectCommands(m_indirectCommands);
-        m_rhi->DrawMDI(m_terrainShader, mat, static_cast<uint32_t>(m_indirectCommands.size()));
+    // ==========================================================
+    // 2. 绘制队列（LOD、玩家、掉落物、天空盒、手部）
+    // ==========================================================
+    for (const auto& cmd : m_drawQueue) {
+        switch (cmd.type) {
+            case DrawCommand::Type::Mesh:
+                m_rhi->DrawMesh(cmd.mesh, cmd.shader, cmd.material, cmd.data);
+                break;
+            case DrawCommand::Type::InstancedMesh:
+                m_rhi->DrawMeshInstanced(cmd.mesh, cmd.shader, cmd.material, cmd.instances);
+                break;
+            case DrawCommand::Type::Skybox:
+                m_rhi->DrawSkybox(cmd.shader);
+                break;
+        }
     }
 }
 
@@ -254,9 +275,7 @@ bool SceneRenderer::TestAABB(const glm::vec3& mn, const glm::vec3& mx, const glm
 }
 
 void SceneRenderer::Clear() {
-    if (m_rebuildThread) {
-        m_rebuildThread.reset(); // 停止后台线程
-    }
+    if (m_rebuildThread) m_rebuildThread.reset();
     {
         std::lock_guard lock(m_pendingMutex);
         m_pendingGeometry.reset();
@@ -269,6 +288,7 @@ void SceneRenderer::Clear() {
     m_garbageIndices = 0;
     m_rebuildInProgress = false;
     m_indirectCommands.clear();
+    m_drawQueue.clear();
 }
 
 } // namespace Eng::client
