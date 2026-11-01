@@ -47,44 +47,89 @@ void Window::SetFullscreen(bool enabled) {
 }
 
 bool Window::CreateWindow() {
-    // ★ 1. API 探测（仅决定 apitype，不创建任何 context / RenderService）
+    // 统一的能力打印格式化函数
+    auto printCaps = [&](const char* backend, const Eng::service::rhi::RenderCapabilities& c) {
+        logInfo(m_logger, "==================================================");
+        logInfo(m_logger, "  [" << backend << "] 硬件能力探测完毕");
+        logInfo(m_logger, "==================================================");
+        logInfo(m_logger, "  API 版本       : " << c.apiName << " " << c.apiMajor << "." << c.apiMinor);
+        
+        logInfo(m_logger, "  [硬件极限]");
+        logInfo(m_logger, "    Max Texture Size : " << c.maxTextureSize);
+        logInfo(m_logger, "    Max Compute WG   : " << c.maxComputeWorkGroupInvocations);
+        logInfo(m_logger, "    Max Vertex Attrs : " << c.maxVertexAttributes);
+        logInfo(m_logger, "    Max Vert Bindings: " << c.maxVertexBufferBindings);
+
+        logInfo(m_logger, "  [管线特性]");
+        logInfo(m_logger, "    Geometry Shader  : " << (c.supportsGeometryShader ? "YES" : "NO"));
+        logInfo(m_logger, "    Tessellation     : " << (c.supportsTessellation ? "YES" : "NO"));
+        logInfo(m_logger, "    Dynamic Rendering: " << (c.supportsDynamicRendering ? "YES" : "NO"));
+        logInfo(m_logger, "    Compute Shader   : " << (c.supportsCompute ? "YES" : "NO"));
+        logInfo(m_logger, "    Multi-Draw Ind.  : " << (c.supportsMultiDrawIndirect ? "YES" : "NO"));
+
+        logInfo(m_logger, "  [高级渲染]");
+        logInfo(m_logger, "    Mesh Shader      : " << (c.supportsMeshShaders ? "YES" : "NO"));
+        logInfo(m_logger, "    Ray Tracing      : " << (c.supportsRayTracing ? "YES" : "NO"));
+
+        logInfo(m_logger, "  [内存与绑定]");
+        logInfo(m_logger, "    Bindless Texture : " << (c.supportsBindless ? "YES" : "NO"));
+        logInfo(m_logger, "    Buffer Address   : " << (c.supportsBufferDeviceAddress ? "YES" : "NO"));
+        logInfo(m_logger, "    Timeline Sem     : " << (c.supportsTimelineSemaphore ? "YES" : "NO"));
+        logInfo(m_logger, "    Sparse Binding   : " << (c.supportsSparseBinding ? "YES" : "NO"));
+        logInfo(m_logger, "==================================================");
+    };
+
+    // 1. API 探测（仅决定 apitype，不创建任何 context / RenderService）
     if (m_config.apitype == RenderAPItype::AUTO) {
         auto vk = service::VulkanRenderService::Probe();
         if (vk.available) {
             m_config.apitype = RenderAPItype::VULKAN;
+            printCaps("Vulkan (Auto)", vk.caps);
         } else {
+            logWarning(m_logger, "[Probe] Vulkan 探测失败: " << vk.reason);
             auto gl = service::OpenGLRenderService::Probe();
             if (gl.available) {
                 m_config.apitype = RenderAPItype::OPENGL;
                 m_fallbackReason = "Vulkan 不可用，已自动降级到 OpenGL。\n原因: " + vk.reason;
+                printCaps("OpenGL (Auto Fallback)", gl.caps);
             } else {
+                logError(m_logger, "[Probe] OpenGL 探测失败: " << gl.reason);
                 throw std::runtime_error(std::format(
                     "硬件不支持任何可用的图形 API。\nVulkan: {}\nOpenGL: {}",
                     vk.reason, gl.reason));
             }
         }
-    } else if (m_config.apitype == RenderAPItype::VULKAN) {
+    } 
+    else if (m_config.apitype == RenderAPItype::VULKAN) {
         auto vk = service::VulkanRenderService::Probe();
         if (!vk.available) {
+            logWarning(m_logger, "[Probe] 强制指定的 Vulkan 不可用: " << vk.reason);
             auto gl = service::OpenGLRenderService::Probe();
             if (gl.available) {
                 m_config.apitype = RenderAPItype::OPENGL;
                 m_fallbackReason = "Vulkan 不可用，已自动降级到 OpenGL。\n原因: " + vk.reason;
+                printCaps("OpenGL (Vulkan Forced Fallback)", gl.caps);
             } else {
+                logError(m_logger, "[Probe] 强制 Vulkan 失败，且回退 OpenGL 也失败: " << gl.reason);
                 throw std::runtime_error(std::format(
                     "强制使用 Vulkan 失败，且 OpenGL 不可用。\nVulkan: {}\nOpenGL: {}",
                     vk.reason, gl.reason));
             }
+        } else {
+            printCaps("Vulkan (Forced)", vk.caps);
         }
-    } else if (m_config.apitype == RenderAPItype::OPENGL) {
+    } 
+    else if (m_config.apitype == RenderAPItype::OPENGL) {
         auto gl = service::OpenGLRenderService::Probe();
         if (!gl.available) {
+            logError(m_logger, "[Probe] 强制指定的 OpenGL 不可用: " << gl.reason);
             throw std::runtime_error(std::format(
                 "强制使用 OpenGL 失败。\n原因: {}", gl.reason));
         }
+        printCaps("OpenGL (Forced)", gl.caps);
     }
 
-    // ★ 2. 按 apitype 创建原生窗口
+    // 2. 按 apitype 创建原生窗口
     switch (m_config.apitype) {
     case RenderAPItype::OPENGL:
         return CreateOpenGLWindow();

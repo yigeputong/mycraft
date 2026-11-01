@@ -9,6 +9,7 @@
 
 //clients
 #include "Engine/tool/Configs.h"
+#include "Engine/tool/Log.h"
 
 namespace Eng::tool {
 
@@ -50,6 +51,7 @@ public:
 private:
 
     SDL_Window* m_window = nullptr;
+    std::unique_ptr<Eng::tool::Log> m_logger = std::make_unique<Eng::tool::Log>();
 
     WindowConfig m_config;
     bool m_fullscreen = false;

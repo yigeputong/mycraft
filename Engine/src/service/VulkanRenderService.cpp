@@ -1873,12 +1873,6 @@ Eng::service::BackendAvailability VulkanRenderService::Probe() {
         return r;
     }
 
-    uint32_t extCount = 0;
-    if (!SDL_Vulkan_GetInstanceExtensions(&extCount)) {
-        r.reason = "Failed to get Vulkan instance extensions";
-        return r;
-    }
-
     vk::ApplicationInfo appInfo{ .pApplicationName = "Probe", .apiVersion = VK_API_VERSION_1_3 };
     const char* exts[] = { vk::KHRSurfaceExtensionName };
     vk::InstanceCreateInfo createInfo{ .pApplicationInfo = &appInfo, .enabledExtensionCount = 1, .ppEnabledExtensionNames = exts };
@@ -1892,7 +1886,44 @@ Eng::service::BackendAvailability VulkanRenderService::Probe() {
         for (const auto& pd : physicalDevices) {
             if (pd.getProperties().apiVersion >= VK_API_VERSION_1_3) {
                 found13 = true;
-                break;
+                
+                // ==========================================
+                // 既然抓住了物理设备，直接把底裤扒光
+                // ==========================================
+                auto props = pd.getProperties();
+                r.caps.apiName = "Vulkan";
+                r.caps.apiMajor = vk::versionMajor(props.apiVersion);
+                r.caps.apiMinor = vk::versionMinor(props.apiVersion);
+                r.caps.maxTextureSize = props.limits.maxImageDimension2D;
+                r.caps.maxComputeWorkGroupInvocations = props.limits.maxComputeWorkGroupInvocations;
+                r.caps.maxVertexAttributes = props.limits.maxVertexInputAttributes;
+                r.caps.maxVertexBufferBindings = props.limits.maxVertexInputBindings;
+
+                auto f10 = pd.getFeatures();
+                r.caps.supportsGeometryShader = f10.geometryShader == vk::True;
+                r.caps.supportsMultiDrawIndirect = f10.multiDrawIndirect == vk::True;
+                r.caps.supportsSparseBinding = f10.sparseBinding == vk::True;
+                r.caps.supportsCompute = true;
+                
+                auto f12 = pd.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan12Features>().get<vk::PhysicalDeviceVulkan12Features>();
+                r.caps.supportsBufferDeviceAddress = f12.bufferDeviceAddress == vk::True;
+                r.caps.supportsTimelineSemaphore = f12.timelineSemaphore == vk::True;
+                r.caps.supportsBindless = f12.descriptorIndexing == vk::True;
+
+                auto f13 = pd.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features>().get<vk::PhysicalDeviceVulkan13Features>();
+                r.caps.supportsDynamicRendering = f13.dynamicRendering == vk::True;
+                r.caps.supportsTessellation = f10.tessellationShader == vk::True;
+
+                // 查扩展
+                auto availableExts = pd.enumerateDeviceExtensionProperties();
+                auto hasExt = [&](const char* name) {
+                    return std::any_of(availableExts.begin(), availableExts.end(), [&](const auto& e) { return std::string(e.extensionName) == name; });
+                };
+                
+                r.caps.supportsMeshShaders = hasExt(vk::EXTMeshShaderExtensionName);
+                r.caps.supportsRayTracing = hasExt(vk::KHRAccelerationStructureExtensionName) && hasExt(vk::KHRRayTracingPipelineExtensionName);
+
+                break; // 找到支持的设备就退出
             }
         }
         

@@ -884,16 +884,65 @@ Eng::service::BackendAvailability OpenGLRenderService::Probe() {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, OpenGLRenderService::api_major);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, OpenGLRenderService::api_minor);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    
     SDL_Window* w = SDL_CreateWindow("probe", 1, 1, SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL);
     if (!w) { r.reason = "Failed to create GL window"; return r; }
+    
     SDL_GLContext ctx = SDL_GL_CreateContext(w);
     if (!ctx) { SDL_DestroyWindow(w); r.reason = "Failed to create GL context"; return r; }
+    
     SDL_GL_MakeCurrent(w, ctx);
     if (gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress) == 0) {
         r.reason = "Failed to load GL pointers";
     } else {
         r.available = true;
+        
+        // 探测 OpenGL 能力
+        r.caps.apiName = "OpenGL";
+        GLint major, minor;
+        glGetIntegerv(GL_MAJOR_VERSION, &major);
+        glGetIntegerv(GL_MINOR_VERSION, &minor);
+        r.caps.apiMajor = major;
+        r.caps.apiMinor = minor;
+
+        GLint maxTex, maxComputeWG, maxVertAttrs, maxVertBuffers;
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+        glGetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &maxComputeWG);
+        glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &maxVertAttrs);
+        glGetIntegerv(GL_MAX_VERTEX_ATTRIB_BINDINGS, &maxVertBuffers);
+
+        r.caps.maxTextureSize = maxTex;
+        r.caps.maxComputeWorkGroupInvocations = maxComputeWG;
+        r.caps.maxVertexAttributes = maxVertAttrs;
+        r.caps.maxVertexBufferBindings = maxVertBuffers;
+
+        GLint numExtensions = 0;
+        glGetIntegerv(GL_NUM_EXTENSIONS, &numExtensions);
+        std::vector<std::string> exts(numExtensions);
+        for (GLint i = 0; i < numExtensions; ++i) {
+            const char* ext = (const char*)glGetStringi(GL_EXTENSIONS, i);
+            if (ext) {
+                exts[i] = ext;
+                r.caps.availableExtensions.push_back(ext);
+            }
+        }
+        
+        auto hasExtension = [&](const std::string& name) {
+            return std::find(exts.begin(), exts.end(), name) != exts.end();
+        };
+
+        r.caps.supportsCompute = (major > 4) || (major == 4 && minor >= 3);
+        r.caps.supportsGeometryShader = (major > 3) || (major == 3 && minor >= 2);
+        r.caps.supportsTessellation = (major > 4) || (major == 4 && minor >= 0);
+        r.caps.supportsMultiDrawIndirect = (major > 4) || (major == 4 && minor >= 3); 
+        
+        r.caps.supportsDynamicRendering = false; 
+        r.caps.supportsMeshShaders = hasExtension("GL_EXT_mesh_shader");
+        r.caps.supportsRayTracing = false; 
+        r.caps.supportsBindless = hasExtension("GL_ARB_bindless_texture");
+        r.caps.supportsBufferDeviceAddress = hasExtension("GL_EXT_buffer_device_address") || hasExtension("GL_NV_buffer_device_address");
     }
+    
     SDL_GL_DestroyContext(ctx);
     SDL_DestroyWindow(w);
     return r;

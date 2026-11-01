@@ -86,6 +86,37 @@ struct PerObjectData {
     // 已用 96 字节，余 32 字节
 };
 
+struct RenderCapabilities {
+    // 后端标识
+    std::string apiName = "Unknown";
+    uint32_t apiMajor = 0;
+    uint32_t apiMinor = 0;
+
+    // 硬件极限
+    uint32_t maxTextureSize = 0;
+    uint32_t maxComputeWorkGroupInvocations = 0;
+    uint32_t maxVertexAttributes = 0;
+    uint32_t maxVertexBufferBindings = 0;
+
+    // 管线/图形特性
+    bool supportsGeometryShader = false;
+    bool supportsTessellation = false;
+    bool supportsDynamicRendering = false; // VK 1.3 核心 / GL 无
+    bool supportsMeshShaders = false;
+    bool supportsRayTracing = false;
+    bool supportsCompute = false;
+    bool supportsMultiDrawIndirect = false;
+
+    // 内存/绑定特性
+    bool supportsBindless = false; // DescriptorIndexing
+    bool supportsBufferDeviceAddress = false;
+    bool supportsTimelineSemaphore = false;
+    bool supportsSparseBinding = false;
+
+    // 可选：打印具体支持的扩展名
+    std::vector<std::string> availableExtensions;
+};
+
 } // namespace rhi
 
 
@@ -189,6 +220,7 @@ struct Model {
 
 struct BackendAvailability {
     bool available = false;
+    rhi::RenderCapabilities caps;
     std::string reason;
 };
 
