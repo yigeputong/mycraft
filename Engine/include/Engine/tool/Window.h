@@ -10,6 +10,7 @@
 //clients
 #include "Engine/tool/Configs.h"
 #include "Engine/tool/Log.h"
+#include "Engine/service/IRenderService.h"
 
 namespace Eng::tool {
 
@@ -38,6 +39,7 @@ public:
     float GetTime() const { return SDL_GetTicks() / 1000.0f; }
     float GetAspectRatio() const { return static_cast<float>(m_config.windowPixelWidth) / m_config.windowPixelHeight; }
     SDL_Window* GetSDLWindow() const { return m_window; }
+    const Eng::service::rhi::RenderCapabilities& GetRenderCapabilities() const { return m_renderCaps; }
 
     // ★ 保留：API 探测降级原因（Engine / MyGame 会读取并弹窗）
     std::string GetFallbackReason() const { return m_fallbackReason; }
@@ -57,6 +59,7 @@ private:
     bool m_fullscreen = false;
     int m_windowedHeight =  m_config.windowHeight;
     int m_windowedWidth = m_config.windowWidth;
+    Eng::service::rhi::RenderCapabilities m_renderCaps{};
 
     bool m_running = true;
     bool m_createSuccess = false;

@@ -84,12 +84,14 @@ bool Window::CreateWindow() {
         auto vk = service::VulkanRenderService::Probe();
         if (vk.available) {
             m_config.apitype = RenderAPItype::VULKAN;
+            m_renderCaps = vk.caps;
             printCaps("Vulkan (Auto)", vk.caps);
         } else {
             logWarning(m_logger, "[Probe] Vulkan 探测失败: " << vk.reason);
             auto gl = service::OpenGLRenderService::Probe();
             if (gl.available) {
                 m_config.apitype = RenderAPItype::OPENGL;
+                m_renderCaps = gl.caps;
                 m_fallbackReason = "Vulkan 不可用，已自动降级到 OpenGL。\n原因: " + vk.reason;
                 printCaps("OpenGL (Auto Fallback)", gl.caps);
             } else {
@@ -99,14 +101,14 @@ bool Window::CreateWindow() {
                     vk.reason, gl.reason));
             }
         }
-    } 
-    else if (m_config.apitype == RenderAPItype::VULKAN) {
+    } else if (m_config.apitype == RenderAPItype::VULKAN) {
         auto vk = service::VulkanRenderService::Probe();
         if (!vk.available) {
             logWarning(m_logger, "[Probe] 强制指定的 Vulkan 不可用: " << vk.reason);
             auto gl = service::OpenGLRenderService::Probe();
             if (gl.available) {
                 m_config.apitype = RenderAPItype::OPENGL;
+                m_renderCaps = gl.caps;
                 m_fallbackReason = "Vulkan 不可用，已自动降级到 OpenGL。\n原因: " + vk.reason;
                 printCaps("OpenGL (Vulkan Forced Fallback)", gl.caps);
             } else {
@@ -116,6 +118,7 @@ bool Window::CreateWindow() {
                     vk.reason, gl.reason));
             }
         } else {
+            m_renderCaps = vk.caps;
             printCaps("Vulkan (Forced)", vk.caps);
         }
     } 
@@ -126,6 +129,7 @@ bool Window::CreateWindow() {
             throw std::runtime_error(std::format(
                 "强制使用 OpenGL 失败。\n原因: {}", gl.reason));
         }
+        m_renderCaps = gl.caps;
         printCaps("OpenGL (Forced)", gl.caps);
     }
 
