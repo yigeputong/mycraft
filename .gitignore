@@ -7,5 +7,3 @@ dist/
 CMakeUserPresets.json
 
 **/imgui.ini
-
-AI_CONTEXT.md

@@ -99,26 +99,6 @@
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++"
             }
-        },
-        {
-            "name": "termux-base",
-            "hidden": true,
-            "inherits": "base",
-            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Android" },
-            "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-android",
-                "BUILD_SHARED_LIBS": "ON"
-            }
-        },
-        {
-            "name": "termux-clang",
-            "displayName": "Termux Android Clang",
-            "inherits": "termux-base",
-            "binaryDir": "${sourceDir}/build/termux",
-            "cacheVariables": {
-                "CMAKE_C_COMPILER": "clang",
-                "CMAKE_CXX_COMPILER": "clang++"
-            }
         }
     ],
     "buildPresets": [
@@ -187,18 +167,6 @@
             "displayName": "Linux Clang Debug",
             "configurePreset": "linux-clang",
             "configuration": "Debug"
-        },
-        {
-            "name": "termux-clang-debug",
-            "displayName": "Termux Clang Debug",
-            "configurePreset": "termux-clang",
-            "configuration": "Debug"
-        },
-        {
-            "name": "termux-clang-release",
-            "displayName": "Termux Clang Release",
-            "configurePreset": "termux-clang",
-            "configuration": "Release"
         }
     ]
 }
