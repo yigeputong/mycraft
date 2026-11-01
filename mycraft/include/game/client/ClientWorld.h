@@ -30,7 +30,7 @@ public:
     // ★ 注入注册表
     void SetRegistry(const game::BlockRegistry* reg) { m_registry = reg; }
 
-    void AddChunk(int cx, int cz, const std::vector<BlockId>& blocksData,
+    void AddChunk(int cx, int cz, std::span<const BlockId> blocksData,
                   const std::array<uint8_t, CHUNK_VOLUME>& skyData,
                   const std::array<LightRGB, CHUNK_VOLUME>& blockLightData,
                   Eng::service::MeshPtr mesh = nullptr);
@@ -67,6 +67,8 @@ private:
     std::unordered_set<uint64_t>              m_dirtyChunks;
     int m_lastPlayerChunkX = INT_MIN;
     int m_lastPlayerChunkZ = INT_MIN;
+    std::vector<std::pair<int, int>> m_needQueue;
+    size_t m_needCursor = 0;
 };
 
 } // namespace game::client

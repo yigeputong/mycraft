@@ -27,7 +27,10 @@ struct LodKey {
 
 struct LodKeyHash {
     size_t operator()(const LodKey& k) const {
-        return std::hash<int>()(k.level) ^ (std::hash<int>()(k.unitX) << 1) ^ (std::hash<int>()(k.unitZ) << 2);
+        uint64_t h = static_cast<uint64_t>(static_cast<uint32_t>(k.unitX)) * 73856093ULL ^
+                     static_cast<uint64_t>(static_cast<uint32_t>(k.unitZ)) * 19349663ULL ^
+                     static_cast<uint64_t>(static_cast<uint8_t>(k.level)) * 83492791ULL;
+        return static_cast<size_t>(h);
     }
 };
 

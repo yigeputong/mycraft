@@ -21,7 +21,7 @@ static bool AabbInFrustum(const Frustum& f, const glm::vec3& mn, const glm::vec3
     return true;
 }
 
-void ClientWorld::AddChunk(int cx, int cz, const std::vector<BlockId>& blocksData,
+void ClientWorld::AddChunk(int cx, int cz, std::span<const BlockId> blocksData,
                            const std::array<uint8_t, CHUNK_VOLUME>& skyData,
                            const std::array<LightRGB, CHUNK_VOLUME>& blockLightData,
                            Eng::service::MeshPtr mesh) {
@@ -141,10 +141,12 @@ void ClientWorld::UpdateStreaming(const glm::vec3& cameraPos, int renderDistance
 
     const int unloadR = renderDistance + 2;
 
+    // ★ 只有跨越区块边界时，才重新计算需要加载的区块并排序
     if (pcx != m_lastPlayerChunkX || pcz != m_lastPlayerChunkZ) {
         m_lastPlayerChunkX = pcx;
         m_lastPlayerChunkZ = pcz;
 
+        // 1. 卸载超远区块
         for (auto it = m_chunks.begin(); it != m_chunks.end(); ) {
             int cx = static_cast<int>(static_cast<int32_t>(it->first & 0xFFFFFFFFu));
             int cz = static_cast<int>(static_cast<int32_t>(it->first >> 32));
@@ -156,27 +158,44 @@ void ClientWorld::UpdateStreaming(const glm::vec3& cameraPos, int renderDistance
                 ++it;
             }
         }
-    }
 
-    struct Need { int cx, cz, d2; };
-    std::vector<Need> need;
-    for (int dz = -renderDistance; dz <= renderDistance; ++dz) {
-        for (int dx = -renderDistance; dx <= renderDistance; ++dx) {
-            int cx = pcx + dx;
-            int cz = pcz + dz;
-            uint64_t key = ChunkKey(cx, cz);
-            if (m_chunks.count(key) || m_pending.count(key)) continue;
-            need.push_back({cx, cz, dx*dx + dz*dz});
+        // 2. 搜集需要请求的区块并排序
+        struct Need { int cx, cz, d2; };
+        std::vector<Need> need;
+        for (int dz = -renderDistance; dz <= renderDistance; ++dz) {
+            for (int dx = -renderDistance; dx <= renderDistance; ++dx) {
+                int cx = pcx + dx;
+                int cz = pcz + dz;
+                uint64_t key = ChunkKey(cx, cz);
+                if (m_chunks.count(key) || m_pending.count(key)) continue;
+                need.push_back({cx, cz, dx*dx + dz*dz});
+            }
         }
+        std::sort(need.begin(), need.end(), [](const Need& a, const Need& b) { return a.d2 < b.d2; });
+
+        // 3. 把排好序的结果放入待发送队列
+        m_needQueue.clear();
+        m_needQueue.reserve(need.size());
+        for (const auto& n : need) {
+            m_needQueue.push_back({n.cx, n.cz});
+        }
+        m_needCursor = 0;
     }
 
-    std::sort(need.begin(), need.end(), [](const Need& a, const Need& b) { return a.d2 < b.d2; });
-
+    // ★ 无论是否跨区块，每帧都从队列里取最多 10 个发出去（防止瞬间发包卡死网络）
     int sent = 0;
-    for (const auto& n : need) {
-        if (sent++ >= 10) break;
-        sendRequest(n.cx, n.cz);
-        m_pending.insert(ChunkKey(n.cx, n.cz));
+    while (m_needCursor < m_needQueue.size() && sent < 10) {
+        int cx = m_needQueue[m_needCursor].first;
+        int cz = m_needQueue[m_needCursor].second;
+        uint64_t key = ChunkKey(cx, cz);
+        
+        // 如果在这一帧里被别的途径加载了，就跳过
+        if (!m_chunks.count(key) && !m_pending.count(key)) {
+            sendRequest(cx, cz);
+            m_pending.insert(key);
+            ++sent;
+        }
+        ++m_needCursor;
     }
 }
 

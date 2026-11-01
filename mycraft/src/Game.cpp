@@ -952,8 +952,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             if (sy != CHUNK_SIZE_Y) return;
 
             auto bytes = r.ReadBytes(CHUNK_VOLUME * sizeof(BlockId));
-            std::vector<BlockId> blockData(reinterpret_cast<const BlockId*>(bytes.data()),
-                                           reinterpret_cast<const BlockId*>(bytes.data() + bytes.size()));
+            std::span<const BlockId> blockSpan(reinterpret_cast<const BlockId*>(bytes.data()), CHUNK_VOLUME);
 
             auto skyBytes = r.ReadBytes(CHUNK_VOLUME);
             std::array<uint8_t, CHUNK_VOLUME> skyData;
@@ -964,7 +963,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             std::memcpy(blockLightData.data(), blockLightBytes.data(), CHUNK_VOLUME * sizeof(LightRGB));
 
             uint64_t key = ChunkKey(cx, cz);
-            m_world.AddChunk(cx, cz, blockData, skyData, blockLightData, nullptr);
+            m_world.AddChunk(cx, cz, blockSpan, skyData, blockLightData, nullptr);
 
             m_world.MarkDirty(key);
             m_world.MarkDirty(ChunkKey(cx - 1, cz));

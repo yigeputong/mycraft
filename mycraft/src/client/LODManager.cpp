@@ -157,7 +157,7 @@ void LodManager::Update(const glm::vec3& cameraPos, [[maybe_unused]] const Clien
 }
 
 void LodManager::DrainResults(Eng::service::IRenderService* renderer) {
-    constexpr int K = 4; // 防止主线程卡顿
+    constexpr int K = 1; // 每帧只建 1 个
     int done = 0;
     for (;;) {
         LodResult result;
@@ -168,12 +168,12 @@ void LodManager::DrainResults(Eng::service::IRenderService* renderer) {
             m_resultQueue.pop();
         }
 
+        done++; // 必须放前面，防死循环
+
         LodKey key{ static_cast<int8_t>(result.level), result.unitX, result.unitZ };
         m_pending.erase(key);
 
-        // 如果这个 LOD 不在当前 wanted 列表里，说明玩家已经飞走了，直接丢弃！
         if (!m_wanted.count(key)) continue;
-
         if (result.vertices.empty()) continue;
 
         Eng::service::MeshData data;
@@ -189,7 +189,6 @@ void LodManager::DrainResults(Eng::service::IRenderService* renderer) {
         unit.aabbMin = result.aabbMin;
         unit.aabbMax = result.aabbMax;
         m_units[key] = std::move(unit);
-        ++done;
     }
 }
 
