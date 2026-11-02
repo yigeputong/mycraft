@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/service/IRenderService.h"
+#include "Engine/tool/Configs.h"
 #include "Engine/tool/Log.h"
 #include <glad/glad.h>
 #include <SDL3/SDL_video.h>
@@ -36,7 +37,7 @@ public:
 
     // 资源创建
     MeshPtr CreateMesh(const MeshData& data) override;
-    TexturePtr CreateTexture(const uint8_t* rgba, int w, int h) override;
+    TexturePtr CreateTexture(const uint8_t* rgba, int w, int h, int requestedMips = 0) override;
     ShaderPtr CreateShader(const ShaderCreateInfo& info) override;
     FramebufferPtr CreateFramebuffer(const FramebufferCreateInfo& info) override;
 
@@ -142,6 +143,8 @@ private:
     std::unique_ptr<tool::Log> m_logger = std::make_unique<tool::Log>();
     DeviceInfo m_deviceInfo;
 
+    tool::RenderConfig m_renderConfig;
+
     tool::Window* m_window = nullptr;
     int m_viewportX = 0, m_viewportY = 0;
     int m_viewportWidth = 0, m_viewportHeight = 0;
@@ -149,7 +152,7 @@ private:
 
     // 内部辅助
     MeshHandle CreateMeshInternal(const MeshData& data);
-    TextureHandle CreateTextureInternal(const uint8_t* rgba, int w, int h);
+    TextureHandle CreateTextureInternal(const uint8_t* rgba, int w, int h, int requestedMips = 0);
     ShaderHandle CreateShaderInternal(const ShaderCreateInfo& info);
     FramebufferHandle CreateFramebufferInternal(const FramebufferCreateInfo& info);
 

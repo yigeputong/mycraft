@@ -36,9 +36,7 @@ std::array<BlockFace, 6> MeshBuilderUtils::GetBlockFaces(
 {
     std::array<BlockFace, 6> faces;
     const auto& def = reg.Get(id);
-    const int cols = AtlasCols();
-    const float TILE_UV = AtlasTileUV();
-
+    
     for (int f = 0; f < 6; ++f) {
         int N_axis = (faceNormals[f][0] != 0) ? 0 : (faceNormals[f][1] != 0) ? 1 : 2;
         faces[f].u_axis = (N_axis + 1) % 3;
@@ -46,12 +44,13 @@ std::array<BlockFace, 6> MeshBuilderUtils::GetBlockFaces(
         faces[f].normal = glm::ivec3(faceNormals[f][0], faceNormals[f][1], faceNormals[f][2]);
 
         int tile = ResolveFaceTile(def.render, f);
-        if (tile < 0) tile = 0;   // fallback 到 0
+        if (tile < 0) tile = 0;
 
-        int tileRow = tile / cols;
-        int tileCol = tile % cols;
-        float u0 = static_cast<float>(tileCol) * TILE_UV;
-        float v0 = static_cast<float>(tileRow) * TILE_UV;
+        // ★ 使用新的 GetTileUV
+        float u0, v0, u1, v1;
+        GetTileUV(tile, u0, v0, u1, v1);
+        float uScale = u1 - u0;
+        float vScale = v1 - v0;
 
         for (int v = 0; v < 4; ++v) {
             faces[f].du[v] = (faceOffsets[f][v][faces[f].u_axis] < 0.0f) ? -1 : 1;
@@ -60,7 +59,9 @@ std::array<BlockFace, 6> MeshBuilderUtils::GetBlockFaces(
             Eng::service::Vertex vert;
             vert.position = center + glm::vec3(faceOffsets[f][v][0], faceOffsets[f][v][1], faceOffsets[f][v][2]);
             vert.normal = glm::vec3(faceNormals[f][0], faceNormals[f][1], faceNormals[f][2]);
-            vert.uv = { u0 + faceUVs[v][0] * TILE_UV, v0 + (1.0f - faceUVs[v][1]) * TILE_UV };
+            
+            // ★ 使用真实内缩后的尺寸
+            vert.uv = { u0 + faceUVs[v][0] * uScale, v0 + (1.0f - faceUVs[v][1]) * vScale };
             vert.ao = 1.0f;
             vert.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
             faces[f].verts[v] = vert;
@@ -93,12 +94,8 @@ void MeshBuilderUtils::AppendSprite(
     int tile = ft.tile.empty() ? 0 : ResolveTile(ft.tile);
     if (tile < 0) tile = 0;
 
-    const int cols = AtlasCols();
-    const float TILE_UV = AtlasTileUV();
-    float u0 = (tile % cols) * TILE_UV;
-    float v0 = (static_cast<float>(tile) / cols) * TILE_UV;
-    float u1 = u0 + TILE_UV;
-    float v1 = v0 + TILE_UV;
+    float u0, v0, u1, v1;
+    GetTileUV(tile, u0, v0, u1, v1);
 
     float s, y0, y1;
     if (isTorch) {
@@ -143,27 +140,23 @@ void MeshBuilderUtils::AppendTorch(
     int tile = ft.tile.empty() ? 0 : ResolveTile(ft.tile);
     if (tile < 0) tile = 0;
 
-    const int cols = AtlasCols();
-    const float TILE_UV = AtlasTileUV();
-    float u0 = (tile % cols) * TILE_UV;
-    float v0 = (static_cast<float>(tile) / cols) * TILE_UV;
+    // ★ 替换为 GetTileUV
+    float u0, v0, u1, v1;
+    GetTileUV(tile, u0, v0, u1, v1);
+    float TILE_UV = u1 - u0; // 真实贴图宽度
 
     // 原图 16x16：木棍在 x∈[7,9]，火焰在 v∈[0,6]
-    // 像素映射到 0.0~1.0 的常量比例
     constexpr float PIXEL_7  = 7.0f / 16.0f;
     constexpr float PIXEL_9  = 9.0f / 16.0f;
     constexpr float PIXEL_6  = 6.0f / 16.0f;
-    // 16.0f / 16.0f 就是 1.0f，0.0f / 16.0f 就是 0.0f，直接省略
 
-    // 横向（U）：木棍和火焰的宽度完全一致，共用一套变量
     float su_min = u0 + PIXEL_7 * TILE_UV;
     float su_max = u0 + PIXEL_9 * TILE_UV;
 
-    // 纵向（V）：木棍占据 [6, 16]，火焰占据 [0, 6]
     float sv_min = v0 + PIXEL_6 * TILE_UV;
-    float sv_max = v0 + TILE_UV; // 1.0f * TILE_UV
+    float sv_max = v1; // 相当于 v0 + TILE_UV
     
-    float tv_min = v0;           // 0.0f * TILE_UV
+    float tv_min = v0;
     float tv_max = v0 + PIXEL_6 * TILE_UV;
 
     glm::vec3 c = glm::vec3(x + 0.5f, y + 0.3125f, z + 0.5f);

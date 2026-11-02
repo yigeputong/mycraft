@@ -181,13 +181,6 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
     const float faceUVs[4][2] = {{0,0},{0,1},{1,1},{1,0}};
     const int faceAxes[6][2] = { {2, 1}, {2, 1}, {0, 2}, {0, 2}, {0, 1}, {0, 1} };
 
-    const int cols = AtlasCols();
-    const float TILE_UV = AtlasTileUV();
-    
-    // 防止采样到相邻格子的透明边缘，导致面被 discard 露出黑底
-    const float pad = 0.002f; 
-    const float uScale = TILE_UV - 2.0f * pad;
-    const float vScale = TILE_UV - 2.0f * pad;
 
     for (int ly = 0; ly < 256; ++ly) {
         for (int lz = 0; lz < 16; ++lz) {
@@ -220,7 +213,7 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                     BlockId nId = getBlock(lx + normals[f].x, ly + normals[f].y, lz + normals[f].z);
                     const auto& ndef = reg.Get(nId);
                     if (ndef.render.isOpaque) continue;
-                    if (def.render.isLiquid && ndef.render.isLiquid && type == nId) continue;
+                    if (def.render.isLiquid && ndef.render.isLiquid) continue;
                     visible[f] = true;
                 }
 
@@ -233,11 +226,21 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                     else { tile = ResolveTile(def.render.ForSide().tile); }
                     if (tile < 0) tile = 0;
 
-                    int col = tile % cols;
-                    float u0 = static_cast<float>(col) * TILE_UV + pad;
-                    int row = tile / cols;
-                    float v0 = static_cast<float>(row) * TILE_UV + pad;
-                    auto baseV = static_cast<uint32_t>(result.vertices.size());
+                    // 使用 GetTileUV 获取内缩的 UV 边界
+                    float u0, v0, u1, v1;
+                    GetTileUV(tile, u0, v0, u1, v1);
+                    
+                    // 真实贴图宽度/高度（已跳过 padding）
+                    float uScale = u1 - u0;
+                    float vScale = v1 - v0;
+
+                    // 提前判断是不是液体，决定塞到哪个容器里
+                    bool isLiquid = def.render.isLiquid;
+                    auto& outV = isLiquid ? result.waterVertices : result.vertices;
+                    auto& outI = isLiquid ? result.waterIndices  : result.indices;
+
+                    // 偏移量取对应容器的大小
+                    auto baseV = static_cast<uint32_t>(outV.size());
 
                     int Nx = normals[f].x, Ny = normals[f].y, Nz = normals[f].z;
 
@@ -251,7 +254,8 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                         vert.position = glm::vec3(baseX + lx + vx + 0.5f, ly + vy + 0.5f, baseZ + lz + vz + 0.5f);
                         vert.normal = glm::vec3(Nx, Ny, Nz);
                         
-                        if (def.render.isLiquid && vert.position.y > ly + 0.01f) vert.position.y = (float)ly + 0.9f;
+                        // 液体高度截断
+                        if (isLiquid && vert.position.y > ly + 0.01f) vert.position.y = (float)ly + 0.9f;
                         
                         vert.uv = { u0 + faceUVs[v][0] * uScale, v0 + (1.0f - faceUVs[v][1]) * vScale };
                         
@@ -272,20 +276,22 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                         int sc = isSolidAt(lx + Nx + Ux + Vx, ly + Ny + Uy + Vy, lz + Nz + Uz + Vz) ? 1 : 0;
                         
                         float ao = (s1 && s2) ? 0.4f : 1.0f - 0.2f * static_cast<float>(s1 + s2 + sc);
-                        if (def.render.isLiquid) ao = 1.0f;
+                        if (isLiquid) ao = 1.0f;
                         vert.ao = ao;
 
                         vert.light = getLight(lx + normals[f].x, ly + normals[f].y, lz + normals[f].z); 
                         
-                        result.vertices.push_back(vert);
+                        // 塞入对应的顶点数组
+                        outV.push_back(vert);
                     }
 
-                    result.indices.push_back(baseV + 0);
-                    result.indices.push_back(baseV + 1);
-                    result.indices.push_back(baseV + 2);
-                    result.indices.push_back(baseV + 2);
-                    result.indices.push_back(baseV + 3);
-                    result.indices.push_back(baseV + 0);
+                    // 塞入对应的索引数组
+                    outI.push_back(baseV + 0);
+                    outI.push_back(baseV + 1);
+                    outI.push_back(baseV + 2);
+                    outI.push_back(baseV + 2);
+                    outI.push_back(baseV + 3);
+                    outI.push_back(baseV + 0);
                 }
             }
         }

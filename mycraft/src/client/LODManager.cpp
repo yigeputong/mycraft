@@ -490,12 +490,14 @@ void LodManager::BuildLod1FromChunks(const LodKey& key, const ClientWorld& world
         outMax = glm::max(outMax, p);
     };
 
-    const float atlasTileUV = AtlasTileUV();
-    const int   atlasCols   = AtlasCols();
+    // ❌ 删除了旧的 atlasTileUV 和 atlasCols
 
+    // ★ 替换为统一的 GetTileUV，取图块中心点
     auto tileUV = [&](int t, float& u, float& v) {
-        u = ((t % atlasCols) + 0.5f) * atlasTileUV;
-        v = ((t / static_cast<float>(atlasCols)) + 0.5f) * atlasTileUV;
+        float u0, v0, u1, v1;
+        GetTileUV(t, u0, v0, u1, v1);
+        u = (u0 + u1) * 0.5f;
+        v = (v0 + v1) * 0.5f;
     };
 
     for (int j = 0; j < CELLS; ++j) {

@@ -1006,13 +1006,26 @@ void VulkanRenderService::DestroyMeshInternal(MeshHandle h) {
     m_meshes.erase(it);
 }
 
-TextureHandle VulkanRenderService::CreateTextureInternal(const uint8_t* rgba, int w, int h) {
+TextureHandle VulkanRenderService::CreateTextureInternal(const uint8_t* rgba, int w, int h, int requestedMips) {
     TextureInternal internal;
     VkDeviceSize imageSize = static_cast<size_t>(w) * h * 4;
 
+    // 1. 计算物理允许的最大 Mip 层数
+    uint32_t maxPossibleMips = static_cast<uint32_t>(std::floor(std::log2(std::max(w, h)))) + 1;
+
+    // 2. 决定最终的层数
+    uint32_t mipLevels = 1;
+    if (requestedMips == 0) {
+        if (m_renderConfig.mipmapLevels > 0) {
+            // 配置里写了 N，代表生成 N+1 层 (例如 4 代表生成到 1/16 大小)
+            mipLevels = std::min(maxPossibleMips, static_cast<uint32_t>(m_renderConfig.mipmapLevels + 1));
+        }
+    } else {
+        mipLevels = std::min(maxPossibleMips, static_cast<uint32_t>(requestedMips));
+    }
+
+    // 3. 创建 Staging Buffer 并拷贝数据
     VkBuffer stagingBuf; VmaAllocation stagingAlloc;
-    
-    // 使用 C++ 结构体
     vk::BufferCreateInfo stagingInfo{
         .size = static_cast<vk::DeviceSize>(imageSize),
         .usage = vk::BufferUsageFlagBits::eTransferSrc,
@@ -1022,7 +1035,6 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const uint8_t* rgba, in
     VmaAllocationCreateInfo stagingAllocInfo{};
     stagingAllocInfo.usage = VMA_MEMORY_USAGE_CPU_ONLY;
     
-    // reinterpret_cast 传给 VMA
     vmaCreateBuffer(m_allocator, reinterpret_cast<const VkBufferCreateInfo*>(&stagingInfo), 
                     &stagingAllocInfo, &stagingBuf, &stagingAlloc, nullptr);
 
@@ -1031,76 +1043,164 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const uint8_t* rgba, in
     memcpy(mapped, rgba, imageSize);
     vmaUnmapMemory(m_allocator, stagingAlloc);
 
-    // ★ 使用 C++ 结构体
+    // 4. 创建 Image (指定 mipLevels，并且必须有 TransferSrc 标记以供 Blit)
     vk::ImageCreateInfo imageInfo{
         .imageType = vk::ImageType::e2D,
         .format = vk::Format::eR8G8B8A8Unorm,
         .extent = { static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1 },
-        .mipLevels = 1,
+        .mipLevels = mipLevels,
         .arrayLayers = 1,
         .samples = vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
-        .usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+        .usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eSampled,
         .sharingMode = vk::SharingMode::eExclusive,
         .initialLayout = vk::ImageLayout::eUndefined
     };
 
     VmaAllocationCreateInfo allocInfo{};
     allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-    // ★ reinterpret_cast 传给 VMA
     vmaCreateImage(m_allocator, reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), 
                    &allocInfo, &internal.image, &internal.alloc, nullptr);
 
     auto cmd = beginSingleTimeCommands();
-    transition_image_layout(cmd, internal.image, 
-        vk::ImageLayout::eUndefined, 
-        vk::ImageLayout::eTransferDstOptimal,
-        vk::AccessFlagBits2::eNone, 
-        vk::AccessFlagBits2::eTransferWrite, 
-        vk::PipelineStageFlagBits2::eTopOfPipe, 
-        vk::PipelineStageFlagBits2::eTransfer, 
-        vk::ImageAspectFlagBits::eColor
-    );
 
-    // ★ 顺便把 BufferImageCopy 也换成指定初始化，消除位置传参风险
+    // 5. 转换第 0 层布局到 TransferDstOptimal
+    vk::ImageMemoryBarrier2 initBarrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe, .srcAccessMask = vk::AccessFlagBits2::eNone,
+        .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .oldLayout = vk::ImageLayout::eUndefined, .newLayout = vk::ImageLayout::eTransferDstOptimal,
+        .image = internal.image,
+        .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &initBarrier });
+
+    // 6. 拷贝 CPU 数据到第 0 层
     vk::BufferImageCopy region{
-        .bufferOffset = 0,
-        .bufferRowLength = 0,
-        .bufferImageHeight = 0,
-        .imageSubresource = { 
-            .aspectMask = vk::ImageAspectFlagBits::eColor, 
-            .mipLevel = 0, 
-            .baseArrayLayer = 0, 
-            .layerCount = 1 
-        },
+        .bufferOffset = 0, .bufferRowLength = 0, .bufferImageHeight = 0,
+        .imageSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
         .imageOffset = { 0, 0, 0 },
         .imageExtent = { static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1 }
     };
     cmd.copyBufferToImage(stagingBuf, internal.image, vk::ImageLayout::eTransferDstOptimal, region);
-    
-    transition_image_layout(cmd, internal.image, 
-        vk::ImageLayout::eTransferDstOptimal,
-        vk::ImageLayout::eShaderReadOnlyOptimal,
-        vk::AccessFlagBits2::eTransferWrite, 
-        vk::AccessFlagBits2::eShaderRead, 
-        vk::PipelineStageFlagBits2::eTransfer, 
-        vk::PipelineStageFlagBits2::eFragmentShader, 
-        vk::ImageAspectFlagBits::eColor
-    );
-    endSingleTimeCommands(std::move(cmd));
 
+    // 7. 生成 Mipmap Blit 链
+    if (mipLevels > 1) {
+        // 把第 0 层转为 TransferSrc
+        vk::ImageMemoryBarrier2 barrier0{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal, .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
+        };
+        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier0 });
+
+        int32_t mipW = w, mipH = h;
+        for (uint32_t i = 1; i < mipLevels; ++i) {
+            // 目标层转为 TransferDstOptimal
+            vk::ImageMemoryBarrier2 dstBarrier{
+                .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eNone,
+                .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                .oldLayout = vk::ImageLayout::eUndefined, .newLayout = vk::ImageLayout::eTransferDstOptimal,
+                .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, i, 1, 0, 1 }
+            };
+            cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &dstBarrier });
+
+            // Blit 下一层
+            // Blit 下一层
+            std::array<vk::Offset3D, 2> srcOffsets = {
+                vk::Offset3D{0, 0, 0}, 
+                vk::Offset3D{mipW, mipH, 1}
+            };
+            std::array<vk::Offset3D, 2> dstOffsets = {
+                vk::Offset3D{0, 0, 0}, 
+                vk::Offset3D{mipW > 1 ? mipW / 2 : 1, mipH > 1 ? mipH / 2 : 1, 1}
+            };
+
+            vk::ImageBlit blit{
+                .srcSubresource = { vk::ImageAspectFlagBits::eColor, i - 1, 0, 1 },
+                .srcOffsets = srcOffsets,
+                .dstSubresource = { vk::ImageAspectFlagBits::eColor, i, 0, 1 },
+                .dstOffsets = dstOffsets
+            };
+            cmd.blitImage(internal.image, vk::ImageLayout::eTransferSrcOptimal, internal.image, vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
+
+            // 把刚刚作为目标的层，转为下一轮的 TransferSrc
+            if (i + 1 < mipLevels) {
+                vk::ImageMemoryBarrier2 srcBarrier{
+                    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+                    .oldLayout = vk::ImageLayout::eTransferDstOptimal, .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+                    .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, i, 1, 0, 1 }
+                };
+                cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &srcBarrier });
+            }
+
+            if (mipW > 1) mipW /= 2;
+            if (mipH > 1) mipH /= 2;
+        }
+    }
+
+    // 8. 将所有层统一转为 ShaderReadOnlyOptimal
+    // 如果生成了多级，此时除了最后一层是 TransferDstOptimal，其他全是 TransferSrcOptimal。
+    // 为了保证转换不出错，对最后一层做一次补充转换，让它也变成 Src，然后统一转 ShaderReadOnly。
+    if (mipLevels > 1) {
+        vk::ImageMemoryBarrier2 lastBarrier{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal, .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, mipLevels - 1, 1, 0, 1 }
+        };
+        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &lastBarrier });
+    } else {
+        // 如果只有 1 层，要把 Dst 转为 Src，或者直接一步转 ShaderReadOnly
+        vk::ImageMemoryBarrier2 finalBarrier1Layer{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader, .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal, .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
+        };
+        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &finalBarrier1Layer });
+    }
+
+    // 如果有 Mipmap，统一转为 ShaderReadOnlyOptimal
+    if (mipLevels > 1) {
+        vk::ImageMemoryBarrier2 finalBarrierAll{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
+            .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader, .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+            .oldLayout = vk::ImageLayout::eTransferSrcOptimal, .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1 }
+        };
+        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &finalBarrierAll });
+    }
+
+    endSingleTimeCommands(std::move(cmd));
     vmaDestroyBuffer(m_allocator, stagingBuf, stagingAlloc);
 
-    internal.view = createImageView(internal.image, vk::Format::eR8G8B8A8Unorm, vk::ImageAspectFlagBits::eColor);
+    // 9. 创建 ImageView (必须传入 mipLevels 作为 levelCount，否则取样不到其它层)
+    vk::ImageViewCreateInfo viewInfo{
+        .image = internal.image,
+        .viewType = vk::ImageViewType::e2D,
+        .format = vk::Format::eR8G8B8A8Unorm,
+        .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1 }
+    };
+    internal.view = vk::raii::ImageView(m_device, viewInfo);
 
-    vk::SamplerCreateInfo samplerInfo{};
-    samplerInfo.magFilter = vk::Filter::eNearest;
-    samplerInfo.minFilter = vk::Filter::eNearest;
-    samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+    // 10. 创建 Sampler (设置 Mipmap 与各向异性)
+    vk::SamplerCreateInfo samplerInfo{
+        .magFilter = vk::Filter::eNearest,
+        .minFilter = vk::Filter::eNearest,
+        .mipmapMode = vk::SamplerMipmapMode::eLinear,
+        .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+        .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+        .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+        // 如果开启 mipmap 并且开启了各项异性
+        .anisotropyEnable = (mipLevels > 1 && m_renderConfig.enableAnisotropic) ? vk::True : vk::False,
+        .maxAnisotropy = m_renderConfig.maxAnisotropy,
+        .maxLod = static_cast<float>(mipLevels)
+    };
     internal.sampler = vk::raii::Sampler(m_device, samplerInfo);
 
+    // 11. 分配 DescriptorSet
     vk::DescriptorSetAllocateInfo allocSetInfo{
         .descriptorPool = *m_descriptorPool,
         .descriptorSetCount = 1,
@@ -1130,8 +1230,8 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const uint8_t* rgba, in
     return handle;
 }
 
-TexturePtr VulkanRenderService::CreateTexture(const uint8_t* rgba, int w, int h) {
-    TextureHandle th = CreateTextureInternal(rgba, w, h);
+TexturePtr VulkanRenderService::CreateTexture(const uint8_t* rgba, int w, int h, int requestedMips) {
+    TextureHandle th = CreateTextureInternal(rgba, w, h, requestedMips);
     return TexturePtr(new Texture(th), [this](Texture* t) { this->DestroyTextureInternal(t->GetHandle()); delete t; });
 }
 

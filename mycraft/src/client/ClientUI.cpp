@@ -72,13 +72,8 @@ void ClientUI::DrawIsometricBlock(ImDrawList* dl, ImVec2 center, float size, Blo
     if (sideTile < 0) sideTile = 0;
 
     auto getUV = [&](int tile) {
-        // ★ 动态获取图集常量
-        const int cols = AtlasCols();
-        const float tile_uv = AtlasTileUV();
-        float u0 = (tile % cols) * tile_uv;
-        float v0 = (tile / static_cast<float>(cols)) * tile_uv;
-        float u1 = u0 + tile_uv;
-        float v1 = v0 + tile_uv;
+        float u0, v0, u1, v1;
+        GetTileUV(tile, u0, v0, u1, v1);
         return std::make_tuple(ImVec2(u0, v0), ImVec2(u1, v0), ImVec2(u1, v1), ImVec2(u0, v1));
     };
 
@@ -155,7 +150,7 @@ void ClientUI::DrawMainMenu([[maybe_unused]] Eng::Engine& engine, MyGame& game) 
     ImGui::SetCursorScreenPos(ImVec2(startX, startY));
     if (DrawButton("Single Player", ImVec2(menuWidth, buttonHeight))) {
         if (game.StartLocalServer(true, true)) {
-            game.m_state = MyGame::GameState::Playing;
+            game.EnterGame();
             game.m_statusText.clear();
         } else {
             game.m_statusText = "Failed to start local server";
@@ -197,7 +192,7 @@ void ClientUI::DrawMainMenu([[maybe_unused]] Eng::Engine& engine, MyGame& game) 
         ImGui::Spacing();
         if (ImGui::Button("Connect", ImVec2(120, 40))) {
             if (game.ConnectToServer(game.m_ipBuffer, (uint16_t)game.m_portInput)) {
-                game.m_state = MyGame::GameState::Playing;
+                game.EnterGame();
                 game.m_showMultiplayerDialog = false;
                 game.m_statusText.clear();
                 ImGui::CloseCurrentPopup();
@@ -315,6 +310,47 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
             if (ImGui::Checkbox("##ao", &ao)) {
                 rcfg.m_aoStrength = ao ? 1.0f : 0.0f;
             }
+            ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+
+            // ★ 新增：Mipmap 设置
+            ImGui::Text("Mipmap Levels"); ImGui::SameLine(leftWidth * 1.2f);
+            ImGui::SetNextItemWidth(150);
+            if (ImGui::SliderInt("##mipmap", &rcfg.mipmapLevels, 0, 4, "%d")) {
+                // 提示需要重启世界
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("0 = OFF\n1~4 = 生成 Mipmap 层级\n(需要重新加载世界生效)");
+            }
+            ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+
+            // ★ 新增：各向异性过滤
+            ImGui::Text("Anisotropic Filtering"); ImGui::SameLine(leftWidth * 1.2f);
+            ImGui::Checkbox("##aniso", &rcfg.enableAnisotropic);
+            
+            // 只有当开启各向异性时，才显示倍数选项
+            if (rcfg.enableAnisotropic) {
+                ImGui::Text("Aniso Level"); ImGui::SameLine(leftWidth * 1.2f);
+                ImGui::SetNextItemWidth(150);
+                
+                // 把 float 映射到索引
+                const char* anisoItems[] = { "1x", "2x", "4x", "8x", "16x" };
+                int anisoIndex = 4; // 默认 16x
+                if (rcfg.maxAnisotropy <= 1.0f) anisoIndex = 0;
+                else if (rcfg.maxAnisotropy <= 2.0f) anisoIndex = 1;
+                else if (rcfg.maxAnisotropy <= 4.0f) anisoIndex = 2;
+                else if (rcfg.maxAnisotropy <= 8.0f) anisoIndex = 3;
+                
+                if (ImGui::Combo("##anisolevel", &anisoIndex, anisoItems, IM_ARRAYSIZE(anisoItems))) {
+                    static constexpr float anisoValues[] = { 1.0f, 2.0f, 4.0f, 8.0f, 16.0f };
+                    rcfg.maxAnisotropy = anisoValues[anisoIndex];
+                }
+            }
+            
+            ImGui::Spacing();
+            ImGui::PushTextWrapPos(leftWidth * 1.2f + 300.0f);
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Note: Texture settings require restarting the world to take effect.");
+            ImGui::PopTextWrapPos();
+            
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
             ImGui::Text("Field of View"); ImGui::SameLine(leftWidth * 1.2f);

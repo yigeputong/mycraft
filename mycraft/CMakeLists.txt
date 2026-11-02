@@ -64,17 +64,19 @@ add_glsl_shader(shader_sky    sky)
 add_glsl_shader(shader_post   post)
 add_glsl_shader(shader_lod    lod)
 add_glsl_shader(shader_entity entity)
+add_glsl_shader(shader_water  water)
 
 add_dependencies(mycraft 
-    shader_mesh shader_sky shader_post shader_lod shader_entity
+    shader_mesh shader_sky shader_post shader_lod shader_entity shader_water
 )
 
 # ============================================================
 # assets 同步
 # ============================================================
-add_custom_command(TARGET mycraft POST_BUILD
+add_custom_target(copy_assets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/assets
         $<TARGET_FILE_DIR:mycraft>/assets
     COMMENT "Copying assets to output directory"
 )
+add_dependencies(copy_assets mycraft)

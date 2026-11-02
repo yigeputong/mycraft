@@ -1,7 +1,10 @@
 {
   "dependencies": [
     "assimp",
-    "glad",
+    {
+      "name": "glad",
+      "features": ["extensions"]
+    },
     "glm",
     "nlohmann-json",
 

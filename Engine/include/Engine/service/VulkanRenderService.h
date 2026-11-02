@@ -52,7 +52,7 @@ public:
     void DrawMDI(const ShaderPtr& shader, const Material& material, uint32_t commandCount) override;
 
     MeshPtr CreateMesh(const MeshData& data) override;
-    TexturePtr CreateTexture(const uint8_t* rgba, int w, int h) override;
+    TexturePtr CreateTexture(const uint8_t* rgba, int w, int h, int requestedMips = 0) override;
     ShaderPtr CreateShader(const ShaderCreateInfo& info) override;
     FramebufferPtr CreateFramebuffer(const FramebufferCreateInfo& info) override;
 
@@ -317,7 +317,7 @@ private:
     void createSkyboxMesh();
     
     MeshHandle CreateMeshInternal(const MeshData& data);
-    TextureHandle CreateTextureInternal(const uint8_t* rgba, int w, int h);
+    TextureHandle CreateTextureInternal(const uint8_t* rgba, int w, int h, int requestedMips = 0);
     ShaderHandle CreateShaderInternal(const ShaderCreateInfo& info);
     FramebufferHandle CreateFramebufferInternal(const FramebufferCreateInfo& info);
     

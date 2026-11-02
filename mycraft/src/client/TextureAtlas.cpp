@@ -2,11 +2,9 @@
 #include "Engine/tool/Log.h"
 #include <SDL3_image/SDL_image.h>
 
-#include <cstddef>
 #include <vector>
 #include <cstdint>
 #include <algorithm>
-#include <cmath>
 #include <string>
 #include <unordered_map>
 
@@ -20,11 +18,23 @@ const uint8_t PLAINS_LEAF_R  = 119, PLAINS_LEAF_G  = 171, PLAINS_LEAF_B  =  47; 
 const uint8_t WATER_R        =  63, WATER_G        = 118, WATER_B        = 228; // #3F76E4
 // ====================================================
 
-int s_cols = 8;
-int s_rows = 8;
-std::unordered_map<std::string, int> s_nameToIndex;
-std::vector<uint8_t> s_pixels;
-std::unique_ptr<Eng::tool::Log> s_logger;
+// 包装成函数，解决静态初始化抛异常的警告
+struct AtlasState {
+    int cols = 8;
+    int rows = 8;
+    std::unordered_map<std::string, int> nameToIndex;
+    std::vector<uint8_t> pixels;
+};
+
+AtlasState& GetAtlasState() {
+    static AtlasState state;
+    return state;
+}
+
+std::unique_ptr<Eng::tool::Log>& GetLogger() {
+    static std::unique_ptr<Eng::tool::Log> logger;
+    return logger;
+}
 
 void TintFromString(const std::string& tint, uint8_t& r, uint8_t& g, uint8_t& b) {
     if      (tint == "grass")   { r = PLAINS_GRASS_R; g = PLAINS_GRASS_G; b = PLAINS_GRASS_B; }
@@ -49,27 +59,51 @@ bool BlitToAtlasTinted(std::vector<uint8_t>& px, int atlasW,
     int ox = col * ATLAS_TILE;
     int oy = row * ATLAS_TILE;
 
-    int copyW = std::min(surf->w, ATLAS_TILE);
-    int copyH = std::min(surf->h, ATLAS_TILE);
+    int copyW = std::min(surf->w, ATLAS_REAL_SIZE);
+    int copyH = std::min(surf->h, ATLAS_REAL_SIZE);
     const uint8_t* src = static_cast<const uint8_t*>(surf->pixels);
 
+    // 1. 写入原图（居中偏移 1 像素）
     for (int y = 0; y < copyH; ++y) {
         for (int x = 0; x < copyW; ++x) {
             int si = (y * surf->w + x) * 4;
-            int di = ((oy + y) * atlasW + (ox + x)) * 4;
+            int di = ((oy + ATLAS_PADDING + y) * atlasW + (ox + ATLAS_PADDING + x)) * 4;
             px[di + 0] = static_cast<uint8_t>((src[si + 0] * tintR) / 255);
             px[di + 1] = static_cast<uint8_t>((src[si + 1] * tintG) / 255);
             px[di + 2] = static_cast<uint8_t>((src[si + 2] * tintB) / 255);
             px[di + 3] = src[si + 3];
         }
     }
+
+    // 2. 边缘外扩（Padding）
+    auto clonePixel = [&](int destX, int destY, int srcX, int srcY) {
+        int di = ((oy + destY) * atlasW + (ox + destX)) * 4;
+        int si = ((oy + srcY) * atlasW + (ox + srcX)) * 4;
+        px[di + 0] = px[si + 0];
+        px[di + 1] = px[si + 1];
+        px[di + 2] = px[si + 2];
+        px[di + 3] = px[si + 3];
+    };
+
+    for (int y = 1; y <= copyH; ++y) {
+        clonePixel(0, y, 1, y);                 // 左
+        clonePixel(copyW + 1, y, copyW, y);     // 右
+    }
+    for (int x = 1; x <= copyW; ++x) {
+        clonePixel(x, 0, x, 1);                 // 上
+        clonePixel(x, copyH + 1, x, copyH);     // 下
+    }
+    // 四角
+    clonePixel(0, 0, 1, 1);
+    clonePixel(copyW + 1, 0, copyW, 1);
+    clonePixel(0, copyH + 1, 1, copyH);
+    clonePixel(copyW + 1, copyH + 1, copyW, copyH);
+
     SDL_DestroySurface(surf);
     return true;
 }
 
 void FillMissingTile(std::vector<uint8_t>& px, int atlasW, int tileIndex, int cols) {
-    // 按约定：像素全 0，由渲染层补无效纹理（图1 黑粉棋盘格）
-    // 如果你想让图集内直接就是黑粉棋盘格，把下面循环换成品红填充即可。
     int col = tileIndex % cols;
     int row = tileIndex / cols;
     int ox = col * ATLAS_TILE;
@@ -77,10 +111,7 @@ void FillMissingTile(std::vector<uint8_t>& px, int atlasW, int tileIndex, int co
     for (int y = 0; y < ATLAS_TILE; ++y) {
         for (int x = 0; x < ATLAS_TILE; ++x) {
             int i = ((oy + y) * atlasW + (ox + x)) * 4;
-            px[i + 0] = 0;
-            px[i + 1] = 0;
-            px[i + 2] = 0;
-            px[i + 3] = 0;
+            px[i + 0] = 0; px[i + 1] = 0; px[i + 2] = 0; px[i + 3] = 0;
         }
     }
 }
@@ -88,9 +119,11 @@ void FillMissingTile(std::vector<uint8_t>& px, int atlasW, int tileIndex, int co
 } // anonymous
 
 void BuildAtlas(const std::unordered_map<std::string, std::string>& tileTints) {
-    if (!s_logger) s_logger = std::make_unique<Eng::tool::Log>();
+    auto& state = GetAtlasState();
+    auto& logger = GetLogger();
+    if (!logger) logger = std::make_unique<Eng::tool::Log>();
 
-    // 1. 收集名字并排序（确定性）
+    // 1. 收集名字并排序
     std::vector<std::string> names;
     names.reserve(tileTints.size());
     for (auto& [name, _] : tileTints) names.push_back(name);
@@ -98,29 +131,29 @@ void BuildAtlas(const std::unordered_map<std::string, std::string>& tileTints) {
 
     int n = static_cast<int>(names.size());
     if (n == 0) {
-        s_cols = 1; s_rows = 1;
-        s_nameToIndex.clear();
-        s_pixels.assign(static_cast<size_t>(ATLAS_TILE * ATLAS_TILE) * 4, 0);
-        logWarning(s_logger.get(), "TextureAtlas: no tiles requested");
+        state.cols = 1; state.rows = 1;
+        state.nameToIndex.clear();
+        state.pixels.assign(static_cast<size_t>(ATLAS_TILE * ATLAS_TILE) * 4, 0);
+        logWarning(logger.get(), "TextureAtlas: no tiles requested");
         return;
     }
 
-    // 2. 计算图集尺寸：cols = 向上取偶数的 ceil(sqrt(n))
+    // 2. 计算图集尺寸
     int c = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(n))));
     if (c < 1) c = 1;
-    if (c & 1) ++c;              // 向上取偶数
-    s_cols = c;
-    s_rows = c;
+    if (c & 1) ++c; 
+    state.cols = c;
+    state.rows = c;
 
-    int atlasW = s_cols * ATLAS_TILE;
-    int atlasH = s_rows * ATLAS_TILE;
-    s_pixels.assign(static_cast<size_t>(atlasW) * atlasH * 4, 0);
-    s_nameToIndex.clear();
+    int atlasW = state.cols * ATLAS_TILE;
+    int atlasH = state.rows * ATLAS_TILE;
+    state.pixels.assign(static_cast<size_t>(atlasW) * atlasH * 4, 0);
+    state.nameToIndex.clear();
 
-    logInfo(s_logger.get(), "TextureAtlas: building " << n << " tiles in "
-                        << s_cols << "x" << s_rows << " grid");
+    logInfo(logger.get(), "TextureAtlas: building " << n << " tiles in "
+                        << state.cols << "x" << state.rows << " grid");
 
-    // 3. 逐个加载
+    // 3. 逐个加载并处理 Padding
     const std::string base = "assets/textures/block/";
     for (int i = 0; i < n; ++i) {
         const std::string& name    = names[i];
@@ -130,26 +163,46 @@ void BuildAtlas(const std::unordered_map<std::string, std::string>& tileTints) {
         TintFromString(tintStr, tr, tg, tb);
 
         std::string path = base + name + ".png";
-        bool ok = BlitToAtlasTinted(s_pixels, atlasW, path, i, s_cols, tr, tg, tb);
+        bool ok = BlitToAtlasTinted(state.pixels, atlasW, path, i, state.cols, tr, tg, tb);
         if (!ok) {
-            logWarning(s_logger.get(), "TextureAtlas: failed to load tile '" << name
+            logWarning(logger.get(), "TextureAtlas: failed to load tile '" << name
                         << "' (path=" << path << "), pixel fill zero");
-            FillMissingTile(s_pixels, atlasW, i, s_cols);
+            FillMissingTile(state.pixels, atlasW, i, state.cols);
         }
-        s_nameToIndex[name] = i;
+        state.nameToIndex[name] = i;
     }
 
-    logInfo(s_logger.get(), "TextureAtlas: build complete");
+    logInfo(logger.get(), "TextureAtlas: build complete");
 }
 
 int ResolveTile(const std::string& name) {
-    auto it = s_nameToIndex.find(name);
-    return it == s_nameToIndex.end() ? -1 : it->second;
+    auto& state = GetAtlasState();
+    auto it = state.nameToIndex.find(name);
+    return it == state.nameToIndex.end() ? -1 : it->second;
 }
 
-int   AtlasCols() { return s_cols; }
-int   AtlasRows() { return s_rows; }
-float AtlasTileUV() { return 1.0f / static_cast<float>(s_cols); }
-const std::vector<uint8_t>& AtlasPixels() { return s_pixels; }
+int AtlasCols() { return GetAtlasState().cols; }
+int AtlasRows() { return GetAtlasState().rows; }
+const std::vector<uint8_t>& AtlasPixels() { return GetAtlasState().pixels; }
+
+// ★ 新增：统一的 UV 计算（向内收缩 1 个像素）
+void GetTileUV(int tileIndex, float& u0, float& v0, float& u1, float& v1) {
+    auto& state = GetAtlasState();
+    float gridUV = 1.0f / static_cast<float>(state.cols);  // 每个大格的 UV 宽度
+    float pixelUV = gridUV / static_cast<float>(ATLAS_TILE); // 单个像素的 UV 宽度
+
+    int col = tileIndex % state.cols;
+    int row = tileIndex / state.cols;
+
+    // 偏移 1 个像素，跳过 Padding
+    u0 = (col * gridUV) + pixelUV;
+    v0 = (row * gridUV) + pixelUV;
+    // 覆盖 16x16 原图
+    u1 = u0 + (ATLAS_REAL_SIZE * pixelUV);
+    v1 = v0 + (ATLAS_REAL_SIZE * pixelUV);
+}
+
+// 为了防止有人还在用旧 API，保留这个
+float AtlasTileUV() { return 1.0f / static_cast<float>(GetAtlasState().cols); }
 
 } // namespace game::client

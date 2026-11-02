@@ -47,6 +47,10 @@ public:
                              
     void SubmitSkybox(service::ShaderPtr shader);
 
+    // ==================== 水面（透明）渲染接口 ====================
+    void SubmitWaterChunk(uint64_t chunkKey, std::vector<service::Vertex>&& vertices, std::vector<uint32_t>&& indices, const glm::vec3& aabbMin, const glm::vec3& aabbMax);
+    void RemoveWaterChunk(uint64_t chunkKey);
+
     // 业务层传入地形所需的 Shader 和 Atlas，引擎自己决定怎么画 MDI
     void EndScene(const glm::mat4& viewProj, const glm::vec3& cameraPos,
                   const service::ShaderPtr& terrainShader, const service::TexturePtr& atlasTexture);
@@ -85,6 +89,13 @@ private:
         std::vector<service::rhi::PerObjectData> instances{};
     };
 
+    // ★ 新增：水面独立区块缓存
+    struct WaterChunk {
+        service::MeshPtr mesh;
+        glm::vec3 aabbMin;
+        glm::vec3 aabbMax;
+    };
+
     void TriggerAsyncRebuild();
     void ProcessPendingRebuild();
     void AppendIncremental(uint64_t key, const ChunkRenderData& data);
@@ -110,6 +121,10 @@ private:
 
     std::vector<service::rhi::DrawIndexedIndirectCommand> m_indirectCommands;
     std::vector<DrawCommand> m_drawQueue;
+
+    // ★ 新增：水面相关资源
+    service::ShaderPtr m_waterShader;
+    std::unordered_map<uint64_t, WaterChunk> m_waterChunks;
 };
 
 } // namespace Eng::client

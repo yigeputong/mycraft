@@ -428,8 +428,8 @@ void OpenGLRenderService::DestroyMeshInternal(MeshHandle h) {
     m_meshes.erase(it);
 }
 
-TexturePtr OpenGLRenderService::CreateTexture(const uint8_t* rgba, int w, int h) {
-    TextureHandle th = CreateTextureInternal(rgba, w, h);
+TexturePtr OpenGLRenderService::CreateTexture(const uint8_t* rgba, int w, int h, int requestedMips) {
+    TextureHandle th = CreateTextureInternal(rgba, w, h, requestedMips);
     if (th == 0) return nullptr;
     return TexturePtr(new Texture(th), [this](Texture* t) {
         this->DestroyTextureInternal(t->GetHandle());
@@ -437,15 +437,46 @@ TexturePtr OpenGLRenderService::CreateTexture(const uint8_t* rgba, int w, int h)
     });
 }
 
-TextureHandle OpenGLRenderService::CreateTextureInternal(const uint8_t* rgba, int w, int h) {
+TextureHandle OpenGLRenderService::CreateTextureInternal(const uint8_t* rgba, int w, int h, int requestedMips) {
     GLuint tex;
     glCreateTextures(GL_TEXTURE_2D, 1, &tex);
-    glTextureStorage2D(tex, 1, GL_RGBA8, w, h);
+
+    // 1. 计算物理允许的最大 Mip 层数
+    int maxPossibleMips = static_cast<int>(std::floor(std::log2(std::max(w, h)))) + 1;
+
+    // 2. 决定最终的层数
+    int mipLevels = 1;
+    if (requestedMips == 0) {
+        if (m_renderConfig.mipmapLevels > 0) {
+            // 配置里写了 N，代表生成 N+1 层 (例如 4 代表生成到 1/16 大小)
+            mipLevels = std::min(maxPossibleMips, m_renderConfig.mipmapLevels + 1);
+        }
+    } else {
+        mipLevels = std::min(maxPossibleMips, requestedMips);
+    }
+
+    // 3. 分配多级纹理存储
+    glTextureStorage2D(tex, mipLevels, GL_RGBA8, w, h);
     glTextureSubImage2D(tex, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-    glTextureParameteri(tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    
+    if (mipLevels > 1) {
+        glGenerateTextureMipmap(tex);
+        glTextureParameteri(tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
+    } else {
+        glTextureParameteri(tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    }
+
     glTextureParameteri(tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTextureParameteri(tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTextureParameteri(tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // 4. 各向异性
+    if (mipLevels > 1 && m_renderConfig.enableAnisotropic && GLAD_GL_EXT_texture_filter_anisotropic) {
+        GLfloat maxAniso = 0.0f;
+        glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &maxAniso);
+        float aniso = std::min(m_renderConfig.maxAnisotropy, maxAniso);
+        glTextureParameterf(tex, GL_TEXTURE_MAX_ANISOTROPY_EXT, aniso);
+    }
 
     TextureHandle handle = m_nextTextureHandle++;
     m_textures[handle] = { tex, w, h, GL_RGBA };

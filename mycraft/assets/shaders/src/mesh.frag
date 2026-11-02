@@ -29,7 +29,7 @@ layout(set = 1, binding = 0) uniform sampler2D uDiffuse;
 
 void main() {
     vec4 texColor4 = texture(uDiffuse, uv);
-    if (texColor4.a < 0.5) discard;
+    if (texColor4.a < 0.1) discard;
     
     vec3 texColor = texColor4.rgb;
     vec3 norm = normalize(Normal);

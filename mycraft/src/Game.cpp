@@ -358,6 +358,68 @@ void MyGame::SetupShaders() {
     }
 }
 
+void MyGame::EnterGame() {
+    logInfo(logger, "[Game] Entering game session...");
+
+    // ==================== 1. 后台线程 ====================
+    m_meshManager.Start();
+
+    // ==================== 2. 玩家物理与镜头 ====================
+    cameraPos        = glm::vec3(0.0f, 40.0f, 0.0f);
+    cameraFront      = glm::vec3(0.0f, 0.0f, -1.0f);
+    yaw              = -90.0f;
+    pitch            = 0.0f;
+    m_playerVelocity = glm::vec3(0.0f);
+    m_positionError  = glm::vec3(0.0f);
+    m_lastMoveDir    = glm::vec3(0.0f);
+    m_playerOnGround = false;
+    
+    // ==================== 3. 时间与动画 ====================
+    m_timeOfDay      = 8.0f;
+    m_animTime       = 0.0f;
+    m_walkDist       = 0.0f;
+    m_swingProgress  = 0.0f;
+
+    // ==================== 4. 交互冷却与计时器 ====================
+    m_jumpHoldTimer  = 0.0f;
+    m_placeCooldown  = 0.0f;
+    m_digCooldown    = 0.0f;
+
+    // ==================== 5. FPS 与性能统计 ====================
+    m_fpsTimer       = 0.0f;
+    m_fpsFrameCount  = 0;
+    m_fpsAccumMs     = 0.0f;
+    m_fpsPeakMs      = 0.0f;
+    m_fpsDisplay     = 0.0f;
+    m_frameMsDisplay = 0.0f;
+    m_frameMsAvgDisp = 0.0f;
+    m_frameMsPeakDisp= 0.0f;
+    m_serverTickMs   = 0.0f;
+    m_serverTickAvg  = 0.0f;
+    m_serverTickMax  = 0.0f;
+
+    // ==================== 6. 背包与物品栏 ====================
+    m_hotbarIndex    = 0;
+    m_inventoryOpen  = false;
+
+    // ==================== 7. 清理网络与实体数据 ====================
+    m_itemEntities.clear();
+    m_otherPlayers.clear();
+    m_myClientId = 0;
+    
+    if (m_sceneRenderer) {
+        m_sceneRenderer->Clear();
+    }
+    m_knownSceneChunks.clear();
+
+    // ==================== 8. 切换状态 ====================
+    m_state = GameState::Playing;
+    m_menuOpen = false;
+    m_statusText.clear();
+    
+    logInfo(logger, "[Game] Game session entered successfully.");
+}
+
 void MyGame::OnStart(Eng::Engine& engine) {
     if (!logger) logger = std::make_unique<Eng::tool::Log>();
 
@@ -683,87 +745,64 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->EndFrame();
 }
 
-void MyGame::ReturnToMainMenu() {
+void MyGame::ExitGame() {
+    logInfo(logger, "[Game] Exiting game session...");
+
+    // 保证 GPU 处理完毕
     if (renderer) renderer->WaitIdle();
 
-    if (m_client) m_client.reset();
-    if (m_server) { m_server->Stop(); m_server.reset(); }
-
+    // ==================== 1. 停掉后台线程 ====================
     m_lodManager.Stop();
     m_meshManager.Stop();
 
+    // ==================== 2. 断开网络 ====================
+    if (m_client) m_client.reset();
+    if (m_server) { m_server->Stop(); m_server.reset(); }
+
+    // ==================== 3. 清理世界数据 ====================
+    m_world.Clear();
+    m_lodManager.Clear();
+    m_itemEntities.clear();
+    m_otherPlayers.clear();
+    
+    // ==================== 4. 清理渲染动态资源 ====================
     m_playerMesh.reset();
     m_handMesh.reset();
     m_itemMeshCache.clear();
 
-    m_world.Clear();
-    m_itemEntities.clear();
-    m_otherPlayers.clear();
-    m_myClientId = 0;
-
-    m_lodManager.Clear();
-
-    // ★ 地形数据下沉到 SceneRenderer，统一清理
     if (m_sceneRenderer) {
         m_sceneRenderer->Clear();
     }
     m_knownSceneChunks.clear();
 
-    cameraPos   = glm::vec3(0.0f, 40.0f, 0.0f);
-    cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
-    yaw   = -90.0f;
-    pitch = 0.0f;
-    m_playerVelocity = glm::vec3(0.0f);
-    m_positionError  = glm::vec3(0.0f);
-
+    // ==================== 5. 切换回主菜单 ====================
+    m_state = GameState::MainMenu;
     m_menuOpen = false;
-    m_state    = GameState::MainMenu;
     m_statusText.clear();
 
+    logInfo(logger, "[Game] Game session exited.");
+}
+
+void MyGame::ReturnToMainMenu() {
+    ExitGame();
     logInfo(logger, "[Game] Returned to main menu");
 }
 
 void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
-    if (m_client) { m_client->Disconnect(); m_client.reset(); }
-    if (m_server) { m_server->Stop(); m_server.reset(); }
+    // 统一通过 ExitGame 清理所有会话级资源
+    ExitGame();
 
-    m_lodManager.Stop();
-    m_meshManager.Stop();
-
-    m_lodManager.Clear();
-    m_visibleLodMeshes.clear();
-    m_playerMesh.reset();
-    m_handMesh.reset();
-    m_itemMeshCache.clear();
-    m_world.Clear();
-    m_itemEntities.clear();
-    m_otherPlayers.clear();
-
-    // ★ 地形数据下沉到 SceneRenderer，统一清理
-    if (m_sceneRenderer) {
-        m_sceneRenderer->Clear();
-    }
-    m_knownSceneChunks.clear();
-
+    // 只有引擎级别的清理留在这里
     m_mainFbo.reset();
     m_skyShader.reset();
     m_lodShader.reset();
     m_entityShader.reset();
     m_handShader.reset();
+    m_cubeShader.reset();
     m_atlasTexture.reset();
     m_playerTexture.reset();
-    m_playerMesh.reset();
-    m_handMesh.reset();
-    m_itemMeshCache.clear();
     m_sceneRenderer.reset();
 
-    // ★ 以下全部删除（Engine 接管）：
-    //   if (m_assetManager) { m_assetManager.reset(); }
-    //   auto* safeRenderer = mainWin ? mainWin->GetAPI() : nullptr; safeRenderer->ShutdownImGuiBackend();
-    //   renderer = nullptr;
-    //   winMgr->DestroyWindow(m_win);
-    //   mainWin = nullptr;
-    // 这里只清空本地引用，防止悬空访问：
     m_assetManager = nullptr;
     renderer       = nullptr;
     mainWin        = nullptr;
@@ -1148,28 +1187,41 @@ void MyGame::DrainMeshResults() {
     if (!m_sceneRenderer) return;
 
     m_meshManager.DrainResults([this](game::client::MeshResult&& r) {
-        // 空 mesh：该 chunk 现在无可见几何体
-        if (r.vertices.empty() || r.indices.empty()) {
-            m_sceneRenderer->OnChunkUnloaded(r.chunkKey);
-            m_knownSceneChunks.erase(r.chunkKey);
-            return;
-        }
-
-        // aabb 从 ClientWorld 取（MeshResult 不带 aabb）
         auto* cc = m_world.GetChunk(r.chunkKey);
         if (!cc) {
             // chunk 已被流式卸载，丢弃结果
             return;
         }
 
-        m_sceneRenderer->OnChunkMeshReady(
-            r.chunkKey,
-            std::move(r.vertices),
-            std::move(r.indices),
-            cc->aabbMin,
-            cc->aabbMax);
+        bool hasOpaque = !r.vertices.empty() && !r.indices.empty();
+        bool hasWater  = !r.waterVertices.empty() && !r.waterIndices.empty();
 
-        m_knownSceneChunks.insert(r.chunkKey);
+        // 1. 提交不透明方块（走原有的大 Buffer / MDI）
+        if (hasOpaque) {
+            m_sceneRenderer->OnChunkMeshReady(
+                r.chunkKey,
+                std::move(r.vertices),
+                std::move(r.indices),
+                cc->aabbMin,
+                cc->aabbMax);
+            
+            m_knownSceneChunks.insert(r.chunkKey);
+        } else {
+            m_sceneRenderer->OnChunkUnloaded(r.chunkKey);
+            m_knownSceneChunks.erase(r.chunkKey);
+        }
+
+        // 2. 提交水面（走独立的透明管线）
+        if (hasWater) {
+            m_sceneRenderer->SubmitWaterChunk(
+                r.chunkKey,
+                std::move(r.waterVertices),
+                std::move(r.waterIndices),
+                cc->aabbMin,
+                cc->aabbMax);
+        } else {
+            m_sceneRenderer->RemoveWaterChunk(r.chunkKey);
+        }
     });
 }
 

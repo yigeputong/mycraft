@@ -11,6 +11,11 @@ SceneRenderer::SceneRenderer(service::IRenderService* rhi, service::AssetService
     if (!m_rhi) throw std::invalid_argument("SceneRenderer: rhi is null");
     if (!m_assets) throw std::invalid_argument("SceneRenderer: assets is null");
     
+    m_waterShader = m_assets->LoadShader(m_assets->MakeShaderCreateInfo("water"));
+    if (!m_waterShader) {
+        logWarning(m_logger, "[SceneRenderer] Failed to load 'water' shader!");
+    }
+    
     m_indirectCommands.reserve(2048);
     m_drawQueue.reserve(1024);
 }
@@ -198,6 +203,32 @@ void SceneRenderer::SubmitSkybox(service::ShaderPtr shader) {
     m_drawQueue.push_back({ .type = DrawCommand::Type::Skybox, .shader = std::move(shader) });
 }
 
+void SceneRenderer::SubmitWaterChunk(uint64_t chunkKey, std::vector<service::Vertex>&& vertices, std::vector<uint32_t>&& indices, const glm::vec3& aabbMin, const glm::vec3& aabbMax) {
+    if (vertices.empty() || indices.empty()) {
+        RemoveWaterChunk(chunkKey);
+        return;
+    }
+
+    // 使用底层 RHI 直接创建一个独立的 Mesh
+    service::MeshData data{
+        .vertices = std::move(vertices),
+        .indices  = std::move(indices)
+    };
+    service::MeshPtr mesh = m_rhi->CreateMesh(data);
+    
+    if (mesh) {
+        m_waterChunks[chunkKey] = WaterChunk{
+            .mesh = std::move(mesh),
+            .aabbMin = aabbMin,
+            .aabbMax = aabbMax
+        };
+    }
+}
+
+void SceneRenderer::RemoveWaterChunk(uint64_t chunkKey) {
+    m_waterChunks.erase(chunkKey);
+}
+
 void SceneRenderer::EndScene(const glm::mat4& viewProj, const glm::vec3& cameraPos,
                              const service::ShaderPtr& terrainShader, const service::TexturePtr& atlasTexture) {
     (void)cameraPos;
@@ -251,6 +282,19 @@ void SceneRenderer::EndScene(const glm::mat4& viewProj, const glm::vec3& cameraP
                 break;
         }
     }
+
+    // ==========================================================
+    // 3. 绘制水面（透明队列）
+    // ==========================================================
+    if (m_waterShader && atlasTexture) {
+        service::Material waterMat{ .diffuse = atlasTexture };
+        for (const auto& [key, wc] : m_waterChunks) {
+            // 视锥剔除，如果不在视野里就不画
+            if (!TestAABB(wc.aabbMin, wc.aabbMax, viewProj)) continue;
+            
+            m_rhi->DrawMesh(wc.mesh, m_waterShader, waterMat);
+        }
+    }
 }
 
 bool SceneRenderer::TestAABB(const glm::vec3& mn, const glm::vec3& mx, const glm::mat4& viewProj) const {
@@ -289,6 +333,7 @@ void SceneRenderer::Clear() {
     m_rebuildInProgress = false;
     m_indirectCommands.clear();
     m_drawQueue.clear();
+    m_waterChunks.clear();
 }
 
 } // namespace Eng::client

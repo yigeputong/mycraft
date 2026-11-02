@@ -25,6 +25,9 @@ struct MeshResult {
     uint64_t chunkKey;
     std::vector<Eng::service::Vertex> vertices;
     std::vector<uint32_t>            indices;
+
+    std::vector<Eng::service::Vertex> waterVertices;
+    std::vector<uint32_t>            waterIndices;
 };
 
 class MeshManager {

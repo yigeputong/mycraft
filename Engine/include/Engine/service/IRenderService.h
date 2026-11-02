@@ -306,7 +306,8 @@ public:
 
     // ==================== 传统资源创建 ====================
     virtual MeshPtr CreateMesh(const MeshData& data) = 0;
-    virtual TexturePtr CreateTexture(const uint8_t* rgba, int w, int h) = 0;
+    // 0 = 遵循全局配置, 1 = 强制不生成, N = 强制生成到 N 层
+    virtual TexturePtr CreateTexture(const uint8_t* rgba, int w, int h, int requestedMips = 0) = 0;
     virtual ShaderPtr CreateShader(const ShaderCreateInfo& info) = 0;
     virtual FramebufferPtr CreateFramebuffer(const FramebufferCreateInfo& info) = 0;
 

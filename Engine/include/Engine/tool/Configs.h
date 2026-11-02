@@ -33,8 +33,12 @@ namespace Eng::tool {
         float zFar  = 4096.0f;
         float fov   = 75.0f;
         float gamma = 2.2f;
-        float m_aoStrength  = 1.0f;   // 环境光遮蔽， 0 = 关，1 = 开
+        float m_aoStrength  = 1.0f;   
         bool  wireframeMode = false;
+        
+        int   mipmapLevels = 4;           // 0=关闭, 1~4=生成到 1/2^N 的 mipmap
+        bool  enableAnisotropic = true;   // 是否开启各向异性过滤
+        float maxAnisotropy = 16.0f;      // 各向异性倍率上限
     };
 
     struct InputConfig {           // ★ 新建
