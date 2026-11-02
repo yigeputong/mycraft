@@ -13,13 +13,14 @@
 #include "game/server/WorldGenerator.h"
 #include "Engine/service/IRenderService.h"
 #include "game/client/ClientWorld.h"
+#include "Engine/client/SceneRenderer.h" // ★ 关键：引入 RenderMesh 定义
 
 namespace game::client {
 
 struct LodKey {
     int8_t level;
-    int32_t unitX; // ★ 语义明确：这是 LOD 网格的 X 索引，而不是区块坐标
-    int32_t unitZ; // ★ 语义明确：这是 LOD 网格的 Z 索引
+    int32_t unitX;
+    int32_t unitZ;
     bool operator==(const LodKey& o) const { 
         return level == o.level && unitX == o.unitX && unitZ == o.unitZ; 
     }
@@ -37,7 +38,7 @@ struct LodKeyHash {
 struct LodUnit {
     int level;
     int unitX, unitZ;
-    Eng::service::MeshPtr mesh;
+    Eng::client::RenderMesh mesh; // ★ 从 MeshPtr 换成 RenderMesh
     glm::vec3 aabbMin, aabbMax;
 };
 
@@ -46,7 +47,10 @@ public:
     void Start(uint32_t seed);
     void Stop();
     void Update(const glm::vec3& cameraPos, const ClientWorld& world, int renderDistance, Eng::service::IRenderService* renderer);
-    void CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::service::MeshPtr>& outMeshes) const;
+    
+    // ★ 收集接口换成 RenderMesh
+    void CollectVisibleMeshes(const Eng::client::Frustum& frustum, std::vector<Eng::client::RenderMesh>& outMeshes) const;
+    
     void Clear();
     void SetRegistry(const BlockRegistry* reg) { m_registry = reg; }
 
@@ -90,7 +94,7 @@ private:
     int m_lastPlayerChunkX = INT_MIN, m_lastPlayerChunkZ = INT_MIN;
 
     static constexpr int kLodLevels = 3;
-    static constexpr int kLodUnitSize = 8; // 这里的 8 代表每个 LOD 块在 X/Z 轴上采样 8 个点
+    static constexpr int kLodUnitSize = 8; 
 };
 
 } // namespace game::client

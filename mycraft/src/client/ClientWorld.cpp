@@ -7,24 +7,9 @@
 
 namespace game::client {
 
-static bool AabbInFrustum(const Frustum& f, const glm::vec3& mn, const glm::vec3& mx) {
-    for (const auto& p : f.planes) {
-        glm::vec3 n = glm::vec3(p);
-        float d = p.w;
-        glm::vec3 v(
-            n.x >= 0 ? mx.x : mn.x,
-            n.y >= 0 ? mx.y : mn.y,
-            n.z >= 0 ? mx.z : mn.z
-        );
-        if (glm::dot(n, v) + d < 0.0f) return false;
-    }
-    return true;
-}
-
 void ClientWorld::AddChunk(int cx, int cz, std::span<const BlockId> blocksData,
                            const std::array<uint8_t, CHUNK_VOLUME>& skyData,
-                           const std::array<LightRGB, CHUNK_VOLUME>& blockLightData,
-                           Eng::service::MeshPtr mesh) {
+                           const std::array<LightRGB, CHUNK_VOLUME>& blockLightData) {
     ClientChunk cc;
     cc.chunk = std::make_shared<Chunk>();
     cc.chunk->chunk_x = cx;
@@ -33,7 +18,6 @@ void ClientWorld::AddChunk(int cx, int cz, std::span<const BlockId> blocksData,
     std::memcpy(cc.chunk->blocks.data(), blocksData.data(), CHUNK_VOLUME * sizeof(BlockId));
     cc.chunk->sky = skyData;
     cc.chunk->block = blockLightData;
-    cc.mesh = std::move(mesh);
 
     // 用纯指针直接读取，千万不要用 ChunkGet，消除所有越界检查开销
     const BlockId* pBlocks = cc.chunk->blocks.data();
@@ -121,17 +105,6 @@ std::vector<uint64_t> ClientWorld::FetchDirtyChunks(size_t maxCount) {
         it = m_dirtyChunks.erase(it);
     }
     return result;
-}
-
-void ClientWorld::CollectVisibleMeshes(const Frustum& frustum,
-                                       std::vector<Eng::service::MeshPtr>& outMeshes) const {
-    outMeshes.clear();
-    outMeshes.reserve(m_chunks.size());
-    for (const auto& [key, cc] : m_chunks) {
-        if (!cc.mesh) continue;
-        if (!AabbInFrustum(frustum, cc.aabbMin, cc.aabbMax)) continue;
-        outMeshes.push_back(cc.mesh);
-    }
 }
 
 void ClientWorld::UpdateStreaming(const glm::vec3& cameraPos, int renderDistance,

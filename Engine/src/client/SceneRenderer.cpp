@@ -1,8 +1,11 @@
 #include "Engine/client/SceneRenderer.h"
 #include "Engine/tool/Log.h"
+#include <algorithm>
 #include <ranges>
+#include <span>
 #include <format>
 #include <stdexcept>
+#include <cstring>
 
 namespace Eng::client {
 
@@ -11,7 +14,7 @@ SceneRenderer::SceneRenderer(service::IRenderService* rhi, service::AssetService
     if (!m_rhi) throw std::invalid_argument("SceneRenderer: rhi is null");
     if (!m_assets) throw std::invalid_argument("SceneRenderer: assets is null");
     
-    m_waterShader = m_assets->LoadShader(m_assets->MakeShaderCreateInfo("water"));
+    m_waterShader = m_assets->LoadShader(m_assets->MakeShaderCreateInfo("water", service::rhi::GraphicsPipelineState::PresetTransparent()));
     if (!m_waterShader) {
         logWarning(m_logger, "[SceneRenderer] Failed to load 'water' shader!");
     }
@@ -52,65 +55,62 @@ void SceneRenderer::OnChunkMeshReady(uint64_t chunkKey,
 }
 
 void SceneRenderer::OnChunkUnloaded(uint64_t chunkKey) {
-    if (auto it = m_liveGeometry.chunkMeshes.find(chunkKey); it != m_liveGeometry.chunkMeshes.end()) {
+    if (auto it = m_chunkMeshTable.find(chunkKey); it != m_chunkMeshTable.end()) {
         m_garbageVertices += it->second.vertexCount;
         m_garbageIndices  += it->second.indexCount;
-        it->second.indexCount = 0;
+        it->second.indexCount  = 0;
         it->second.vertexCount = 0;
     }
     m_allChunks.erase(chunkKey);
 }
 
 void SceneRenderer::AppendIncremental(uint64_t key, const ChunkRenderData& data) {
-    size_t maxVertices = m_vboCapacity / sizeof(service::Vertex);
-    size_t maxIndices  = m_iboCapacity / sizeof(uint32_t);
+    size_t maxVertices = m_terrainVboCapacityBytes / sizeof(service::Vertex);
+    size_t maxIndices  = m_terrainIboCapacityBytes / sizeof(uint32_t);
 
-    bool outOfCapacity = (m_liveGeometry.vertexCursor + data.vertices.size() > maxVertices) ||
-                         (m_liveGeometry.indexCursor + data.indices.size() > maxIndices);
+    bool outOfCapacity = (m_vertexCursor + data.vertices.size() > maxVertices) ||
+                         (m_indexCursor  + data.indices.size()  > maxIndices);
 
-    bool tooMuchGarbage = (m_garbageVertices > m_liveGeometry.vertexCursor * 0.8) &&
+    bool tooMuchGarbage = (m_garbageVertices > m_vertexCursor * 0.8) &&
                           (m_garbageVertices > 2000000);
 
-    if (outOfCapacity || tooMuchGarbage || m_liveGeometry.vertexCursor == 0) {
+    if (outOfCapacity || tooMuchGarbage || !m_terrainVbo || !m_terrainIbo || m_vertexCursor == 0) {
         TriggerAsyncRebuild();
         return;
     }
 
-    uint32_t vOffset = static_cast<uint32_t>(m_liveGeometry.vertexCursor);
-    uint32_t iOffset = static_cast<uint32_t>(m_liveGeometry.indexCursor);
-
     std::vector<uint32_t> globalizedIndices;
     globalizedIndices.reserve(data.indices.size());
+    const uint32_t vOffset = static_cast<uint32_t>(m_vertexCursor);
     for (uint32_t idx : data.indices) {
         globalizedIndices.push_back(idx + vOffset);
     }
 
-    try {
-        m_rhi->UpdateGlobalGeometry(vOffset, data.vertices, iOffset, globalizedIndices);
-    } catch (const std::out_of_range& e) {
-        logWarning(m_logger, "[SceneRenderer] Incremental failed: " << e.what() << ". Falling back to rebuild.");
-        TriggerAsyncRebuild();
-        return;
-    }
+    m_rhi->UpdateBuffer(
+        m_terrainVbo,
+        m_vertexCursor * sizeof(service::Vertex),
+        std::as_bytes(std::span<const service::Vertex>(data.vertices)));
 
-    m_liveGeometry.vertices.insert(m_liveGeometry.vertices.end(), data.vertices.begin(), data.vertices.end());
-    m_liveGeometry.indices.insert(m_liveGeometry.indices.end(), globalizedIndices.begin(), globalizedIndices.end());
+    m_rhi->UpdateBuffer(
+        m_terrainIbo,
+        m_indexCursor * sizeof(uint32_t),
+        std::as_bytes(std::span<const uint32_t>(globalizedIndices)));
 
-    m_liveGeometry.chunkMeshes[key] = ChunkMeshData{
-        .firstIndex  = iOffset,
+    m_chunkMeshTable[key] = ChunkMeshData{
+        .firstIndex  = static_cast<uint32_t>(m_indexCursor),
         .indexCount  = static_cast<uint32_t>(data.indices.size()),
         .vertexCount = static_cast<uint32_t>(data.vertices.size())
     };
 
-    m_liveGeometry.vertexCursor += data.vertices.size();
-    m_liveGeometry.indexCursor  += data.indices.size();
+    m_vertexCursor += data.vertices.size();
+    m_indexCursor  += data.indices.size();
 }
 
 void SceneRenderer::TriggerAsyncRebuild() {
     if (m_rebuildInProgress.exchange(true)) return;
 
     auto snapshot = m_allChunks;
-    m_rebuildThread.reset(); 
+    m_rebuildThread.reset();
 
     m_rebuildThread = std::make_unique<Eng::tool::RAIIThread>(
         [this, snap = std::move(snapshot)](const std::stop_token& st) {
@@ -164,23 +164,37 @@ void SceneRenderer::ProcessPendingRebuild() {
     std::lock_guard lock(m_pendingMutex);
     if (!m_pendingGeometry) return;
 
-    m_liveGeometry = std::move(*m_pendingGeometry);
+    auto geo = std::move(m_pendingGeometry);
     m_pendingGeometry.reset();
 
+    size_t needVboBytes = std::max<size_t>(geo->vertices.size() * sizeof(service::Vertex) * 2, 128ull * 1024 * 1024);
+    size_t needIboBytes = std::max<size_t>(geo->indices.size() * sizeof(uint32_t) * 2, 32ull * 1024 * 1024);
+
+    if (!m_terrainVbo || m_terrainVboCapacityBytes < needVboBytes) {
+        m_terrainVbo = m_rhi->CreateBuffer({ .size = needVboBytes, .usage = service::rhi::BufferUsage::Vertex });
+        m_terrainVboCapacityBytes = needVboBytes;
+    }
+    if (!m_terrainIbo || m_terrainIboCapacityBytes < needIboBytes) {
+        m_terrainIbo = m_rhi->CreateBuffer({ .size = needIboBytes, .usage = service::rhi::BufferUsage::Index });
+        m_terrainIboCapacityBytes = needIboBytes;
+    }
+
+    if (!geo->vertices.empty()) {
+        m_rhi->UpdateBuffer(m_terrainVbo, 0, std::as_bytes(std::span<const service::Vertex>(geo->vertices)));
+    }
+    if (!geo->indices.empty()) {
+        m_rhi->UpdateBuffer(m_terrainIbo, 0, std::as_bytes(std::span<const uint32_t>(geo->indices)));
+    }
+
+    m_chunkMeshTable = std::move(geo->chunkMeshes);
+    m_vertexCursor   = geo->vertexCursor;
+    m_indexCursor    = geo->indexCursor;
+
     m_garbageVertices = 0;
-    m_garbageIndices = 0;
-
-    m_rhi->UploadGlobalGeometry(
-        std::span<const service::Vertex>(m_liveGeometry.vertices),
-        std::span<const uint32_t>(m_liveGeometry.indices),
-        m_vboCapacity, m_iboCapacity
-    );
-
-    m_liveGeometry.vertices.reserve(m_vboCapacity / sizeof(service::Vertex));
-    m_liveGeometry.indices.reserve(m_iboCapacity / sizeof(uint32_t));
-
+    m_garbageIndices  = 0;
     m_rebuildInProgress = false;
-    logInfo(m_logger, std::format("[SceneRenderer] Async Rebuild Complete. Verts: {}", m_liveGeometry.vertexCursor));
+
+    logInfo(m_logger, std::format("[SceneRenderer] Async Rebuild Complete. Verts: {}", m_vertexCursor));
 }
 
 // ============================================================
@@ -191,64 +205,81 @@ void SceneRenderer::BeginScene() {
     m_drawQueue.clear();
 }
 
-void SceneRenderer::SubmitMesh(service::MeshPtr mesh, service::ShaderPtr shader, const service::Material& material, const service::rhi::PerObjectData& data) {
-    m_drawQueue.push_back({ .type = DrawCommand::Type::Mesh, .mesh = std::move(mesh), .shader = std::move(shader), .material = material, .data = data });
+void SceneRenderer::SubmitMesh(const RenderMesh& mesh, service::ShaderPtr shader, 
+                               const service::TexturePtr& diffuseTex, 
+                               const service::rhi::PerObjectData& data) {
+    m_drawQueue.push_back({ 
+        .type = DrawCommand::Type::Mesh, 
+        .mesh = mesh, 
+        .shader = std::move(shader), 
+        .diffuse = diffuseTex, 
+        .data = data 
+    });
 }
 
-void SceneRenderer::SubmitInstancedMesh(service::MeshPtr mesh, service::ShaderPtr shader, const service::Material& material, const std::vector<service::rhi::PerObjectData>& instances) {
-    m_drawQueue.push_back({ .type = DrawCommand::Type::InstancedMesh, .mesh = std::move(mesh), .shader = std::move(shader), .material = material, .instances = instances });
+void SceneRenderer::SubmitInstancedMesh(const RenderMesh& mesh, service::ShaderPtr shader, 
+                                        const service::TexturePtr& diffuseTex, 
+                                        const std::vector<service::rhi::PerObjectData>& instances) {
+    m_drawQueue.push_back({ 
+        .type = DrawCommand::Type::InstancedMesh, 
+        .mesh = mesh, 
+        .shader = std::move(shader), 
+        .diffuse = diffuseTex, 
+        .instances = instances 
+    });
 }
 
-void SceneRenderer::SubmitSkybox(service::ShaderPtr shader) {
-    m_drawQueue.push_back({ .type = DrawCommand::Type::Skybox, .shader = std::move(shader) });
-}
-
-void SceneRenderer::SubmitWaterChunk(uint64_t chunkKey, std::vector<service::Vertex>&& vertices, std::vector<uint32_t>&& indices, const glm::vec3& aabbMin, const glm::vec3& aabbMax) {
+void SceneRenderer::SubmitWaterChunk(uint64_t chunkKey, std::vector<service::Vertex>&& vertices, 
+                                     std::vector<uint32_t>&& indices, const glm::vec3& aabbMin, const glm::vec3& aabbMax) {
     if (vertices.empty() || indices.empty()) {
         RemoveWaterChunk(chunkKey);
         return;
     }
 
-    // 使用底层 RHI 直接创建一个独立的 Mesh
-    service::MeshData data{
-        .vertices = std::move(vertices),
-        .indices  = std::move(indices)
-    };
-    service::MeshPtr mesh = m_rhi->CreateMesh(data);
+    RenderMesh mesh;
+    mesh.vbo = m_rhi->CreateBuffer({ .size = vertices.size() * sizeof(service::Vertex), .usage = service::rhi::BufferUsage::Vertex });
+    m_rhi->UpdateBuffer(mesh.vbo, 0, std::as_bytes(std::span(vertices)));
     
-    if (mesh) {
-        m_waterChunks[chunkKey] = WaterChunk{
-            .mesh = std::move(mesh),
-            .aabbMin = aabbMin,
-            .aabbMax = aabbMax
-        };
-    }
+    mesh.ibo = m_rhi->CreateBuffer({ .size = indices.size() * sizeof(uint32_t), .usage = service::rhi::BufferUsage::Index });
+    m_rhi->UpdateBuffer(mesh.ibo, 0, std::as_bytes(std::span(indices)));
+    
+    mesh.indexCount = static_cast<uint32_t>(indices.size());
+    mesh.vertexCount = static_cast<uint32_t>(vertices.size());
+    mesh.indexed = true;
+
+    m_waterChunks[chunkKey] = WaterChunk{
+        .mesh = std::move(mesh),
+        .aabbMin = aabbMin,
+        .aabbMax = aabbMax
+    };
 }
 
 void SceneRenderer::RemoveWaterChunk(uint64_t chunkKey) {
     m_waterChunks.erase(chunkKey);
 }
 
-void SceneRenderer::EndScene(const glm::mat4& viewProj, const glm::vec3& cameraPos,
+void SceneRenderer::EndScene(const Frustum& frustum, const glm::vec3& cameraPos,
                              const service::ShaderPtr& terrainShader, const service::TexturePtr& atlasTexture) {
     (void)cameraPos;
-
     if (!m_rhi) return;
 
     ProcessPendingRebuild();
 
     // ==========================================================
-    // 1. 地形 MDI 绘制（由外部传入 Shader 和 图集）
+    // 1. 地形 MDI 绘制（使用统一的 frustum 剔除）
     // ==========================================================
-    if (terrainShader && atlasTexture) {
+    if (terrainShader && atlasTexture && m_terrainVbo && m_terrainIbo) {
         m_indirectCommands.clear();
-        for (const auto& [key, cc] : m_liveGeometry.chunkMeshes) {
+        m_indirectCommands.reserve(m_chunkMeshTable.size());
+
+        for (const auto& [key, cc] : m_chunkMeshTable) {
             if (cc.indexCount == 0) continue;
 
             auto chunkIt = m_allChunks.find(key);
             if (chunkIt == m_allChunks.end()) continue;
 
-            if (!TestAABB(chunkIt->second.aabbMin, chunkIt->second.aabbMax, viewProj)) continue;
+            // ★ 统一视锥剔除
+            if (!frustum.TestAABB(chunkIt->second.aabbMin, chunkIt->second.aabbMax)) continue;
 
             m_indirectCommands.push_back({
                 .indexCount    = cc.indexCount,
@@ -260,9 +291,25 @@ void SceneRenderer::EndScene(const glm::mat4& viewProj, const glm::vec3& cameraP
         }
 
         if (!m_indirectCommands.empty()) {
-            service::Material mat{ .diffuse = atlasTexture };
-            m_rhi->UploadIndirectCommands(m_indirectCommands);
-            m_rhi->DrawMDI(terrainShader, mat, static_cast<uint32_t>(m_indirectCommands.size()));
+            const size_t needBytes = m_indirectCommands.size() * sizeof(service::rhi::DrawIndexedIndirectCommand);
+
+            if (!m_indirectBuffer || m_indirectBufferCapacityBytes < needBytes) {
+                m_indirectBuffer = m_rhi->CreateBuffer({ .size = needBytes, .usage = service::rhi::BufferUsage::Indirect });
+                m_indirectBufferCapacityBytes = needBytes;
+            }
+
+            m_rhi->UpdateBuffer(
+                m_indirectBuffer, 0,
+                std::as_bytes(std::span<const service::rhi::DrawIndexedIndirectCommand>(m_indirectCommands)));
+
+            m_rhi->BindShader(terrainShader);
+            m_rhi->BindVertexBuffer(m_terrainVbo);
+            m_rhi->BindIndexBuffer(m_terrainIbo);
+            m_rhi->BindTexture(atlasTexture, 0);
+            m_rhi->DrawIndexedIndirect(
+                m_indirectBuffer,
+                static_cast<uint32_t>(m_indirectCommands.size()),
+                sizeof(service::rhi::DrawIndexedIndirectCommand));
         }
     }
 
@@ -270,52 +317,43 @@ void SceneRenderer::EndScene(const glm::mat4& viewProj, const glm::vec3& cameraP
     // 2. 绘制队列（LOD、玩家、掉落物、天空盒、手部）
     // ==========================================================
     for (const auto& cmd : m_drawQueue) {
-        switch (cmd.type) {
-            case DrawCommand::Type::Mesh:
-                m_rhi->DrawMesh(cmd.mesh, cmd.shader, cmd.material, cmd.data);
-                break;
-            case DrawCommand::Type::InstancedMesh:
-                m_rhi->DrawMeshInstanced(cmd.mesh, cmd.shader, cmd.material, cmd.instances);
-                break;
-            case DrawCommand::Type::Skybox:
-                m_rhi->DrawSkybox(cmd.shader);
-                break;
+        if (!cmd.shader || !cmd.mesh.vbo) continue;
+
+        m_rhi->BindShader(cmd.shader);
+        m_rhi->BindVertexBuffer(cmd.mesh.vbo);
+        if (cmd.mesh.indexed) m_rhi->BindIndexBuffer(cmd.mesh.ibo);
+        m_rhi->BindTexture(cmd.diffuse, 0);
+
+        if (cmd.type == DrawCommand::Type::Mesh) {
+            m_rhi->PushConstants(cmd.shader, std::as_bytes(std::span(&cmd.data, 1)));
+            if (cmd.mesh.indexed) m_rhi->DrawIndexed(cmd.mesh.indexCount);
+            else                  m_rhi->Draw(cmd.mesh.vertexCount);
+        } 
+        else if (cmd.type == DrawCommand::Type::InstancedMesh) {
+            for (const auto& data : cmd.instances) {
+                m_rhi->PushConstants(cmd.shader, std::as_bytes(std::span(&data, 1)));
+                if (cmd.mesh.indexed) m_rhi->DrawIndexed(cmd.mesh.indexCount);
+                else                  m_rhi->Draw(cmd.mesh.vertexCount);
+            }
         }
     }
 
     // ==========================================================
-    // 3. 绘制水面（透明队列）
+    // 3. 绘制水面（透明队列，使用统一的 frustum 剔除）
     // ==========================================================
     if (m_waterShader && atlasTexture) {
-        service::Material waterMat{ .diffuse = atlasTexture };
+        m_rhi->BindShader(m_waterShader);
+        m_rhi->BindTexture(atlasTexture, 0);
         for (const auto& [key, wc] : m_waterChunks) {
-            // 视锥剔除，如果不在视野里就不画
-            if (!TestAABB(wc.aabbMin, wc.aabbMax, viewProj)) continue;
+            // ★ 统一视锥剔除
+            if (!frustum.TestAABB(wc.aabbMin, wc.aabbMax)) continue;
             
-            m_rhi->DrawMesh(wc.mesh, m_waterShader, waterMat);
+            m_rhi->BindVertexBuffer(wc.mesh.vbo);
+            if (wc.mesh.indexed) m_rhi->BindIndexBuffer(wc.mesh.ibo);
+            if (wc.mesh.indexed) m_rhi->DrawIndexed(wc.mesh.indexCount);
+            else                  m_rhi->Draw(wc.mesh.vertexCount);
         }
     }
-}
-
-bool SceneRenderer::TestAABB(const glm::vec3& mn, const glm::vec3& mx, const glm::mat4& viewProj) const {
-    glm::vec4 planes[6];
-    auto row = [&](int r) { return glm::vec4(viewProj[0][r], viewProj[1][r], viewProj[2][r], viewProj[3][r]); };
-    auto r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
-
-    planes[0] = r3 + r0; planes[1] = r3 - r0; planes[2] = r3 + r1;
-    planes[3] = r3 - r1; planes[4] = r3 + r2; planes[5] = r3 - r2;
-
-    for (const auto& p : planes) {
-        glm::vec3 n(p);
-        float d = p.w;
-        glm::vec3 v(
-            n.x >= 0 ? mx.x : mn.x,
-            n.y >= 0 ? mx.y : mn.y,
-            n.z >= 0 ? mx.z : mn.z
-        );
-        if (glm::dot(n, v) + d < 0.0f) return false;
-    }
-    return true;
 }
 
 void SceneRenderer::Clear() {
@@ -325,9 +363,17 @@ void SceneRenderer::Clear() {
         m_pendingGeometry.reset();
     }
     m_allChunks.clear();
-    m_liveGeometry = {};
-    m_vboCapacity = 0;
-    m_iboCapacity = 0;
+    m_chunkMeshTable.clear();
+
+    m_terrainVbo.reset();
+    m_terrainIbo.reset();
+    m_indirectBuffer.reset();
+    m_terrainVboCapacityBytes = 0;
+    m_terrainIboCapacityBytes = 0;
+    m_indirectBufferCapacityBytes = 0;
+
+    m_vertexCursor = 0;
+    m_indexCursor  = 0;
     m_garbageVertices = 0;
     m_garbageIndices = 0;
     m_rebuildInProgress = false;

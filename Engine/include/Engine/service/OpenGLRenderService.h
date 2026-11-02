@@ -4,9 +4,10 @@
 #include "Engine/tool/Configs.h"
 #include "Engine/tool/Log.h"
 #include <glad/glad.h>
-#include <SDL3/SDL_video.h>
-#include <string>
+#include <SDL3/SDL.h>
 #include <memory>
+#include <span>
+#include <cstddef>
 #include <unordered_map>
 
 namespace Eng::service {
@@ -16,56 +17,55 @@ public:
     OpenGLRenderService();
     ~OpenGLRenderService() override;
 
+    // ===== 生命周期 =====
     void Initialize(int width, int height, tool::Window* window) override;
     void Shutdown() override;
 
-    void InitPipelines() override;
-    void BindPipeline(rhi::PipelineType type) override;
+    glm::mat4 MakePerspectiveMatrix(float fovYRadians, float aspect, float nearZ, float farZ) const override;
 
+    // ===== 视口 / 清屏 =====
     void SetViewport(int x, int y, int w, int h) override;
-    void SetClearColor(float r, float g, float b, float a) override;
-    void Clear(rhi::ClearFlag flag = rhi::ClearFlag::All) override;
-    void SetGlobalState(const GlobalState& state) override;
+    void Clear(rhi::ClearFlag flag = rhi::ClearFlag::All,
+               const glm::vec4& color = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f),
+               float depth = 1.0f, uint8_t stencil = 0) override;
 
-    // MDI 接口
-    void UploadGlobalGeometry(std::span<const Vertex> vertices, std::span<const uint32_t> indices,
-                              size_t& outVboCapacity, size_t& outIboCapacity) override;
-    void UpdateGlobalGeometry(uint32_t vertexOffset, std::span<const Vertex> vertices,
-                              uint32_t indexOffset, std::span<const uint32_t> indices) override;
-    void UploadIndirectCommands(const std::vector<rhi::DrawIndexedIndirectCommand>& commands) override;
-    void DrawMDI(const ShaderPtr& shader, const Material& material, uint32_t commandCount) override;
-
-    // 资源创建
-    MeshPtr CreateMesh(const MeshData& data) override;
-    TexturePtr CreateTexture(const uint8_t* rgba, int w, int h, int requestedMips = 0) override;
-    ShaderPtr CreateShader(const ShaderCreateInfo& info) override;
-    FramebufferPtr CreateFramebuffer(const FramebufferCreateInfo& info) override;
-
-    void BindFramebuffer(const FramebufferPtr& fb) override;
-    void UnbindFramebuffer() override;
-
+    // ===== 帧控制 =====
     void BeginFrame() override;
     void EndFrame() override;
 
-    void DrawMesh(const MeshPtr& mesh, const ShaderPtr& shader,
-                  const Material& material,
-                  const rhi::PerObjectData& data = {}) override;
-    void DrawMeshInstanced(const MeshPtr& mesh, const ShaderPtr& shader,
-                           const Material& material,
-                           const std::vector<rhi::PerObjectData>& perObjects) override;
-    void DrawSkybox(const ShaderPtr& shader) override;
-    void BlitToScreen(const TexturePtr& texture) override;
+    // ===== 资源创建与更新 =====
+    BufferPtr      CreateBuffer(const rhi::BufferCreateInfo& info) override;
+    TexturePtr     CreateTexture(const rhi::TextureCreateInfo& info) override;
+    ShaderPtr      CreateShader(const rhi::ShaderCreateInfo& info) override;
+    FramebufferPtr CreateFramebuffer(const rhi::FramebufferCreateInfo& info) override;
+    void           UpdateBuffer(const BufferPtr& buffer, size_t offset, std::span<const std::byte> data) override;
 
-    void SetUniform(const ShaderPtr& shader, const std::string& name, const glm::mat4& value) override;
-    void SetUniform(const ShaderPtr& shader, const std::string& name, const glm::vec3& value) override;
-    void SetUniform(const ShaderPtr& shader, const std::string& name, float value) override;
-    void SetUniform(const ShaderPtr& shader, const std::string& name, int value) override;
+    // ===== 帧缓冲绑定 =====
+    void BindFramebuffer(const FramebufferPtr& fb) override;
+    void UnbindFramebuffer() override;
 
+    // ===== 无状态绑定 =====
+    void BindShader(const ShaderPtr& shader) override;
+    void BindVertexBuffer(const BufferPtr& buffer, uint32_t binding = 0) override;
+    void BindIndexBuffer(const BufferPtr& buffer) override;
+    void BindTexture(const TexturePtr& texture, uint32_t slot) override;
+
+    // ===== 常量缓冲 =====
+    void BindUniformBuffer(const BufferPtr& buffer, uint32_t set, uint32_t binding) override;
+    void PushConstants(const ShaderPtr& shader, std::span<const std::byte> data) override;
+
+    // ===== 绘制 =====
+    void Draw(uint32_t vertexCount, uint32_t instanceCount = 1, uint32_t firstVertex = 0) override;
+    void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1, uint32_t firstIndex = 0, int32_t vertexOffset = 0) override;
+    void DrawIndexedIndirect(const BufferPtr& indirectBuffer, uint32_t drawCount, uint32_t stride) override;
+
+    // ===== ImGui =====
     bool InitImGuiBackend() override;
     void ShutdownImGuiBackend() override;
     void ImGuiNewFrame() override;
     void ImGuiRenderDrawData() override;
 
+    // ===== 杂项 =====
     DeviceInfo GetDeviceInfo() const override;
     void ApplySettings(const tool::WindowConfig& win, const tool::RenderConfig& render) override;
     void WaitIdle() override;
@@ -76,36 +76,26 @@ public:
 
 private:
     bool m_initialized = false;
-    bool m_imguiInitialized = false;          // ShutdownImGuiBackend 幂等守卫
-    SDL_GLContext m_glContext = nullptr;      // 由本类拥有，取代 Window::m_glContext
+    bool m_imguiInitialized = false;
+    SDL_GLContext m_glContext = nullptr;
 
-    MeshHandle m_nextMeshHandle = 1;
-    TextureHandle m_nextTextureHandle = 1;
-    ShaderHandle m_nextShaderHandle = 1;
+    TextureHandle     m_nextTextureHandle     = 1;
+    ShaderHandle      m_nextShaderHandle      = 1;
     FramebufferHandle m_nextFramebufferHandle = 1;
-
-    struct MeshDataInternal {
-        GLuint vao = 0;
-        GLuint vbo = 0;
-        GLuint ebo = 0;
-        GLuint instanceVBO = 0;
-        size_t indexCount = 0;
-        GLenum indexType = GL_NONE;
-    };
-
+    BufferHandle      m_nextBufferHandle      = 1;
+    
     struct TextureDataInternal {
         GLuint textureID = 0;
-        int width = 0, height = 0;
-        GLenum format = GL_RGBA;
+        int    width     = 0;
+        int    height    = 0;
+        GLenum format    = GL_RGBA;
     };
-
     struct ShaderDataInternal {
         GLuint program = 0;
         GLuint perObjectUBO = 0;
-        rhi::PerObjectMode perObjectMode = rhi::PerObjectMode::None;
-        rhi::PipelineType  pipelineType  = rhi::PipelineType::Opaque;
+        uint32_t pushConstantSize = 0;
+        rhi::GraphicsPipelineState pipelineState = {};
     };
-
     struct FramebufferInternal {
         GLuint fbo      = 0;
         GLuint colorTex = 0;
@@ -113,59 +103,53 @@ private:
         int    width    = 0;
         int    height   = 0;
     };
+    struct BufferDataInternal {
+        GLuint          buffer = 0;
+        size_t          size   = 0;
+        rhi::BufferUsage usage;
+    };
 
-    std::unordered_map<MeshHandle,        MeshDataInternal>    m_meshes;
     std::unordered_map<TextureHandle,     TextureDataInternal> m_textures;
     std::unordered_map<ShaderHandle,      ShaderDataInternal>  m_shaders;
     std::unordered_map<FramebufferHandle, FramebufferInternal> m_framebuffers;
     std::unordered_map<FramebufferHandle, TextureHandle>       m_fbColorHandles;
+    std::unordered_map<BufferHandle,      BufferDataInternal>  m_buffers;
+
+    GLuint m_drawVAO  = 0;
+    bool   m_vaoDirty = false;
+
+    GLuint m_currentVBO       = 0;
+    GLuint m_currentIBO       = 0;
+    GLuint m_currentProgram   = 0;
+    GLuint m_currentTextureID = 0;
 
     TexturePtr m_defaultTexturePtr = nullptr;
-    GlobalState m_globalState{};
-
-    GLuint m_globalUBO   = 0;
-    GLuint m_materialUBO = 0;
-
-    GLuint m_globalVAO = 0;
-    GLuint m_globalVBO = 0;
-    GLuint m_globalIBO = 0;
-    GLuint m_indirectVBO = 0;
-
-    size_t m_globalVboCapacity = 0;
-    size_t m_globalIboCapacity = 0;
-
-    MeshPtr m_skyCubeMesh = nullptr;
-
-    GLuint m_fullscreenVAO = 0;
-    GLuint m_fullscreenVBO = 0;
-    ShaderPtr m_fullscreenShader = nullptr;
 
     std::unique_ptr<tool::Log> m_logger = std::make_unique<tool::Log>();
-    DeviceInfo m_deviceInfo;
+    DeviceInfo                 m_deviceInfo;
+    tool::RenderConfig         m_renderConfig;
 
-    tool::RenderConfig m_renderConfig;
+    tool::Window* m_window        = nullptr;
+    int           m_viewportX     = 0;
+    int           m_viewportY     = 0;
+    int           m_viewportWidth = 0;
+    int           m_viewportHeight = 0;
 
-    tool::Window* m_window = nullptr;
-    int m_viewportX = 0, m_viewportY = 0;
-    int m_viewportWidth = 0, m_viewportHeight = 0;
-    float m_clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    // ===== 内部实现辅助 =====
+    TextureHandle     CreateTextureInternal(const uint8_t* rgba, int w, int h, int requestedMips = 0);
+    ShaderHandle      CreateShaderInternal(const rhi::ShaderCreateInfo& info);
+    FramebufferHandle CreateFramebufferInternal(const rhi::FramebufferCreateInfo& info);
+    BufferHandle      CreateBufferInternal(size_t size, rhi::BufferUsage usage);
 
-    // 内部辅助
-    MeshHandle CreateMeshInternal(const MeshData& data);
-    TextureHandle CreateTextureInternal(const uint8_t* rgba, int w, int h, int requestedMips = 0);
-    ShaderHandle CreateShaderInternal(const ShaderCreateInfo& info);
-    FramebufferHandle CreateFramebufferInternal(const FramebufferCreateInfo& info);
-
-    void DestroyMeshInternal(MeshHandle handle);
     void DestroyTextureInternal(TextureHandle handle);
     void DestroyShaderInternal(ShaderHandle handle);
     void DestroyFramebufferInternal(FramebufferHandle handle);
+    void DestroyBufferInternal(BufferHandle handle);
 
-    void InitSkyCubeMesh();
-    GLuint CompileShader(GLenum type, const std::string& source);
+    void ApplyStateIfNeeded();
+    void ApplyPipelineState(const rhi::GraphicsPipelineState& state);
+
     GLuint LinkProgram(GLuint vertexShader, GLuint fragmentShader);
-    std::string ReadFile(const std::string& path);
-
     GLuint ResolveTexture(const TexturePtr& tex) const {
         if (tex) {
             auto it = m_textures.find(tex->GetHandle());

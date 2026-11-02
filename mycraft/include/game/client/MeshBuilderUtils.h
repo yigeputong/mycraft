@@ -13,6 +13,11 @@ struct BlockFace {
     int du[4], dv[4];
 };
 
+struct RawMeshData {
+    std::vector<Eng::service::Vertex> vertices;
+    std::vector<uint32_t> indices;
+};
+
 class MeshBuilderUtils {
 public:
     static std::array<BlockFace, 6> GetBlockFaces(
@@ -32,7 +37,7 @@ public:
         glm::vec4 light,
         std::vector<Eng::service::Vertex>& outV, std::vector<uint32_t>& outI);
 
-    static Eng::service::MeshData BuildItemMeshData(
+    static game::client::RawMeshData BuildItemMeshData(
         const BlockRegistry& reg, BlockId id);
 };
 

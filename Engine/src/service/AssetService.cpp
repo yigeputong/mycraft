@@ -4,13 +4,53 @@
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
+#include <SDL3/SDL_filesystem.h>
+#include <SDL3/SDL_iostream.h>
 #include <SDL3_image/SDL_image.h>
-#include <filesystem>
+
+#include <cstdint>
+#include <cstddef>
+#include <format>
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace Eng::service {
 
+namespace {
+
+    uint64_t HashPipelineState(const rhi::GraphicsPipelineState& s) noexcept {
+        uint64_t h = 14695981039346656037ull;
+        auto mix = [&h](uint64_t v) noexcept {
+            h ^= v;
+            h *= 1099511628211ull;
+        };
+        mix(s.depthStencil.depthTestEnable  ? 1u : 0u);
+        mix(s.depthStencil.depthWriteEnable ? 1u : 0u);
+        mix(static_cast<uint64_t>(s.depthStencil.depthCompareOp));
+        mix(s.depthStencil.stencilTestEnable ? 1u : 0u);
+        mix(static_cast<uint64_t>(s.rasterizer.cullMode));
+        mix(static_cast<uint64_t>(s.rasterizer.frontFace));
+        mix(s.blend.blendEnable ? 1u : 0u);
+        mix(static_cast<uint64_t>(s.blend.srcColorBlendFactor));
+        mix(static_cast<uint64_t>(s.blend.dstColorBlendFactor));
+        mix(static_cast<uint64_t>(s.blend.colorBlendOp));
+        mix(static_cast<uint64_t>(s.blend.srcAlphaBlendFactor));
+        mix(static_cast<uint64_t>(s.blend.dstAlphaBlendFactor));
+        mix(static_cast<uint64_t>(s.blend.alphaBlendOp));
+        mix(static_cast<uint64_t>(s.blend.colorWriteMask));
+        return h;
+    }
+
+} // anonymous namespace
+
 AssetService::AssetService(IRenderService* rhi) : m_rhi(rhi) {}
 
+// ============================================================
+// 纹理
+// ============================================================
 TexturePtr AssetService::LoadTexture(const std::string& path) {
     if (!m_rhi) {
         logError(m_logger, "[AssetService] RHI is null, cannot load texture.");
@@ -18,9 +58,7 @@ TexturePtr AssetService::LoadTexture(const std::string& path) {
     }
 
     auto it = m_textureCache.find(path);
-    if (it != m_textureCache.end()) {
-        return it->second;
-    }
+    if (it != m_textureCache.end()) return it->second;
 
     SDL_Surface* loaded = IMG_Load(path.c_str());
     if (!loaded) {
@@ -35,161 +73,134 @@ TexturePtr AssetService::LoadTexture(const std::string& path) {
         return nullptr;
     }
 
-    TexturePtr tex = m_rhi->CreateTexture(static_cast<const uint8_t*>(surf->pixels), surf->w, surf->h);
-    
+    const size_t byteCount = static_cast<size_t>(surf->w) * surf->h * 4;
+    rhi::TextureCreateInfo tci;
+    tci.pixels = std::as_bytes(std::span<const uint8_t>(
+        static_cast<const uint8_t*>(surf->pixels), byteCount));
+    tci.width         = surf->w;
+    tci.height        = surf->h;
+    tci.requestedMips = 0;
+    tci.format        = rhi::TextureFormat::RGBA8_UNORM;
+
+    TexturePtr tex = m_rhi->CreateTexture(tci);
     SDL_DestroySurface(surf);
 
-    if (tex) {
-        m_textureCache[path] = tex;
-    } else {
-        logError(m_logger, "[AssetService] Failed to create texture from pixels: " << path);
-    }
+    if (tex) m_textureCache[path] = tex;
+    else     logError(m_logger, "[AssetService] Failed to create texture: " << path);
     return tex;
 }
 
-ShaderPtr AssetService::LoadShader(const ShaderCreateInfo& info) {
+// ============================================================
+// 着色器
+// ============================================================
+ShaderPtr AssetService::LoadShader(const rhi::ShaderCreateInfo& info) {
     if (!m_rhi) {
         logError(m_logger, "[AssetService] RHI is null, cannot load shader.");
         return nullptr;
     }
-
-    // 把 pipelineType 加进缓存 Key，保证 Hand 和 Opaque 是独立的
-    const std::string cacheKey = info.vertPath + "|" + info.fragPath + "|" 
-                               + std::to_string(static_cast<int>(info.pipelineType));
-    
-    auto it = m_shaderCache.find(cacheKey);
-    if (it != m_shaderCache.end()) {
-        return it->second;
-    }
-
-    // 必须有完整的路径才能加载
-    if (info.vertPath.empty() || info.fragPath.empty()) {
-        logError(m_logger, "[AssetService] Shader paths cannot be empty.");
+    if (!info.IsValid()) {
+        logError(m_logger, "[AssetService] ShaderCreateInfo invalid (empty SPIR-V). name="
+                           << info.debugName);
         return nullptr;
     }
 
+    const auto effectiveState = info.pipelineState.value_or(
+        rhi::GraphicsPipelineState::PresetOpaque());
+    const uint64_t stateHash = HashPipelineState(effectiveState);
+
+    // ★ std::format 取代字符串加号拼 + std::to_string
+    const std::string cacheKey = std::format("{}|{}|{}",
+        info.debugName, stateHash, info.pushConstantSize);
+
+    auto it = m_shaderCache.find(cacheKey);
+    if (it != m_shaderCache.end()) return it->second;
+
     auto shader = m_rhi->CreateShader(info);
-    if (shader) {
-        m_shaderCache[cacheKey] = shader;
-    } else {
-        logError(m_logger, "[AssetService] Failed to load shader: " << info.vertPath);
-    }
+    if (shader) m_shaderCache[cacheKey] = shader;
+    else        logError(m_logger, "[AssetService] Failed to load shader: " << info.debugName);
     return shader;
 }
 
-ShaderCreateInfo AssetService::MakeShaderCreateInfo(const std::string& name, 
-                                                    rhi::PipelineType pipelineType, 
-                                                    rhi::VertexLayout vertexLayout) {
-    bool isVulkan = (m_rhi && m_rhi->GetDeviceInfo().backend == "Vulkan");
-    std::string ext = isVulkan ? ".vk.spv" : ".gl.spv";
-    std::string base = "assets/shaders/build/" + name + "/";
+// ============================================================
+// ReadFile —— SDL_IOStream 读盘去重
+// ============================================================
+std::shared_ptr<const std::vector<std::byte>>
+AssetService::ReadFile(const std::string& path) {
+    if (auto it = m_fileReadCache.find(path); it != m_fileReadCache.end()) {
+        if (auto locked = it->second.lock()) return locked;
+    }
 
-    ShaderCreateInfo info;
-    info.vertPath = base + "vert" + ext;
-    info.fragPath = base + "frag" + ext;
-    info.pipelineType = pipelineType;
-    info.vertexLayout = vertexLayout;
+    SDL_IOStream* io = SDL_IOFromFile(path.c_str(), "rb");
+    if (!io) {
+        logError(m_logger, "[AssetService] ReadFile: SDL_IOFromFile failed: "
+                           << path << " - " << SDL_GetError());
+        m_fileReadCache.erase(path);
+        return nullptr;
+    }
+
+    const Sint64 size = SDL_GetIOSize(io);
+    if (size <= 0) {
+        logError(m_logger, "[AssetService] ReadFile: SDL_GetIOSize failed or empty: "
+                           << path << " - " << SDL_GetError());
+        SDL_CloseIO(io);
+        m_fileReadCache.erase(path);
+        return nullptr;
+    }
+
+    auto buf = std::make_shared<std::vector<std::byte>>(static_cast<size_t>(size));
+    size_t total = 0;
+    const size_t expected = static_cast<size_t>(size);
+    while (total < expected) {
+        const size_t got = SDL_ReadIO(io, buf->data() + total, expected - total);
+        if (got == 0) {
+            logError(m_logger, "[AssetService] ReadFile: short read at "
+                               << total << "/" << expected << " : " << path);
+            SDL_CloseIO(io);
+            m_fileReadCache.erase(path);
+            return nullptr;
+        }
+        total += got;
+    }
+    SDL_CloseIO(io);
+
+    std::shared_ptr<const std::vector<std::byte>> frozen = buf;
+    m_fileReadCache[path] = frozen;
+    return frozen;
+}
+
+// ============================================================
+// MakeShaderCreateInfo
+// ============================================================
+rhi::ShaderCreateInfo AssetService::MakeShaderCreateInfo(
+    const std::string& name,
+    rhi::GraphicsPipelineState pipelineState,
+    rhi::VertexLayout vertexLayout,
+    uint32_t          pushConstantSize) {
+
+    const bool isVulkan = (m_rhi && m_rhi->GetDeviceInfo().backend == "Vulkan");
+    const std::string ext  = isVulkan ? ".vk.spv" : ".gl.spv";
+    const std::string base = "assets/shaders/build/" + name + "/";
+
+    rhi::ShaderCreateInfo info;
+    info.debugName        = name;
+    info.vertexLayout     = vertexLayout;
+    info.pipelineState    = pipelineState;
+    info.pushConstantSize = pushConstantSize;
+
+    if (auto v = ReadFile(base + "vert" + ext)) {
+        info.vertSpirv = rhi::ShaderBytecode(std::move(v));
+    } else {
+        logError(m_logger, "[AssetService] MakeShaderCreateInfo: missing vert SPIR-V for '"
+                           << name << "'");
+    }
+    if (auto fr = ReadFile(base + "frag" + ext)) {
+        info.fragSpirv = rhi::ShaderBytecode(std::move(fr));
+    } else {
+        logError(m_logger, "[AssetService] MakeShaderCreateInfo: missing frag SPIR-V for '"
+                           << name << "'");
+    }
+
     return info;
 }
 
-Model AssetService::LoadModel(const std::string& path, bool flipUV) {
-    if (!m_rhi) {
-        logError(m_logger, "[AssetService] RHI is null, cannot load model.");
-        return Model{};
-    }
-
-    std::string cacheKey = path + (flipUV ? "_flipped" : "");
-    auto it = m_modelCache.find(cacheKey);
-    if (it != m_modelCache.end()) {
-        return it->second;
-    }
-
-    Model result;
-    Assimp::Importer importer;
-    unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals |
-                         aiProcess_JoinIdenticalVertices | aiProcess_OptimizeMeshes;
-    if (flipUV) flags |= aiProcess_FlipUVs;
-
-    const aiScene* scene = importer.ReadFile(path, flags);
-    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
-        logError(m_logger, "[AssetService] Assimp error: " << importer.GetErrorString());
-        return result;
-    }
-
-    std::filesystem::path modelDir = std::filesystem::path(path).parent_path();
-    std::unordered_map<std::string, TexturePtr> localTexCache;
-
-    for (unsigned int m = 0; m < scene->mNumMeshes; ++m) {
-        aiMesh* mesh = scene->mMeshes[m];
-        std::vector<Vertex> vertices;
-        
-        for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
-            Vertex v;
-            v.position = glm::vec3(mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z);
-            v.normal = mesh->mNormals ? glm::vec3(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z) : glm::vec3(0, 1, 0);
-            v.uv = mesh->mTextureCoords[0] ? glm::vec2(mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y) : glm::vec2(0);
-            v.ao = 1.0f;
-            v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
-            vertices.push_back(v);
-        }
-        
-        std::vector<uint32_t> indices;
-        for (unsigned int f = 0; f < mesh->mNumFaces; ++f) {
-            for (unsigned int j = 0; j < mesh->mFaces[f].mNumIndices; ++j) {
-                indices.push_back(mesh->mFaces[f].mIndices[j]);
-            }
-        }
-
-        if (vertices.empty() || indices.empty()) continue;
-
-        MeshData md{ std::move(vertices), std::move(indices) };
-        MeshPtr meshPtr = m_rhi->CreateMesh(md);
-        if (!meshPtr) continue;
-
-        TexturePtr diffuseTex = nullptr;
-        if (mesh->mMaterialIndex < scene->mNumMaterials) {
-            aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
-            aiString texPath;
-            if (material->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS) {
-                std::string texKey = texPath.C_Str();
-                auto cacheIt = localTexCache.find(texKey);
-                
-                if (cacheIt != localTexCache.end()) {
-                    diffuseTex = cacheIt->second;
-                } else {
-                    const aiTexture* embedded = scene->GetEmbeddedTexture(texKey.c_str());
-                    if (embedded && embedded->mHeight > 0) {
-                        diffuseTex = m_rhi->CreateTexture(reinterpret_cast<const uint8_t*>(embedded->pcData), embedded->mWidth, embedded->mHeight);
-                    } else if (embedded) {
-                        SDL_IOStream* io = SDL_IOFromMem(const_cast<void*>(reinterpret_cast<const void*>(embedded->pcData)), embedded->mWidth);
-                        if (io) {
-                            SDL_Surface* surf = IMG_Load_IO(io, true);
-                            if (surf) {
-                                SDL_Surface* converted = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_RGBA32);
-                                if (converted) {
-                                    diffuseTex = m_rhi->CreateTexture(static_cast<const uint8_t*>(converted->pixels), converted->w, converted->h);
-                                    SDL_DestroySurface(converted);
-                                }
-                                SDL_DestroySurface(surf);
-                            }
-                        }
-                    } else {
-                        std::filesystem::path fullTexPath = modelDir / texKey;
-                        if (std::filesystem::exists(fullTexPath)) {
-                            diffuseTex = LoadTexture(fullTexPath.string());
-                        } else {
-                            logWarning(m_logger, "[AssetService] Texture not found: " << fullTexPath.string());
-                        }
-                    }
-                    localTexCache[texKey] = diffuseTex;
-                }
-            }
-        }
-        result.subMeshes.push_back({ meshPtr, diffuseTex });
-    }
-
-    m_modelCache[cacheKey] = result;
-    return result;
-}
-
-} // namespace Eng::client
+} // namespace Eng::service

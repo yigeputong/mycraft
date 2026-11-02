@@ -11,14 +11,8 @@ namespace game { class BlockRegistry; } // ★ 前向声明
 
 namespace game::client {
 
-// 用来做视锥剔除的视锥体结构
-struct Frustum {
-    glm::vec4 planes[6];
-};
-
 struct ClientChunk {
     std::shared_ptr<Chunk>      chunk;
-    Eng::service::MeshPtr        mesh;
     std::array<int16_t, 256>    heights{};
     std::array<BlockId, 256>    topBlock{};    // ★ 改为 BlockId，原 uint8_t 会截断
     glm::vec3                   aabbMin{0.0f};
@@ -32,8 +26,7 @@ public:
 
     void AddChunk(int cx, int cz, std::span<const BlockId> blocksData,
                   const std::array<uint8_t, CHUNK_VOLUME>& skyData,
-                  const std::array<LightRGB, CHUNK_VOLUME>& blockLightData,
-                  Eng::service::MeshPtr mesh = nullptr);
+                  const std::array<LightRGB, CHUNK_VOLUME>& blockLightData);
     void RebuildNeighbor(int cx, int cz);
 
     // ★ BlockType 全部换成 BlockId
@@ -46,9 +39,6 @@ public:
 
     void MarkDirty(uint64_t key);
     std::vector<uint64_t> FetchDirtyChunks(size_t maxCount);
-
-    void CollectVisibleMeshes(const Frustum& frustum,
-                              std::vector<Eng::service::MeshPtr>& outMeshes) const;
 
     size_t GetPendingSize() const { return m_pending.size(); }
 

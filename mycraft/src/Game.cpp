@@ -200,7 +200,7 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
 
 void MyGame::RecreateFBOs(int w, int h) {
     if (w <= 0 || h <= 0) return;
-    Eng::service::FramebufferCreateInfo info{
+    Eng::service::rhi::FramebufferCreateInfo info{
         .width = w, 
         .height = h, 
         .hasDepth = true, 
@@ -229,9 +229,6 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     logInfo(logger, "[RenderAPI] API version: " << m_deviceInfo.apiVersion);
     logInfo(logger, "[RenderAPI] Driver:      " << m_deviceInfo.driverVersion);
     logInfo(logger, "[RenderAPI] Shader lang: " << m_deviceInfo.shadingLanguage);
-
-    renderer->SetClearColor(0.125f, 0.125f, 0.125f, 0.0f);
-    renderer->InitPipelines();
 
     if (!renderer->InitImGuiBackend()) {
         logError(logger, "[Game] ImGui backend init failed");
@@ -305,7 +302,13 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     const auto& pixels = client::AtlasPixels();
     int atlasW = client::AtlasCols() * client::ATLAS_TILE;
     int atlasH = client::AtlasRows() * client::ATLAS_TILE;
-    m_atlasTexture = renderer->CreateTexture(pixels.data(), atlasW, atlasH);
+    Eng::service::rhi::TextureCreateInfo tci;
+    tci.pixels = std::as_bytes(std::span(pixels));
+    tci.width = atlasW;
+    tci.height = atlasH;
+    tci.format = Eng::service::rhi::TextureFormat::RGBA8_UNORM;
+    m_atlasTexture = renderer->CreateTexture(tci);
+
     if (!m_atlasTexture) {
         logError(logger, "[MyGame] Failed to create atlas texture");
         return false;
@@ -318,12 +321,20 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
         return false;
     }
 
+    // 创建 GlobalState UBO 并一次性绑定到 set 0 / binding 0
+    m_globalStateUBO = renderer->CreateBuffer({
+        .size  = sizeof(GlobalState),
+        .usage = Eng::service::rhi::BufferUsage::Uniform
+    });
+    if (!m_globalStateUBO) {
+        logError(logger, "[Game] Failed to create GlobalState UBO");
+        return false;
+    }
+    renderer->BindUniformBuffer(m_globalStateUBO, 0, 0);
+
     return true;
 }
 
-// ============================================================
-// Shader
-// ============================================================
 void MyGame::SetupShaders() {
     m_cubeShader = m_assetManager->LoadShader(
         m_assetManager->MakeShaderCreateInfo("mesh"));
@@ -333,24 +344,22 @@ void MyGame::SetupShaders() {
 
     m_skyShader = m_assetManager->LoadShader(
         m_assetManager->MakeShaderCreateInfo("sky",
-            Eng::service::rhi::PipelineType::Skybox,
+            Eng::service::rhi::GraphicsPipelineState::PresetSkybox(),
             Eng::service::rhi::VertexLayout::Skybox));
 
-    m_entityShader = m_assetManager->LoadShader([&]{
-        auto ci = m_assetManager->MakeShaderCreateInfo("entity");
-        ci.pipelineType   = Eng::service::rhi::PipelineType::Opaque;
-        ci.perObjectMode  = Eng::service::rhi::PerObjectMode::Default;
-        return ci;
-    }());
+    m_entityShader = m_assetManager->LoadShader(
+        m_assetManager->MakeShaderCreateInfo("entity",
+            Eng::service::rhi::GraphicsPipelineState::PresetOpaque(),
+            Eng::service::rhi::VertexLayout::Standard,
+            sizeof(Eng::service::rhi::PerObjectData)));
 
-    m_handShader = m_assetManager->LoadShader([&]{
-        auto ci = m_assetManager->MakeShaderCreateInfo("entity");
-        ci.pipelineType   = Eng::service::rhi::PipelineType::Hand;
-        ci.perObjectMode  = Eng::service::rhi::PerObjectMode::Default;
-        return ci;
-    }());
+    m_handShader = m_assetManager->LoadShader(
+        m_assetManager->MakeShaderCreateInfo("entity",
+            Eng::service::rhi::GraphicsPipelineState::PresetHand(),
+            Eng::service::rhi::VertexLayout::Standard,
+            sizeof(Eng::service::rhi::PerObjectData)));
 
-        if (!m_cubeShader || !m_skyShader || !m_lodShader || !m_entityShader || !m_handShader) {
+    if (!m_cubeShader || !m_skyShader || !m_lodShader || !m_entityShader || !m_handShader) {
         std::string err = "核心着色器加载失败！请检查 assets/shaders/build/ 目录下是否存在对应的 SPIR-V (.spv) 文件。";
         logFatal(logger, "[MyGame] " << err);
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Shader Load Error", err.c_str(), nullptr);
@@ -631,74 +640,78 @@ void MyGame::OnRender(Eng::Engine& engine) {
     if (m_state == GameState::Playing) {
         glm::vec3 eye = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
         view = glm::lookAt(eye, eye + cameraFront, cameraUp);
-        projection = glm::perspective(glm::radians(engine.GetConfig().render.fov),
-                                mainWin->GetAspectRatio(),
-                                engine.GetConfig().render.zNear,
-                                engine.GetConfig().render.zFar);
-        UpdateFrustum(projection * view);
+        projection = renderer->MakePerspectiveMatrix(
+            glm::radians(engine.GetConfig().render.fov),
+            mainWin->GetAspectRatio(),
+            engine.GetConfig().render.zNear,
+            engine.GetConfig().render.zFar);
     }
 
-    m_globalState.view        = view;
-    m_globalState.projection  = projection;
-    m_globalState.viewPos     = cameraPos;
-    m_globalState.aoStrength  = engine.GetConfig().render.m_aoStrength;
-    renderer->SetGlobalState(m_globalState);
+    m_globalState.view       = view;
+    m_globalState.projection = projection;
+    m_globalState.viewPos    = cameraPos;
+    m_globalState.aoStrength = engine.GetConfig().render.m_aoStrength;
 
-    if (m_state == GameState::Playing) {
-        renderer->SetClearColor(0.5f, 0.7f, 1.0f, 1.0f);
-    } else {
-        renderer->SetClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-    }
+    renderer->UpdateBuffer(
+        m_globalStateUBO, 0,
+        std::as_bytes(std::span<const GlobalState>(&m_globalState, 1)));
+
+    const glm::vec4 clearColor = (m_state == GameState::Playing)
+        ? glm::vec4(0.5f, 0.7f, 1.0f, 1.0f)
+        : glm::vec4(0.1f, 0.1f, 0.1f, 1.0f);
+    renderer->Clear(Eng::service::rhi::ClearFlag::All, clearColor);
 
     renderer->BeginFrame();
 
     if (m_state == GameState::Playing) {
+        // ★ 1. 统一在这一帧计算一次视锥体
+        glm::mat4 viewProj = projection * view;
+        Eng::client::Frustum frameFrustum;
+        frameFrustum.UpdatePlanes(viewProj);
+
         m_sceneRenderer->BeginScene();
 
-        // 1. LOD
-        Eng::service::Material lodMat; lodMat.diffuse = m_atlasTexture;
-        m_lodManager.CollectVisibleMeshes(m_frustum, m_visibleLodMeshes);
+        // 2. LOD（使用刚算好的 frameFrustum 剔除）
+        m_lodManager.CollectVisibleMeshes(frameFrustum, m_visibleLodMeshes);
         for (const auto& mesh : m_visibleLodMeshes) {
-            m_sceneRenderer->SubmitMesh(mesh, m_lodShader, lodMat);
+            m_sceneRenderer->SubmitMesh(mesh, m_lodShader, m_atlasTexture);
         }
 
-        // 2. 其他玩家
-        if (!m_playerMesh) m_playerMesh = BuildPlayerMesh();
-        Eng::service::Material playerMat; playerMat.diffuse = m_playerTexture;
+        // 3. 其他玩家
+        if (!m_playerMesh.vbo) m_playerMesh = BuildPlayerMesh();
         for (auto& [id, ps] : m_otherPlayers) {
             Eng::service::rhi::PerObjectData data;
             data.model = glm::translate(glm::mat4(1.0f), ps.position);
             data.model = glm::rotate(data.model, ps.yaw, glm::vec3(0, 1, 0));
-            m_sceneRenderer->SubmitMesh(m_playerMesh, m_entityShader, playerMat, data);
+            m_sceneRenderer->SubmitMesh(m_playerMesh, m_entityShader, m_playerTexture, data);
         }
 
-        // 3. 掉落物
+        // 4. 掉落物
         if (!m_itemEntities.empty()) {
             std::unordered_map<BlockId, std::vector<Eng::service::rhi::PerObjectData>> instances;
             for (const auto& [id, e] : m_itemEntities) {
                 Eng::service::rhi::PerObjectData data;
                 data.model = glm::translate(glm::mat4(1.0f), e.renderPos);
                 data.model = glm::rotate(data.model, m_animTime * 2.0f, glm::vec3(0, 1, 0));
-                data.model = glm::translate(data.model,
-                    glm::vec3(0.0f, std::sin(m_animTime * 3.0f + e.id * 0.5f) * 0.1f + 0.1f, 0.0f));
+                data.model = glm::translate(data.model, glm::vec3(0.0f, std::sin(m_animTime * 3.0f + e.id * 0.5f) * 0.1f + 0.1f, 0.0f));
                 data.model = glm::scale(data.model, glm::vec3(0.25f));
                 instances[e.itemType].push_back(data);
             }
 
-            Eng::service::Material itemMat; itemMat.diffuse = m_atlasTexture;
             for (const auto& [type, perObjects] : instances) {
-                auto mesh = GetOrCreateItemMesh(type);
-                if (mesh) {
-                    m_sceneRenderer->SubmitInstancedMesh(mesh, m_entityShader, itemMat, perObjects);
+                const auto& mesh = GetOrCreateItemMesh(type);
+                if (mesh.vbo) {
+                    m_sceneRenderer->SubmitInstancedMesh(mesh, m_entityShader, m_atlasTexture, perObjects);
                 }
             }
         }
 
-        // 4. 天空盒
-        m_sceneRenderer->SubmitSkybox(m_skyShader);
+        // 5. 天空盒
+        if (!m_skyboxMesh.vbo) m_skyboxMesh = BuildSkyboxMesh();
+        m_sceneRenderer->SubmitMesh(m_skyboxMesh, m_skyShader, m_atlasTexture);
 
-        // 5. 第一人称手部
-        if (!m_handMesh) m_handMesh = BuildHandMesh();
+        // 6. 第一人称手部
+        if (!m_handMesh.vbo) m_handMesh = BuildHandMesh();
 
         glm::vec3 basePos(0.5f, -0.5f, -1.0f);
         if (m_walkDist > 0.0f) {
@@ -720,25 +733,23 @@ void MyGame::OnRender(Eng::Engine& engine) {
         glm::mat4 handModel = glm::inverse(view) * handLocalModel;
 
         if (m_handShader) {
-            Eng::service::Material handMat; handMat.diffuse = m_playerTexture;
-            m_sceneRenderer->SubmitMesh(m_handMesh, m_handShader, handMat, { .model = handModel });
+            m_sceneRenderer->SubmitMesh(m_handMesh, m_handShader, m_playerTexture, { .model = handModel });
 
             auto& curSlot = m_hotbar[m_hotbarIndex];
             if (!curSlot.isEmpty()) {
-                auto itemMesh = GetOrCreateItemMesh(curSlot.type);
-                if (itemMesh) {
+                const auto& itemMesh = GetOrCreateItemMesh(curSlot.type);
+                if (itemMesh.vbo) {
                     glm::mat4 itemLocalModel = handLocalModel;
                     itemLocalModel = glm::translate(itemLocalModel, glm::vec3(0.0f, 0.2f, -0.5f));
                     itemLocalModel = glm::scale(itemLocalModel, glm::vec3(0.5f));
                     glm::mat4 itemModel = glm::inverse(view) * itemLocalModel;
-                    Eng::service::Material handItemMat; handItemMat.diffuse = m_atlasTexture;
-                    m_sceneRenderer->SubmitMesh(itemMesh, m_handShader, handItemMat, { .model = itemModel });
+                    m_sceneRenderer->SubmitMesh(itemMesh, m_handShader, m_atlasTexture, { .model = itemModel });
                 }
             }
         }
 
-        // ★ 核心：提交所有绘制，并传入地形所需的 Shader 和 贴图
-        m_sceneRenderer->EndScene(projection * view, cameraPos, m_cubeShader, m_atlasTexture);
+        // ★ 7. 把计算好的 frameFrustum 传给 EndScene
+        m_sceneRenderer->EndScene(frameFrustum, cameraPos, m_cubeShader, m_atlasTexture);
     }
 
     m_ui.Draw(engine, *this);
@@ -766,8 +777,9 @@ void MyGame::ExitGame() {
     m_otherPlayers.clear();
     
     // ==================== 4. 清理渲染动态资源 ====================
-    m_playerMesh.reset();
-    m_handMesh.reset();
+    m_playerMesh = {};
+    m_handMesh = {};
+    m_skyboxMesh = {};
     m_itemMeshCache.clear();
 
     if (m_sceneRenderer) {
@@ -793,6 +805,7 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
     ExitGame();
 
     // 只有引擎级别的清理留在这里
+    m_globalStateUBO.reset();
     m_mainFbo.reset();
     m_skyShader.reset();
     m_lodShader.reset();
@@ -1010,7 +1023,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             std::memcpy(blockLightData.data(), blockLightBytes.data(), CHUNK_VOLUME * sizeof(LightRGB));
 
             uint64_t key = ChunkKey(cx, cz);
-            m_world.AddChunk(cx, cz, blockSpan, skyData, blockLightData, nullptr);
+            m_world.AddChunk(cx, cz, blockSpan, skyData, blockLightData);
 
             m_world.MarkDirty(key);
             m_world.MarkDirty(ChunkKey(cx - 1, cz));
@@ -1096,21 +1109,30 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
 // ============================================================
 // Mesh 构建
 // ============================================================
-Eng::service::MeshPtr MyGame::GetOrCreateItemMesh(BlockId id) { // ★
+const Eng::client::RenderMesh& MyGame::GetOrCreateItemMesh(BlockId id) {
     auto it = m_itemMeshCache.find(id);
     if (it != m_itemMeshCache.end()) return it->second;
 
-    auto mesh = BuildItemCubeMesh(id);
-    m_itemMeshCache[id] = mesh;
+    auto res = m_itemMeshCache.emplace(id, BuildItemCubeMesh(id));
+    return res.first->second;
+}
+
+Eng::client::RenderMesh MyGame::BuildItemCubeMesh(BlockId id) {
+    game::client::RawMeshData data = client::MeshBuilderUtils::BuildItemMeshData(m_blockRegistry, id);
+    Eng::client::RenderMesh mesh;
+    if (!data.vertices.empty()) {
+        mesh.vbo = renderer->CreateBuffer({ .size = data.vertices.size() * sizeof(Eng::service::Vertex), .usage = Eng::service::rhi::BufferUsage::Vertex });
+        renderer->UpdateBuffer(mesh.vbo, 0, std::as_bytes(std::span(data.vertices)));
+        mesh.ibo = renderer->CreateBuffer({ .size = data.indices.size() * sizeof(uint32_t), .usage = Eng::service::rhi::BufferUsage::Index });
+        renderer->UpdateBuffer(mesh.ibo, 0, std::as_bytes(std::span(data.indices)));
+        mesh.indexCount = static_cast<uint32_t>(data.indices.size());
+        mesh.vertexCount = static_cast<uint32_t>(data.vertices.size());
+        mesh.indexed = true;
+    }
     return mesh;
 }
 
-Eng::service::MeshPtr MyGame::BuildItemCubeMesh(BlockId id) { // ★
-    Eng::service::MeshData data = client::MeshBuilderUtils::BuildItemMeshData(m_blockRegistry, id);
-    return renderer->CreateMesh(data);
-}
-
-Eng::service::MeshPtr MyGame::BuildPlayerMesh() {
+Eng::client::RenderMesh MyGame::BuildPlayerMesh() {
     std::vector<Eng::service::Vertex> vertices;
     std::vector<uint32_t> indices;
 
@@ -1126,23 +1148,60 @@ Eng::service::MeshPtr MyGame::BuildPlayerMesh() {
     AppendPlayerBox({-0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, rl_top, rl_bot, rl_right, rl_left, rl_front, rl_back, vertices, indices);
     AppendPlayerBox({ 0.125f, 0.4f, 0.0f}, {0.25f, 0.8f, 0.25f}, rl_top, rl_bot, rl_right, rl_left, rl_front, rl_back, vertices, indices);
 
-    Eng::service::MeshData data;
-    data.vertices = std::move(vertices);
-    data.indices  = std::move(indices);
-    return renderer->CreateMesh(data);
+    Eng::client::RenderMesh mesh;
+    mesh.vbo = renderer->CreateBuffer({ .size = vertices.size() * sizeof(Eng::service::Vertex), .usage = Eng::service::rhi::BufferUsage::Vertex });
+    renderer->UpdateBuffer(mesh.vbo, 0, std::as_bytes(std::span(vertices)));
+    mesh.ibo = renderer->CreateBuffer({ .size = indices.size() * sizeof(uint32_t), .usage = Eng::service::rhi::BufferUsage::Index });
+    renderer->UpdateBuffer(mesh.ibo, 0, std::as_bytes(std::span(indices)));
+    mesh.indexCount = static_cast<uint32_t>(indices.size());
+    mesh.vertexCount = static_cast<uint32_t>(vertices.size());
+    mesh.indexed = true;
+    return mesh;
 }
 
-Eng::service::MeshPtr MyGame::BuildHandMesh() {
+Eng::client::RenderMesh MyGame::BuildHandMesh() {
     std::vector<Eng::service::Vertex> vertices;
     std::vector<uint32_t> indices;
 
     glm::vec4 ra_top(44,16,4,4), ra_bot(48,16,4,4), ra_right(40,20,4,12), ra_left(48,20,4,12), ra_front(44,20,4,12), ra_back(52,20,4,12);
     AppendPlayerBox({0.0f, 0.0f, 0.0f}, {0.25f, 0.25f, 0.6f}, ra_top, ra_bot, ra_right, ra_left, ra_front, ra_back, vertices, indices);
 
-    Eng::service::MeshData data;
-    data.vertices = std::move(vertices);
-    data.indices  = std::move(indices);
-    return renderer->CreateMesh(data);
+    Eng::client::RenderMesh mesh;
+    mesh.vbo = renderer->CreateBuffer({ .size = vertices.size() * sizeof(Eng::service::Vertex), .usage = Eng::service::rhi::BufferUsage::Vertex });
+    renderer->UpdateBuffer(mesh.vbo, 0, std::as_bytes(std::span(vertices)));
+    mesh.ibo = renderer->CreateBuffer({ .size = indices.size() * sizeof(uint32_t), .usage = Eng::service::rhi::BufferUsage::Index });
+    renderer->UpdateBuffer(mesh.ibo, 0, std::as_bytes(std::span(indices)));
+    mesh.indexCount = static_cast<uint32_t>(indices.size());
+    mesh.vertexCount = static_cast<uint32_t>(vertices.size());
+    mesh.indexed = true;
+    return mesh;
+}
+
+Eng::client::RenderMesh MyGame::BuildSkyboxMesh() {
+    const float s = 1.0f;
+    float verts[] = {
+         s,-s,-s,  s,-s, s,  s, s, s,   s, s, s,  s, s,-s,  s,-s,-s,
+        -s,-s, s, -s,-s,-s, -s, s,-s,  -s, s,-s, -s, s, s, -s,-s, s,
+        -s, s,-s,  s, s,-s,  s, s, s,   s, s, s, -s, s, s, -s, s,-s,
+        -s,-s, s,  s,-s, s,  s,-s,-s,   s,-s,-s, -s,-s,-s, -s,-s, s,
+        -s,-s, s,  s,-s, s,  s, s, s,   s, s, s, -s, s, s, -s,-s, s,
+         s,-s,-s, -s,-s,-s, -s, s,-s,  -s, s,-s,  s, s,-s,  s,-s,-s,
+    };
+    std::vector<Eng::service::Vertex> v(36);
+    for (size_t i = 0; i < 36; ++i) {
+        v[i].position = { verts[i*3], verts[i*3+1], verts[i*3+2] };
+        v[i].normal   = { 0, 0, 0 };
+        v[i].uv       = { 0, 0 };
+        v[i].ao       = 1.0f;
+        v[i].light    = glm::vec4(1.0f);
+    }
+
+    Eng::client::RenderMesh mesh;
+    mesh.vbo = renderer->CreateBuffer({ .size = v.size() * sizeof(Eng::service::Vertex), .usage = Eng::service::rhi::BufferUsage::Vertex });
+    renderer->UpdateBuffer(mesh.vbo, 0, std::as_bytes(std::span(v)));
+    mesh.vertexCount = static_cast<uint32_t>(v.size());
+    mesh.indexed = false;
+    return mesh;
 }
 
 // ============================================================
@@ -1195,6 +1254,28 @@ void MyGame::AddToInventory(BlockId id, int count) { // ★
 // ============================================================
 // Mesh 结果汇聚
 // ============================================================
+void MyGame::QueueChunkMeshTask(uint64_t key) {
+    auto* pC = m_world.GetChunk(key);
+    if (!pC || !pC->chunk) return;
+
+    int cx = pC->chunk->chunk_x;
+    int cz = pC->chunk->chunk_z;
+
+    auto* cXm = m_world.GetChunk(ChunkKey(cx - 1, cz));
+    auto* cXp = m_world.GetChunk(ChunkKey(cx + 1, cz));
+    auto* cZm = m_world.GetChunk(ChunkKey(cx, cz - 1));
+    auto* cZp = m_world.GetChunk(ChunkKey(cx, cz + 1));
+
+    // 邻居不存在就传 nullptr
+    m_meshManager.Submit(
+        key, pC->chunk,
+        cXm ? cXm->chunk : nullptr,
+        cXp ? cXp->chunk : nullptr,
+        cZm ? cZm->chunk : nullptr,
+        cZp ? cZp->chunk : nullptr
+    );
+}
+
 void MyGame::DrainMeshResults() {
     if (!m_sceneRenderer) return;
 
@@ -1235,48 +1316,6 @@ void MyGame::DrainMeshResults() {
             m_sceneRenderer->RemoveWaterChunk(r.chunkKey);
         }
     });
-}
-
-void MyGame::QueueChunkMeshTask(uint64_t key) {
-    auto* pC = m_world.GetChunk(key);
-    if (!pC || !pC->chunk) return;
-
-    int cx = pC->chunk->chunk_x;
-    int cz = pC->chunk->chunk_z;
-
-    auto* cXm = m_world.GetChunk(ChunkKey(cx - 1, cz));
-    auto* cXp = m_world.GetChunk(ChunkKey(cx + 1, cz));
-    auto* cZm = m_world.GetChunk(ChunkKey(cx, cz - 1));
-    auto* cZp = m_world.GetChunk(ChunkKey(cx, cz + 1));
-
-    // 邻居不存在就传 nullptr
-    m_meshManager.Submit(
-        key, pC->chunk,
-        cXm ? cXm->chunk : nullptr,
-        cXp ? cXp->chunk : nullptr,
-        cZm ? cZm->chunk : nullptr,
-        cZp ? cZp->chunk : nullptr
-    );
-}
-
-// ============================================================
-// 视锥
-// ============================================================
-void MyGame::UpdateFrustum(const glm::mat4& vp) {
-    auto row = [&](int r) { return glm::vec4(vp[0][r], vp[1][r], vp[2][r], vp[3][r]); };
-    glm::vec4 r0=row(0), r1=row(1), r2=row(2), r3=row(3);
-
-    m_frustum.planes[0] = r3 + r0;
-    m_frustum.planes[1] = r3 - r0;
-    m_frustum.planes[2] = r3 + r1;
-    m_frustum.planes[3] = r3 - r1;
-    m_frustum.planes[4] = r3 + r2;
-    m_frustum.planes[5] = r3 - r2;
-
-    for (auto& p : m_frustum.planes) {
-        float len = glm::length(glm::vec3(p));
-        if (len > 0.0f) p /= len;
-    }
 }
 
 } // namespace game

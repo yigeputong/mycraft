@@ -19,6 +19,19 @@
 
 namespace game {
 
+struct GlobalState {
+    glm::mat4 view           = glm::mat4(1.0f);
+    glm::mat4 projection     = glm::mat4(1.0f);
+    glm::vec3 viewPos        = glm::vec3(0.0f);
+    float     aoStrength     = 1.0f;
+    glm::vec3 lightDir       = glm::vec3(0.5f, -1.0f, 0.3f);
+    float     lightIntensity = 1.0f;
+    glm::vec3 lightColor     = glm::vec3(1.0f);
+    float     timeOfDay      = 8.0f;
+    glm::vec3 lightAmbient   = glm::vec3(0.3f);
+    float     _pad2          = 0.0f;
+};
+
 class MyGame : public Eng::IGame {
 public:
     void OnStart(Eng::Engine& engine) override;
@@ -74,6 +87,7 @@ private:
     Eng::service::TexturePtr     m_playerTexture;
     Eng::service::TexturePtr     m_atlasTexture;
     Eng::service::FramebufferPtr m_mainFbo;
+    Eng::service::BufferPtr      m_globalStateUBO;
 
     // ================================================================
     // 4. 会话资源 (每次进游戏创建，退游戏销毁)
@@ -92,10 +106,10 @@ private:
     client::MeshManager                          m_meshManager;
     client::LodManager                           m_lodManager;
     std::unordered_set<uint64_t>                 m_knownSceneChunks;
-    std::vector<Eng::service::MeshPtr>           m_visibleLodMeshes;
+    std::vector<Eng::client::RenderMesh>           m_visibleLodMeshes;
 
     // --- 4.3 渲染大脑 ---
-    std::unique_ptr<Eng::client::SceneRenderer> m_sceneRenderer;
+    std::unique_ptr<Eng::client::SceneRenderer>  m_sceneRenderer;
 
     // ================================================================
     // 5. 玩家状态与物理 (每次进游戏必须彻底重置)
@@ -108,7 +122,6 @@ private:
     float pitch =  0.0f;
     glm::mat4 view       = glm::mat4(1.0f);
     glm::mat4 projection = glm::mat4(1.0f);
-    game::client::Frustum m_frustum;
 
     // 物理与移动
     glm::vec3 m_positionError{0.0f};
@@ -153,9 +166,10 @@ private:
     };
     
     std::unordered_map<uint32_t, ClientItemEntity> m_itemEntities;
-    std::unordered_map<BlockId, Eng::service::MeshPtr> m_itemMeshCache;
-    Eng::service::MeshPtr m_playerMesh;
-    Eng::service::MeshPtr m_handMesh;
+    std::unordered_map<BlockId, Eng::client::RenderMesh> m_itemMeshCache;
+    Eng::client::RenderMesh m_playerMesh;
+    Eng::client::RenderMesh m_handMesh;
+    Eng::client::RenderMesh m_skyboxMesh;
 
     // 物品栏与背包
     static constexpr int kHotbarSize = 4;
@@ -167,7 +181,7 @@ private:
     // ================================================================
     // 7. UI 与调试统计面板
     // ================================================================
-    Eng::service::GlobalState m_globalState;
+    GlobalState m_globalState;
     float m_uiScale = 1.0f;
 
     // FPS 与耗时统计
@@ -214,13 +228,13 @@ private:
     // ================================================================
     // 10. 渲染与 Mesh 构建辅助函数
     // ================================================================
-    Eng::service::MeshPtr BuildPlayerMesh();
-    Eng::service::MeshPtr BuildHandMesh();
-    Eng::service::MeshPtr GetOrCreateItemMesh(BlockId id);
-    Eng::service::MeshPtr BuildItemCubeMesh(BlockId id);
+    Eng::client::RenderMesh BuildPlayerMesh();
+    Eng::client::RenderMesh BuildHandMesh();
+    Eng::client::RenderMesh BuildSkyboxMesh(); 
+    const Eng::client::RenderMesh& GetOrCreateItemMesh(BlockId id);
+    Eng::client::RenderMesh BuildItemCubeMesh(BlockId id);
     void QueueChunkMeshTask(uint64_t key);
     void DrainMeshResults();
-    void UpdateFrustum(const glm::mat4& vp);
 
     // ================================================================
     // 11. 游戏逻辑与世界查询辅助函数

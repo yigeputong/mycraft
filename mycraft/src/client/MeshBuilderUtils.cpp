@@ -179,10 +179,10 @@ void MeshBuilderUtils::AppendTorch(
     addFace({c.x-hw, c.y+hh, c.z-hd}, {c.x+hw, c.y+hh, c.z-hd}, {c.x+hw, c.y+hh, c.z+hd}, {c.x-hw, c.y+hh, c.z+hd}, {0,1,0}, su_min, su_max, tv_min, tv_max);
 }
 
-Eng::service::MeshData MeshBuilderUtils::BuildItemMeshData(
+game::client::RawMeshData MeshBuilderUtils::BuildItemMeshData(
     const BlockRegistry& reg, BlockId id)
 {
-    Eng::service::MeshData data;
+    game::client::RawMeshData data;
     const auto& def = reg.Get(id);
 
     if (def.render.isCross) {

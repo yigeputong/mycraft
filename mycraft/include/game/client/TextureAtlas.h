@@ -8,7 +8,7 @@ namespace game::client {
 
     constexpr int ATLAS_REAL_SIZE = 16;  // 原始图片的尺寸
     constexpr int ATLAS_PADDING   = 1;   // 边缘外扩的像素数
-    constexpr int ATLAS_TILE      = ATLAS_REAL_SIZE + ATLAS_PADDING * 2; // 实际占用的格子大小（18）
+    [[maybe_unused]] constexpr int ATLAS_TILE = ATLAS_REAL_SIZE + ATLAS_PADDING * 2; // 实际占用的格子大小（18）
 
     // 提供统一的 UV 计算接口，外部代码不要自己手算 UV 了！
     void GetTileUV(int tileIndex, float& u0, float& v0, float& u1, float& v1);

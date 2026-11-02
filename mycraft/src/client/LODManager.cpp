@@ -157,72 +157,72 @@ void LodManager::Update(const glm::vec3& cameraPos, [[maybe_unused]] const Clien
 }
 
 void LodManager::DrainResults(Eng::service::IRenderService* renderer) {
-    constexpr int K = 1; // 每帧只建 1 个
-    int done = 0;
-    for (;;) {
-        LodResult result;
-        {
-            std::lock_guard lk(m_resultMutex);
-            if (m_resultQueue.empty() || done >= K) break;
-            result = std::move(m_resultQueue.front());
-            m_resultQueue.pop();
-        }
-
-        done++; // 必须放前面，防死循环
+    std::lock_guard<std::mutex> lock(m_resultMutex);
+    while (!m_resultQueue.empty()) {
+        auto result = std::move(m_resultQueue.front());
+        m_resultQueue.pop();
 
         LodKey key{ static_cast<int8_t>(result.level), result.unitX, result.unitZ };
+        
+        // ★ 纯 Buffer 组装 RenderMesh
+        Eng::client::RenderMesh mesh;
+        if (!result.vertices.empty() && !result.indices.empty()) {
+            mesh.vbo = renderer->CreateBuffer({ 
+                .size = result.vertices.size() * sizeof(Eng::service::Vertex), 
+                .usage = Eng::service::rhi::BufferUsage::Vertex 
+            });
+            renderer->UpdateBuffer(mesh.vbo, 0, std::as_bytes(std::span(result.vertices)));
+            
+            mesh.ibo = renderer->CreateBuffer({ 
+                .size = result.indices.size() * sizeof(uint32_t), 
+                .usage = Eng::service::rhi::BufferUsage::Index 
+            });
+            renderer->UpdateBuffer(mesh.ibo, 0, std::as_bytes(std::span(result.indices)));
+            
+            mesh.indexCount  = static_cast<uint32_t>(result.indices.size());
+            mesh.vertexCount = static_cast<uint32_t>(result.vertices.size());
+            mesh.indexed     = true;
+        }
+
+        m_units[key] = LodUnit{
+            .level = result.level,
+            .unitX = result.unitX,
+            .unitZ = result.unitZ,
+            .mesh = std::move(mesh),
+            .aabbMin = result.aabbMin,
+            .aabbMax = result.aabbMax
+        };
+        
         m_pending.erase(key);
-
-        if (!m_wanted.count(key)) continue;
-        if (result.vertices.empty()) continue;
-
-        Eng::service::MeshData data;
-        data.vertices = std::move(result.vertices);
-        data.indices  = std::move(result.indices);
-        auto mesh = renderer->CreateMesh(data);
-
-        LodUnit unit;
-        unit.level   = result.level;
-        unit.unitX   = result.unitX;
-        unit.unitZ   = result.unitZ;
-        unit.mesh    = std::move(mesh);
-        unit.aabbMin = result.aabbMin;
-        unit.aabbMax = result.aabbMax;
-        m_units[key] = std::move(unit);
     }
 }
 
-void LodManager::CollectVisibleMeshes(const Frustum& frustum, std::vector<Eng::service::MeshPtr>& outMeshes) const {
+void LodManager::CollectVisibleMeshes(const Eng::client::Frustum& frustum, std::vector<Eng::client::RenderMesh>& outMeshes) const {
     outMeshes.clear();
-    outMeshes.reserve(m_units.size());
     for (const auto& [key, unit] : m_units) {
-        if (!unit.mesh) continue;
-
-        bool visible = true;
-        for (const auto& p : frustum.planes) {
-            glm::vec3 n = glm::vec3(p);
-            float d = p.w;
-            glm::vec3 v(n.x >= 0 ? unit.aabbMax.x : unit.aabbMin.x,
-                        n.y >= 0 ? unit.aabbMax.y : unit.aabbMin.y,
-                        n.z >= 0 ? unit.aabbMax.z : unit.aabbMin.z);
-            if (glm::dot(n, v) + d < 0.0f) { visible = false; break; }
+        if (unit.mesh.vbo && frustum.TestAABB(unit.aabbMin, unit.aabbMax)) {
+            outMeshes.push_back(unit.mesh);
         }
-        if (visible) outMeshes.push_back(unit.mesh);
     }
 }
 
 void LodManager::Clear() {
+    Stop();
+    std::lock_guard<std::mutex> lock1(m_taskMutex);
+    std::queue<LodTask> emptyTasks; std::swap(m_taskQueue, emptyTasks);
+    
+    std::lock_guard<std::mutex> lock2(m_resultMutex);
+    std::queue<LodResult> emptyResults; std::swap(m_resultQueue, emptyResults);
+
     m_units.clear();
     m_pending.clear();
-    {
-        std::lock_guard lk(m_resultMutex);
-        while (!m_resultQueue.empty()) m_resultQueue.pop();
-    }
+    m_wanted.clear();
     m_needQueue.clear();
     m_needCursor = 0;
+    
+    m_lastRenderDistance = -1;
     m_lastPlayerChunkX = INT_MIN;
     m_lastPlayerChunkZ = INT_MIN;
-    m_terrain.reset();
 }
 
 void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,

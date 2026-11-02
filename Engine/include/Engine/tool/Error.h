@@ -4,7 +4,7 @@
 
 namespace Eng::tool {
 
-enum class ErrorCode : uint16_t {
+enum class ErrorCode : uint8_t {
     // 文件 / IO
     FileNotFound,
     FileReadFailed,
@@ -13,7 +13,6 @@ enum class ErrorCode : uint16_t {
     ShaderLinkFailed,
     // 纹理 / 模型
     TextureLoadFailed,
-    ModelLoadFailed,
     // Vulkan / GL
     ApiInitFailed,
     // 通用
