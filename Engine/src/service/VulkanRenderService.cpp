@@ -137,6 +137,8 @@ void VulkanRenderService::Shutdown() {
         logError(m_logger, "[Vulkan] waitIdle failed: " << e.what());
     }
 
+    m_deferDeleter.Flush();
+
     m_defaultTexturePtr.reset();
     m_pendingFramebuffer.reset();
 
@@ -954,11 +956,14 @@ void VulkanRenderService::DestroyFramebufferInternal(FramebufferHandle h) {
 void VulkanRenderService::DestroyBufferInternal(BufferHandle h) {
     auto it = m_buffers.find(h);
     if (it == m_buffers.end()) return;
-    if (it->second.descriptorSet != nullptr && it->second.buffer != VK_NULL_HANDLE) {
-        m_device.waitIdle();
-    }
+
     if (it->second.buffer != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(m_allocator, it->second.buffer, it->second.alloc);
+        VkBuffer buf = it->second.buffer;
+        VmaAllocation alloc = it->second.alloc;
+        // 交给通用延迟销毁器，延迟 MAX_FRAMES_IN_FLIGHT 帧
+        m_deferDeleter.Defer([this, buf, alloc]() {
+            vmaDestroyBuffer(m_allocator, buf, alloc);
+        }, m_frameCounter, MAX_FRAMES_IN_FLIGHT);
     }
     m_buffers.erase(it);
 }
@@ -1122,6 +1127,7 @@ void VulkanRenderService::BeginFrame() {
     cmd.reset();
     cmd.begin({ .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
     m_frameCounter++;
+    m_deferDeleter.Process(m_frameCounter);
 
     vk::Image targetImage = m_pendingFramebuffer ? vk::Image(m_framebuffers[m_pendingFramebuffer->GetHandle()].colorImage) : m_swapChainImages[m_imageIndex];
     vk::ImageLayout layout = vk::ImageLayout::eColorAttachmentOptimal;

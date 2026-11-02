@@ -748,8 +748,8 @@ void MyGame::OnRender(Eng::Engine& engine) {
             }
         }
 
-        // ★ 7. 把计算好的 frameFrustum 传给 EndScene
-        m_sceneRenderer->EndScene(frameFrustum, cameraPos, m_cubeShader, m_atlasTexture);
+        // 7. 把计算好的 frameFrustum 传给 EndScene
+        m_sceneRenderer->EndScene(frameFrustum, m_cubeShader, m_atlasTexture);
     }
 
     m_ui.Draw(engine, *this);

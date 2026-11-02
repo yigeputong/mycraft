@@ -22,6 +22,7 @@
 #include "Engine/service/IRenderService.h"
 #include "Engine/tool/Configs.h"
 #include "Engine/tool/Log.h"
+#include "Engine/tool/DeferredDeleter.h"
 
 namespace Eng::service {
 
@@ -223,6 +224,8 @@ private:
     // 无状态绘制状态缓存
     vk::raii::PipelineLayout* m_currentLayout = nullptr;
     vk::DescriptorSet         m_boundGlobalUBO = nullptr;
+
+    Eng::tool::DeferredDeleter m_deferDeleter;
 
     // =========================================================================
     // 初始化

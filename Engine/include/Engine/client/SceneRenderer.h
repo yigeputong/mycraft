@@ -89,8 +89,8 @@ public:
     void SubmitWaterChunk(uint64_t chunkKey, std::vector<service::Vertex>&& vertices, std::vector<uint32_t>&& indices, const glm::vec3& aabbMin, const glm::vec3& aabbMax);
     void RemoveWaterChunk(uint64_t chunkKey);
 
-    // ★ 接收统一的 Frustum 进行剔除
-    void EndScene(const Frustum& frustum, const glm::vec3& cameraPos,
+    // 接收统一的 Frustum 进行剔除
+    void EndScene(const Frustum& frustum,
                   const service::ShaderPtr& terrainShader, const service::TexturePtr& atlasTexture);
 
     void Clear();

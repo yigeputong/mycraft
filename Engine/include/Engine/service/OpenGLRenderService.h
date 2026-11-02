@@ -3,6 +3,8 @@
 #include "Engine/service/IRenderService.h"
 #include "Engine/tool/Configs.h"
 #include "Engine/tool/Log.h"
+#include "Engine/tool/DeferredDeleter.h"
+
 #include <glad/glad.h>
 #include <SDL3/SDL.h>
 #include <memory>
@@ -114,6 +116,9 @@ private:
     std::unordered_map<FramebufferHandle, FramebufferInternal> m_framebuffers;
     std::unordered_map<FramebufferHandle, TextureHandle>       m_fbColorHandles;
     std::unordered_map<BufferHandle,      BufferDataInternal>  m_buffers;
+
+    uint64_t m_frameCounter = 0;
+    Eng::tool::DeferredDeleter m_deferDeleter;
 
     GLuint m_drawVAO  = 0;
     bool   m_vaoDirty = false;

@@ -118,6 +118,8 @@ void OpenGLRenderService::Initialize(int width, int height, tool::Window* window
 void OpenGLRenderService::Shutdown() {
     if (!m_initialized) return;
 
+    m_deferDeleter.Flush(); // 强制清空残留队列
+
     if (m_drawVAO) glDeleteVertexArrays(1, &m_drawVAO);
 
     for (auto& [handle, tex] : m_textures) {
@@ -178,11 +180,18 @@ void OpenGLRenderService::BeginFrame() {
         SDL_GetWindowSizeInPixels(m_window->GetSDLWindow(), &w, &h);
         glViewport(0, 0, w, h);
     }
+
+    m_frameCounter++;
+    m_deferDeleter.Process(m_frameCounter); // 处理队列
 }
 
 void OpenGLRenderService::EndFrame() {
     ImGui::Render();
     ImGuiRenderDrawData();
+
+    glDepthMask(GL_TRUE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
     SDL_GL_SwapWindow(m_window->GetSDLWindow());
 }
 
@@ -517,7 +526,13 @@ void OpenGLRenderService::DestroyFramebufferInternal(FramebufferHandle h) {
 void OpenGLRenderService::DestroyBufferInternal(BufferHandle h) {
     auto it = m_buffers.find(h);
     if (it != m_buffers.end()) {
-        if (it->second.buffer) glDeleteBuffers(1, &it->second.buffer);
+        if (it->second.buffer) {
+            GLuint buf = it->second.buffer;
+            // 交给通用延迟销毁器，延迟 2 帧
+            m_deferDeleter.Defer([buf]() {
+                glDeleteBuffers(1, &buf);
+            }, m_frameCounter, 2);
+        }
         m_buffers.erase(it);
     }
 }

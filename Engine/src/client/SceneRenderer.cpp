@@ -258,9 +258,14 @@ void SceneRenderer::RemoveWaterChunk(uint64_t chunkKey) {
     m_waterChunks.erase(chunkKey);
 }
 
-void SceneRenderer::EndScene(const Frustum& frustum, const glm::vec3& cameraPos,
+// ★ 提取公共的绘制逻辑，消除代码重复
+static void DrawRenderMesh(service::IRenderService* rhi, const RenderMesh& mesh) {
+    if (mesh.indexed) rhi->DrawIndexed(mesh.indexCount);
+    else              rhi->Draw(mesh.vertexCount);
+}
+
+void SceneRenderer::EndScene(const Frustum& frustum, 
                              const service::ShaderPtr& terrainShader, const service::TexturePtr& atlasTexture) {
-    (void)cameraPos;
     if (!m_rhi) return;
 
     ProcessPendingRebuild();
@@ -278,7 +283,6 @@ void SceneRenderer::EndScene(const Frustum& frustum, const glm::vec3& cameraPos,
             auto chunkIt = m_allChunks.find(key);
             if (chunkIt == m_allChunks.end()) continue;
 
-            // ★ 统一视锥剔除
             if (!frustum.TestAABB(chunkIt->second.aabbMin, chunkIt->second.aabbMax)) continue;
 
             m_indirectCommands.push_back({
@@ -326,14 +330,12 @@ void SceneRenderer::EndScene(const Frustum& frustum, const glm::vec3& cameraPos,
 
         if (cmd.type == DrawCommand::Type::Mesh) {
             m_rhi->PushConstants(cmd.shader, std::as_bytes(std::span(&cmd.data, 1)));
-            if (cmd.mesh.indexed) m_rhi->DrawIndexed(cmd.mesh.indexCount);
-            else                  m_rhi->Draw(cmd.mesh.vertexCount);
+            DrawRenderMesh(m_rhi, cmd.mesh); // ★ 调用提取的公共绘制
         } 
         else if (cmd.type == DrawCommand::Type::InstancedMesh) {
             for (const auto& data : cmd.instances) {
                 m_rhi->PushConstants(cmd.shader, std::as_bytes(std::span(&data, 1)));
-                if (cmd.mesh.indexed) m_rhi->DrawIndexed(cmd.mesh.indexCount);
-                else                  m_rhi->Draw(cmd.mesh.vertexCount);
+                DrawRenderMesh(m_rhi, cmd.mesh); // ★ 调用提取的公共绘制
             }
         }
     }
@@ -345,13 +347,11 @@ void SceneRenderer::EndScene(const Frustum& frustum, const glm::vec3& cameraPos,
         m_rhi->BindShader(m_waterShader);
         m_rhi->BindTexture(atlasTexture, 0);
         for (const auto& [key, wc] : m_waterChunks) {
-            // ★ 统一视锥剔除
             if (!frustum.TestAABB(wc.aabbMin, wc.aabbMax)) continue;
             
             m_rhi->BindVertexBuffer(wc.mesh.vbo);
             if (wc.mesh.indexed) m_rhi->BindIndexBuffer(wc.mesh.ibo);
-            if (wc.mesh.indexed) m_rhi->DrawIndexed(wc.mesh.indexCount);
-            else                  m_rhi->Draw(wc.mesh.vertexCount);
+            DrawRenderMesh(m_rhi, wc.mesh); // ★ 调用提取的公共绘制
         }
     }
 }
