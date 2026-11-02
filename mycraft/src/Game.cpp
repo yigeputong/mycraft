@@ -873,15 +873,6 @@ bool MyGame::GetInput(float dt) {
     m_placeCooldown = std::max(0.0f, m_placeCooldown - dt);
     m_digCooldown   = std::max(0.0f, m_digCooldown   - dt);
 
-    bool wantDig   = Input::IsKeyDown(KeyCode::MouseLeft);
-    bool wantPlace = Input::IsKeyDown(KeyCode::MouseRight);
-
-    input.dig   = (wantDig   && m_digCooldown   <= 0.0f);
-    input.place = (wantPlace && m_placeCooldown <= 0.0f);
-
-    if (input.dig)   m_digCooldown   = kDigInterval;
-    if (input.place) m_placeCooldown = kPlaceInterval;
-
     float scroll = Input::GetScrollDelta();
     if (scroll > 0) m_hotbarIndex = (m_hotbarIndex - 1 + kHotbarSize) % kHotbarSize;
     if (scroll < 0) m_hotbarIndex = (m_hotbarIndex + 1) % kHotbarSize;
@@ -893,6 +884,27 @@ bool MyGame::GetInput(float dt) {
 
     if (m_hotbarIndex < 0 || m_hotbarIndex >= kHotbarSize) m_hotbarIndex = 0;
 
+    // —— 拾取/挖掘/放置 ——
+    bool wantDig   = Input::IsKeyDown(KeyCode::MouseLeft);
+    bool wantPlace = Input::IsKeyDown(KeyCode::MouseRight);
+
+    // ★ 1. 本地射线检测（距离 5 格）
+    glm::vec3 eyePos = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
+    m_currentRayHit = game::RayCast(
+        m_blockRegistry, 
+        eyePos, 
+        cameraFront, 
+        5.0f, 
+        [this](int wx, int wy, int wz) { return this->GetBlockAt(wx, wy, wz); }
+    );
+
+    input.dig   = (wantDig   && m_digCooldown   <= 0.0f);
+    input.place = (wantPlace && m_placeCooldown <= 0.0f);
+
+    if (input.dig)   m_digCooldown   = kDigInterval;
+    if (input.place) m_placeCooldown = kPlaceInterval;
+
+    // 原有逻辑：扣除物品和设置 input.placeBlock
     auto& curSlot = m_hotbar[m_hotbarIndex];
     if (curSlot.isEmpty()) {
         input.placeBlock = AIR_ID;

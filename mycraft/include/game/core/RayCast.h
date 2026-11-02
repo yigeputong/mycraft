@@ -48,7 +48,12 @@ RayHit RayCast(const BlockRegistry& reg, glm::vec3 origin, glm::vec3 dir, float 
         BlockId b = getBlock(x, y, z);
         if (b != AIR_ID && !reg.Get(b).render.isLiquid) { 
             // 命中
-            return {true, x, y, z, nx, ny, nz};
+            return { 
+                .hit = true, 
+                .bx = x, .by = y, .bz = z, 
+                .nx = nx, .ny = ny, .nz = nz, 
+                .dist = t
+            };
         }
 
         if (tMaxX < tMaxY && tMaxX < tMaxZ) {

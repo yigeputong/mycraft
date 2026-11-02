@@ -452,6 +452,21 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
     dl->AddLine(ImVec2(center.x, center.y - GAP - LEN), ImVec2(center.x, center.y - GAP), color, THICK);
     dl->AddLine(ImVec2(center.x, center.y + GAP), ImVec2(center.x, center.y + GAP + LEN), color, THICK);
 
+    if (game.m_currentRayHit.hit) {
+        BlockId targetId = game.GetBlockAt(game.m_currentRayHit.bx, game.m_currentRayHit.by, game.m_currentRayHit.bz);
+        if (targetId != AIR_ID && targetId != UNKNOWN_ID) {
+            const std::string& name = game.m_blockRegistry.Get(targetId).displayName;
+            
+            // 在准星下方绘制
+            ImVec2 textSize = ImGui::CalcTextSize(name.c_str());
+            ImVec2 textPos = ImVec2(center.x - textSize.x * 0.5f, center.y + 20.0f);
+            
+            // 背景阴影 + 文本
+            dl->AddRectFilled(ImVec2(textPos.x - 4, textPos.y - 2), ImVec2(textPos.x + textSize.x + 4, textPos.y + textSize.y + 2), IM_COL32(0,0,0,150));
+            dl->AddText(textPos, IM_COL32(255,255,255,255), name.c_str());
+        }
+    }
+
     // ---- 物品栏 ----
     constexpr float SLOT = 50.0f, GAP_ITEM = 4.0f;
     float totalW = MyGame::kHotbarSize * SLOT + (MyGame::kHotbarSize - 1) * GAP_ITEM;

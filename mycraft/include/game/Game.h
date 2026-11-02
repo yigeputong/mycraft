@@ -2,14 +2,15 @@
 
 #include "Engine/Engine.h"
 #include "Engine/client/SceneRenderer.h"
-#include "game/Protocol.h"
 #include "Engine/tool/Transport.h"
+#include "Engine/service/AssetService.h"
+#include "game/Protocol.h"
 #include "game/GameServer.h"
 #include "game/core/GameContext.h"
+#include "game/core/RayCast.h"
 #include "game/client/MeshManager.h"
 #include "game/client/ClientUI.h"
 #include "game/client/LODManager.h"
-#include "Engine/service/AssetService.h"
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -114,6 +115,9 @@ private:
     glm::vec3 m_playerVelocity{0.0f};
     bool      m_playerOnGround = false;
     glm::vec3 m_lastMoveDir{0.0f};
+
+    // 当前准星指着的方块（本地预测，仅用于渲染）
+    game::RayHit m_currentRayHit;
     
     // 输入状态与冷却
     bool  m_flyMode = true;
