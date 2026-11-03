@@ -37,6 +37,7 @@ void SceneRenderer::OnChunkMeshReady(uint64_t chunkKey,
         return;
     }
 
+    std::lock_guard lock(m_chunkDataMutex);
     if (auto it = m_allChunks.find(chunkKey); it != m_allChunks.end()) {
         m_garbageVertices += it->second.vertices.size();
         m_garbageIndices  += it->second.indices.size();
@@ -55,6 +56,7 @@ void SceneRenderer::OnChunkMeshReady(uint64_t chunkKey,
 }
 
 void SceneRenderer::OnChunkUnloaded(uint64_t chunkKey) {
+    std::lock_guard lock(m_chunkDataMutex);
     if (auto it = m_chunkMeshTable.find(chunkKey); it != m_chunkMeshTable.end()) {
         m_garbageVertices += it->second.vertexCount;
         m_garbageIndices  += it->second.indexCount;
@@ -62,6 +64,90 @@ void SceneRenderer::OnChunkUnloaded(uint64_t chunkKey) {
         it->second.vertexCount = 0;
     }
     m_allChunks.erase(chunkKey);
+}
+
+void SceneRenderer::TriggerAsyncRebuild() {
+    if (m_rebuildInProgress.exchange(true)) return;
+
+    m_rebuildThread.reset();
+    // 移除了 auto snapshot = m_allChunks; 避免瞬间深拷贝导致内存翻倍
+    m_rebuildThread = std::make_unique<Eng::tool::RAIIThread>(
+        [this](const std::stop_token& st) {
+            auto newGeo = std::make_unique<GlobalGeometry>();
+            size_t totalV = 0, totalI = 0;
+
+            // 在后台线程加锁读取（不会阻塞主线程太久，因为主线程只是插数据）
+            std::lock_guard lock(m_chunkDataMutex);
+            for (const auto& chunk : m_allChunks | std::views::values) {
+                totalV += chunk.vertices.size();
+                totalI += chunk.indices.size();
+            }
+
+            newGeo->vertices.resize(totalV);
+            newGeo->indices.resize(totalI);
+
+            service::Vertex* vOut = newGeo->vertices.data();
+            uint32_t* iOut = newGeo->indices.data();
+            size_t vCursor = 0, iCursor = 0;
+
+            for (const auto& [key, chunk] : m_allChunks) {
+                if (st.stop_requested()) return;
+                if (chunk.vertices.empty()) continue;
+
+                uint32_t vOffset = static_cast<uint32_t>(vCursor);
+                newGeo->chunkMeshes[key] = ChunkMeshData{
+                    .firstIndex  = static_cast<uint32_t>(iCursor),
+                    .indexCount  = static_cast<uint32_t>(chunk.indices.size()),
+                    .vertexCount = static_cast<uint32_t>(chunk.vertices.size())
+                };
+
+                std::memcpy(vOut + vCursor, chunk.vertices.data(), chunk.vertices.size() * sizeof(service::Vertex));
+
+                for (size_t i = 0; i < chunk.indices.size(); ++i) {
+                    iOut[iCursor + i] = chunk.indices[i] + vOffset;
+                }
+
+                vCursor += chunk.vertices.size();
+                iCursor += chunk.indices.size();
+            }
+
+            newGeo->vertexCursor = vCursor;
+            newGeo->indexCursor  = iCursor;
+
+            if (st.stop_requested()) return;
+
+            std::lock_guard pendingLock(m_pendingMutex);
+            m_pendingGeometry = std::move(newGeo);
+        });
+}
+
+void SceneRenderer::Clear() {
+    if (m_rebuildThread) m_rebuildThread.reset();
+    {
+        std::lock_guard lock(m_pendingMutex);
+        m_pendingGeometry.reset();
+    }
+    {
+        std::lock_guard lock(m_chunkDataMutex);
+        m_allChunks.clear();
+    }
+    m_chunkMeshTable.clear();
+
+    m_terrainVbo.reset();
+    m_terrainIbo.reset();
+    m_indirectBuffer.reset();
+    m_terrainVboCapacityBytes = 0;
+    m_terrainIboCapacityBytes = 0;
+    m_indirectBufferCapacityBytes = 0;
+
+    m_vertexCursor = 0;
+    m_indexCursor  = 0;
+    m_garbageVertices = 0;
+    m_garbageIndices = 0;
+    m_rebuildInProgress = false;
+    m_indirectCommands.clear();
+    m_drawQueue.clear();
+    m_waterChunks.clear();
 }
 
 void SceneRenderer::AppendIncremental(uint64_t key, const ChunkRenderData& data) {
@@ -104,58 +190,6 @@ void SceneRenderer::AppendIncremental(uint64_t key, const ChunkRenderData& data)
 
     m_vertexCursor += data.vertices.size();
     m_indexCursor  += data.indices.size();
-}
-
-void SceneRenderer::TriggerAsyncRebuild() {
-    if (m_rebuildInProgress.exchange(true)) return;
-
-    auto snapshot = m_allChunks;
-    m_rebuildThread.reset();
-
-    m_rebuildThread = std::make_unique<Eng::tool::RAIIThread>(
-        [this, snap = std::move(snapshot)](const std::stop_token& st) {
-            auto newGeo = std::make_unique<GlobalGeometry>();
-
-            size_t totalV = 0, totalI = 0;
-            for (const auto& chunk : snap | std::views::values) {
-                totalV += chunk.vertices.size();
-                totalI += chunk.indices.size();
-            }
-
-            newGeo->vertices.resize(totalV);
-            newGeo->indices.resize(totalI);
-
-            service::Vertex* vOut = newGeo->vertices.data();
-            uint32_t* iOut = newGeo->indices.data();
-            size_t vCursor = 0, iCursor = 0;
-
-            for (const auto& [key, chunk] : snap) {
-                if (st.stop_requested()) return;
-                if (chunk.vertices.empty()) continue;
-
-                uint32_t vOffset = static_cast<uint32_t>(vCursor);
-                newGeo->chunkMeshes[key] = ChunkMeshData{
-                    .firstIndex  = static_cast<uint32_t>(iCursor),
-                    .indexCount  = static_cast<uint32_t>(chunk.indices.size()),
-                    .vertexCount = static_cast<uint32_t>(chunk.vertices.size())
-                };
-
-                std::memcpy(vOut + vCursor, chunk.vertices.data(), chunk.vertices.size() * sizeof(service::Vertex));
-
-                for (size_t i = 0; i < chunk.indices.size(); ++i) {
-                    iOut[iCursor + i] = chunk.indices[i] + vOffset;
-                }
-
-                vCursor += chunk.vertices.size();
-                iCursor += chunk.indices.size();
-            }
-
-            newGeo->vertexCursor = vCursor;
-            newGeo->indexCursor  = iCursor;
-
-            std::lock_guard lock(m_pendingMutex);
-            m_pendingGeometry = std::move(newGeo);
-        });
 }
 
 void SceneRenderer::ProcessPendingRebuild() {
@@ -354,32 +388,6 @@ void SceneRenderer::EndScene(const Frustum& frustum,
             DrawRenderMesh(m_rhi, wc.mesh); // ★ 调用提取的公共绘制
         }
     }
-}
-
-void SceneRenderer::Clear() {
-    if (m_rebuildThread) m_rebuildThread.reset();
-    {
-        std::lock_guard lock(m_pendingMutex);
-        m_pendingGeometry.reset();
-    }
-    m_allChunks.clear();
-    m_chunkMeshTable.clear();
-
-    m_terrainVbo.reset();
-    m_terrainIbo.reset();
-    m_indirectBuffer.reset();
-    m_terrainVboCapacityBytes = 0;
-    m_terrainIboCapacityBytes = 0;
-    m_indirectBufferCapacityBytes = 0;
-
-    m_vertexCursor = 0;
-    m_indexCursor  = 0;
-    m_garbageVertices = 0;
-    m_garbageIndices = 0;
-    m_rebuildInProgress = false;
-    m_indirectCommands.clear();
-    m_drawQueue.clear();
-    m_waterChunks.clear();
 }
 
 } // namespace Eng::client

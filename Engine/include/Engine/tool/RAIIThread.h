@@ -13,7 +13,7 @@ namespace Eng::tool {
  */
 class RAIIThread {
 public:
-    using Task = std::function<void(std::stop_token)>;
+    using Task = std::function<void(const std::stop_token&)>;
 
     explicit RAIIThread(Task task) : m_task(std::move(task)) {
         m_thread = std::thread([this] {

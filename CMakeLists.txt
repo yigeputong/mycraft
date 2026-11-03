@@ -71,6 +71,69 @@ else()
 endif()
 
 # =============================================================================
+# 3.5 架构基线（SIMD 自动向量化）
+# =============================================================================
+# 目的：为 Perlin 噪声 / 密度函数等热点提供编译器自动向量化能力，
+#       不需要运行时分发代码，代价是要求目标机器至少支持所选基线。
+#
+#   - x86-64-v2 (SSE4.2 + POPCNT)：Nehalem (2008) / Bulldozer (2011) 起
+#   - armv8.2-a (NEON + FP16)    ：Android 8+ / iOS 16+ 设备普遍支持
+#
+# 回退：-DMYCRAFT_ARCH_BASELINE=off 则跳过全部，使用编译器默认基线。
+# 兼容提示：若目标包含极老的 x86 服务器 VM（禁用 SSE4.2），必须设为 off。
+# =============================================================================
+include(CheckCXXCompilerFlag)
+
+set(MYCRAFT_ARCH_BASELINE "auto" CACHE STRING
+    "架构基线: auto / x86-64-v2 / armv8.2-a / off")
+set_property(CACHE MYCRAFT_ARCH_BASELINE PROPERTY STRINGS auto x86-64-v2 armv8.2-a off)
+
+if(NOT MYCRAFT_ARCH_BASELINE STREQUAL "off")
+
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|i[3-6]86")
+        # ---------- x86-64 ----------
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+            # 纯 MSVC：x64 下 SSE2 默认已开启，不额外指定基线。
+            # 若确实想上 AVX2（要求 Haswell+ / Steam 硬件调查覆盖率 >97%），
+            # 在下方取消注释：
+            # target_compile_options(project_options INTERFACE /arch:AVX2)
+        elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND MSVC)
+            # clang-cl：通过 -clang: 前缀把原生 -march 透传给底层 clang
+            target_compile_options(project_options INTERFACE -clang:-march=x86-64-v2)
+        else()
+            # GCC / 原生 Clang (Linux/macOS x86_64)：先探测支持再启用
+            check_cxx_compiler_flag("-march=x86-64-v2" HAS_MARCH_X86_64_V2)
+            if(HAS_MARCH_X86_64_V2)
+                target_compile_options(project_options INTERFACE -march=x86-64-v2)
+            else()
+                message(WARNING "编译器不支持 -march=x86-64-v2，回退到默认基线")
+            endif()
+        endif()
+
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64|arm64-v8a")
+        # ---------- ARM64 ----------
+        if(APPLE)
+            # Apple Silicon：使用 -mcpu 拿到微架构级调度优化。
+            # 选 apple-m1 作为最保守的 Apple Silicon 基线，M2/M3/M4 全兼容。
+            # 若确定只跑 M3+，可改为 -mcpu=apple-m3 获得更好调度。
+            target_compile_options(project_options INTERFACE -mcpu=apple-m1)
+        else()
+            # Android / Linux ARM64：armv8.2-a 为安全基线。
+            check_cxx_compiler_flag("-march=armv8.2-a" HAS_MARCH_ARMV8_2_A)
+            if(HAS_MARCH_ARMV8_2_A)
+                target_compile_options(project_options INTERFACE -march=armv8.2-a)
+            else()
+                message(WARNING "编译器不支持 -march=armv8.2-a，回退到默认基线")
+            endif()
+        endif()
+
+    else()
+        message(STATUS "未识别的目标架构 ${CMAKE_SYSTEM_PROCESSOR}，跳过架构基线配置")
+    endif()
+
+endif()
+
+# =============================================================================
 # 4. Sanitizer 配置
 # =============================================================================
 set(SANITIZER "" CACHE STRING "启用 Sanitizer: address, undefined, thread, address+undefined")

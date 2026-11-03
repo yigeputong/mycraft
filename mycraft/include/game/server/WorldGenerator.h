@@ -1,109 +1,171 @@
 #pragma once
 #include <array>
 #include <cstdint>
-#include "game/core/BlockRegistry.h" // ★ 引入注册表
+#include <memory>
+#include <vector>
+#include <nlohmann/json_fwd.hpp>
+#include "game/core/BlockRegistry.h"
 #include "game/core/World.h"
+#include "game/server/DensityFunction.h"
 
 namespace game::server {
 
-// ============================================================
-// Perlin 噪声
-// ============================================================
-class PerlinNoise {
-public:
-    explicit PerlinNoise(uint32_t seed);
-    float Noise2D(float x, float y) const;
-    float Noise3D(float x, float y, float z) const;
-    float Fractal2D(float x, float y, int octaves,
-                    float persistence = 0.5f, float lacunarity = 2.0f) const;
-    float Fractal3D(float x, float y, float z, int octaves,
-                    float persistence = 0.5f, float lacunarity = 2.0f) const;
-
-private:
-    std::array<int, 512> m_perm{};
-    static float Fade(float t);
-    static float Lerp(float a, float b, float t);
-    static float Grad(int hash, float x, float y);
-    static float Grad(int hash, float x, float y, float z);
-};
-
-// ============================================================
-// 生物群系与阶段（保持不变）
-// ============================================================
 enum class Biome : uint8_t {
-    Ocean, Beach, Plains, Forest, Desert, Snow, Mountain,
+    Ocean, DeepOcean,
+    Beach,
+    Plains, SunflowerPlains,
+    Forest, FlowerForest,
+    Desert, Badlands,
+    Snow, IceSpikes,
+    Mountain, StonyPeaks,
+    Jungle, BambooJungle,
+    Swamp, MangroveSwamp
 };
 
 enum class GenPhase : uint8_t {
-    Biomes, NoiseTerrain, Surface, Carvers, Features,
+    Empty = 0,
+    BiomeAndDensity,
+    TerrainBlocks,
+    Features,
+    Lighting,
+    Ready
 };
 
-// ============================================================
-// TerrainGenerator
-// ============================================================
+struct BiomeRule {
+    Biome biome;
+    float tempMin, tempMax;
+    float humidMin, humidMax;
+    float contMin, contMax;
+    float erosionMin, erosionMax;
+    float weirdnessMin, weirdnessMax;
+    float depthMin, depthMax;
+};
+
+struct ChunkGenContext {
+    int cx = 0, cz = 0;
+    int baseX = 0, baseZ = 0;
+
+    GenPhase currentPhase = GenPhase::Empty;
+    std::unique_ptr<Chunk> chunk = nullptr;
+
+    struct DensityParams {
+        float temp = 0.0f;
+        float humid = 0.0f;
+        float cont = 0.0f;
+        float erosion = 0.0f;
+        float weirdness = 0.0f;
+        float depth = 0.0f;
+    };
+
+    std::array<std::array<DensityParams, 16>, 16> params2D;
+    std::array<std::array<int, 16>, 16> surfaceYs;
+    std::array<std::array<Biome, 16>, 16> localBiomes;
+
+    DFPtr finalDensity;
+    DFPtr caveDensity;
+
+    static constexpr int STEP_XZ = 4;
+    static constexpr int STEP_Y  = 8;
+
+    static constexpr int GX = 20 / STEP_XZ + 1;
+    static constexpr int GY = 256 / STEP_Y + 2;
+    static constexpr int GZ = 20 / STEP_XZ + 1;
+
+    std::array<std::array<std::array<float, GZ>, GY>, GX> grid;
+    std::array<std::array<std::array<float, GZ>, GY>, GX> caveGrid;
+};
+
+struct WorldGenConfig {
+    // ===== 宏观尺寸 =====
+    float contFreq           = 0.0004f;
+    float oceanOffset        = -0.35f;
+    float verticalScale      = 1.2f;
+    float erosionScale       = 0.0015f;
+
+    // ===== 生物群系分布 =====
+    float tempFreq           = 0.0025f;
+    float humidFreq          = 0.0030f;
+
+    // ===== 真实度调节 =====
+    float ridgeWeight        = 0.8f;
+    float plainsNoise        = 0.015f;
+
+    // ===== 其他保留配置 =====
+    float n1FreqXZ           = 0.006f;
+    float n1FreqY            = 0.012f;
+    float n2FreqXZ           = 0.020f;
+    float n2FreqY            = 0.040f;
+    float n3FreqXZ           = 0.045f;
+    float n3FreqY            = 0.08f;
+    float n1Weight           = 0.15f;
+    float n2Weight           = 0.08f;
+    float n3Weight           = 0.04f;
+
+    float caveFreq           = 0.010f;
+    float caveThreshold      = 0.06f;
+
+    int   oceanFloor         = 30;
+    int   coastBase          = 60;
+    int   inlandBase         = 70;
+    int   mtnPeak            = 100;
+    float contOceanMax       = -0.3f;
+};
+
 class TerrainGenerator {
 public:
-    // ★ 注入注册表
     explicit TerrainGenerator(uint32_t seed, const BlockRegistry& reg);
 
-    Chunk GenerateChunk(int cx, int cz) const;
+    // ==========================================
+    // JSON 数据驱动入口（可选；不调用则用默认硬编码算法）
+    // ==========================================
+    // 一站式加载：{ "config": {...}, "biomes": [...], "density": {...}, "caveDensity": {...} }
+    void LoadFromJson(const nlohmann::json& j);
+    void LoadConfigFromJson(const nlohmann::json& j);
+    void LoadBiomeRulesFromJson(const nlohmann::json& arr);
 
+    // ==========================================
+    // 查询接口
+    // ==========================================
     Biome    GetBiome(int wx, int wz) const;
     int      GetHeight(int wx, int wz) const;
     bool     IsSolidAt(int wx, int wy, int wz) const;
     int      GetSurfaceY(int wx, int wz) const;
 
+    void LoadBiomeRules(const std::vector<BiomeRule>& rules);
+
+    Chunk GenerateChunk(int cx, int cz) const;
+
+    void GeneratePhase_BiomeAndDensity(ChunkGenContext& ctx) const;
+    void GeneratePhase_TerrainBlocks(ChunkGenContext& ctx) const;
+    void GeneratePhase_Features(ChunkGenContext& ctx) const;
+
 private:
     PerlinNoise m_noise;
-    const BlockRegistry& m_registry; // ★ 注册表引用
+    const BlockRegistry& m_registry;
+    WorldGenConfig m_config;
 
-    // ★ 缓存常用方块的 ID，避免生成时反复查询
-    BlockId ID_STONE;
-    BlockId ID_DIRT;
-    BlockId ID_GRASS;
-    BlockId ID_SAND;
-    BlockId ID_WATER;
-    BlockId ID_SNOW;
-    BlockId ID_WOOD;
-    BlockId ID_LEAVES;
-    BlockId ID_TALLGRASS;
-    BlockId ID_POPPY;
-    BlockId ID_DANDELION;
+    std::vector<BiomeRule> m_biomeRules;
 
-    // ---- 阶段 1：生物群系 ----
-    Biome    ComputeBiome(float temp, float humid, float cont) const;
-    void     ComputeBiomeField(int baseX, int baseZ,
-                                std::array<std::array<Biome, 18>, 18>& out) const;
-    void     ComputeHeightField(int baseX, int baseZ,
-                                 const std::array<std::array<Biome, 18>, 18>& biomes,
-                                 std::array<std::array<int, 18>, 18>& out) const;
+    BlockId ID_STONE, ID_DIRT, ID_GRASS, ID_SAND, ID_WATER;
+    BlockId ID_SNOW, ID_WOOD, ID_LEAVES, ID_TALLGRASS, ID_POPPY, ID_DANDELION;
 
-    // ---- 阶段 3：表面规则 ----
-    BlockId  ApplySurfaceRule(Biome biome, int wy, int surfaceY, bool nearWater) const; // ★
+    DFPtr m_finalDensity;
+    DFPtr m_caveDensity;
 
-    // ---- 阶段 4：雕刻器 ----
-    bool IsCarvedByCave(int wx, int wy, int wz, int surfaceY) const;
-    float SampleCaveDiff(int wx, int wy, int wz) const;
-    bool  IsCaveAt(float diff, int ly, int surfaceY) const;
+    // 默认硬编码密度（构造时调用；JSON 加载会覆盖）
+    void BuildDefaultDensity();
 
-    // ---- 阶段 5：矿脉 ----
-    BlockId OreForPosition(int wx, int wy, int wz, BlockId base) const; // ★
+    Biome    DetermineBiome(const ChunkGenContext::DensityParams& p, int surfaceY) const;
+    BlockId  ApplySurfaceRule(Biome biome, int wy, int surfaceY, bool nearWater) const;
+    bool     IsCarvedByCave(int wx, int wy, int wz, int surfaceY) const;
+    float    SampleCaveDiff(int wx, int wy, int wz) const;
+    bool     IsCaveAt(float diff, int ly, int surfaceY) const;
+    BlockId  OreForPosition(int wx, int wy, int wz, BlockId base) const;
 
-    struct DensityParams {
-        float temp      = 0.0f;
-        float humid     = 0.0f;
-        float cont      = 0.0f;
-        float erosion   = 0.0f;
-        float weirdness = 0.0f;
-    };
+    ChunkGenContext::DensityParams ComputeParams(int wx, int wz) const;
+    float ComputeDensity(int wx, int wy, int wz, const ChunkGenContext::DensityParams& p) const;
 
-    DensityParams ComputeParams(int wx, int wz) const;
-    float ComputeDensity(int wx, int wy, int wz, const DensityParams& p) const;
-    Biome BiomeAt(const DensityParams& p, int wx, int wz, int surfaceY) const;
-
-    // ---- 树 ----
-    void GenerateTrees(Chunk& chunk,
-                        const std::array<std::array<int, 16>, 16>& surfaceYs) const;
+    void GenerateTreesForChunk(Chunk& chunk, const std::array<std::array<int, 16>, 16>& surfaceYs, const std::array<std::array<Biome, 16>, 16>& biomes) const;
     bool CanPlaceTree(int wx, int wz, int surfaceY, Biome biome) const;
     void PlaceTree(Chunk& chunk, int wx, int wy, int wz, int height) const;
     uint32_t TreeHash(int cx, int cz, int idx) const;

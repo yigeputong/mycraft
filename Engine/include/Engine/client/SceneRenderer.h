@@ -143,6 +143,7 @@ private:
 
     // CPU 侧权威副本
     std::unordered_map<uint64_t, ChunkRenderData> m_allChunks;
+    mutable std::mutex m_chunkDataMutex;
 
     // GPU 侧常驻资源
     service::BufferPtr m_terrainVbo;

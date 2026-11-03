@@ -24,17 +24,15 @@ void MeshManager::Start() {
 
 void MeshManager::Stop() {
     if (m_workers.empty()) return;
-    
     {
         std::lock_guard<std::mutex> lock(m_taskMutex);
         m_stop = true;
-        // 直接清空积压的任务，别让主线程傻等
-        while (!m_taskQueue.empty()) {
-            m_taskQueue.pop();
-        }
+        while (!m_taskQueue.empty()) m_taskQueue.pop();
     }
-    
     m_taskCv.notify_all(); 
+    
+    // 必须唤醒可能因为结果队列满而阻塞的线程
+    m_resultCv.notify_all(); 
 
     for (auto& t : m_workers) {
         if (t.joinable()) t.join();
@@ -68,12 +66,14 @@ void MeshManager::Submit(uint64_t key, std::shared_ptr<Chunk> chunk,
 // ============================================================
 // 结果收集（主线程调用）
 // ============================================================
+
 void MeshManager::DrainResults(std::function<void(MeshResult&&)>&& onComplete) {
     std::queue<MeshResult> localQueue;
     {
         std::lock_guard<std::mutex> lock(m_resultMutex);
         std::swap(localQueue, m_resultQueue);
     }
+    m_resultCv.notify_all(); // 唤醒因为队列满而卡住的 Worker
 
     while (!localQueue.empty()) {
         onComplete(std::move(localQueue.front()));
@@ -84,29 +84,27 @@ void MeshManager::DrainResults(std::function<void(MeshResult&&)>&& onComplete) {
 // ============================================================
 // Worker 线程主循环
 // ============================================================
+
 void MeshManager::WorkerLoop() {
     while (true) {
         std::shared_ptr<MeshTask> task;
         {
             std::unique_lock<std::mutex> lock(m_taskMutex);
             m_taskCv.wait(lock, [this] { return m_stop || !m_taskQueue.empty(); });
-
-            if (m_stop && m_taskQueue.empty()) {
-                return; // 退出线程
-            }
-
+            if (m_stop && m_taskQueue.empty()) return;
             task = std::move(m_taskQueue.front());
             m_taskQueue.pop();
         }
 
-        // 构建 Mesh
         MeshResult result;
         result.chunkKey = task->chunkKey;
         BuildChunkMeshData(*task, result);
 
-        // 将结果推入结果队列
         {
-            std::lock_guard<std::mutex> lock(m_resultMutex);
+            std::unique_lock<std::mutex> lock(m_resultMutex);
+            // 背压核心：如果结果攒了 64 个还没消费，Worker 停止干活，防止内存爆炸
+            m_resultCv.wait(lock, [this] { return m_stop || m_resultQueue.size() < 64; });
+            if (m_stop) return;
             m_resultQueue.push(std::move(result));
         }
     }
@@ -118,8 +116,12 @@ void MeshManager::WorkerLoop() {
 void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
     result.vertices.clear();
     result.indices.clear();
-    result.vertices.reserve(150000);
-    result.indices.reserve(200000);
+    result.waterVertices.clear();
+    result.waterIndices.clear();
+    
+    // 将恐怖的 150000 调小，改为按需扩容
+    result.vertices.reserve(8192); 
+    result.indices.reserve(12288);
 
     if (!task.reg) return; 
     const game::BlockRegistry& reg = *task.reg;

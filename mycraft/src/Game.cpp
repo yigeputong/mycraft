@@ -607,7 +607,6 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         }
     );
 
-    // 通知 SceneRenderer 清理已从世界卸载的 chunk
     for (auto it = m_knownSceneChunks.begin(); it != m_knownSceneChunks.end(); ) {
         if (m_world.GetChunk(*it) == nullptr) {
             if (m_sceneRenderer) m_sceneRenderer->OnChunkUnloaded(*it);
@@ -617,14 +616,17 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         }
     }
 
-    auto dirtyKeys = m_world.FetchDirtyChunks(std::numeric_limits<size_t>::max());
+    // 每帧最多提取 8 个脏区块去建 Mesh，不一次性全塞进去
+    auto dirtyKeys = m_world.FetchDirtyChunks(8); 
     for (uint64_t key : dirtyKeys) {
         auto* cc = m_world.GetChunk(key);
         if (cc) QueueChunkMeshTask(key);
     }
 
     m_lodManager.Update(cameraPos, m_world, m_renderDistance, renderer);
-    DrainMeshResults();
+    
+    // 每帧最多从结果队列拿 16 个出来给 GPU，不把显存撑爆
+    DrainMeshResults(16); 
 
     return false;
 }
@@ -1276,20 +1278,20 @@ void MyGame::QueueChunkMeshTask(uint64_t key) {
     );
 }
 
-void MyGame::DrainMeshResults() {
+void MyGame::DrainMeshResults(size_t maxCount) {
     if (!m_sceneRenderer) return;
 
-    m_meshManager.DrainResults([this](game::client::MeshResult&& r) {
+    size_t processed = 0;
+    m_meshManager.DrainResults([this, &processed, maxCount](game::client::MeshResult&& r) {
+        if (processed >= maxCount) return; // 达到本帧上限就丢弃（底层其实还在队列里等下一帧）
+        processed++;
+
         auto* cc = m_world.GetChunk(r.chunkKey);
-        if (!cc) {
-            // chunk 已被流式卸载，丢弃结果
-            return;
-        }
+        if (!cc) return;
 
         bool hasOpaque = !r.vertices.empty() && !r.indices.empty();
         bool hasWater  = !r.waterVertices.empty() && !r.waterIndices.empty();
 
-        // 1. 提交不透明方块（走原有的大 Buffer / MDI）
         if (hasOpaque) {
             m_sceneRenderer->OnChunkMeshReady(
                 r.chunkKey,
@@ -1304,7 +1306,6 @@ void MyGame::DrainMeshResults() {
             m_knownSceneChunks.erase(r.chunkKey);
         }
 
-        // 2. 提交水面（走独立的透明管线）
         if (hasWater) {
             m_sceneRenderer->SubmitWaterChunk(
                 r.chunkKey,

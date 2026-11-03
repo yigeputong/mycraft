@@ -54,6 +54,7 @@ private:
     std::atomic<bool>                     m_stop{false};
 
     std::mutex                            m_resultMutex;
+    std::condition_variable               m_resultCv;
     std::queue<MeshResult>                m_resultQueue;
 
     std::unordered_set<uint64_t>          m_inflightTasks;

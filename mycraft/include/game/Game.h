@@ -76,7 +76,7 @@ private:
     // 注册表与全局配置
     game::BlockRegistry m_blockRegistry;
     game::GameContext   m_ctx{ m_blockRegistry };
-    int                 m_renderDistance = 16;
+    int                 m_renderDistance = 32;
 
     // 核心渲染资产 (地形、天空、实体、手部 Shader 及贴图)
     Eng::service::ShaderPtr      m_cubeShader;
@@ -234,7 +234,7 @@ private:
     const Eng::client::RenderMesh& GetOrCreateItemMesh(BlockId id);
     Eng::client::RenderMesh BuildItemCubeMesh(BlockId id);
     void QueueChunkMeshTask(uint64_t key);
-    void DrainMeshResults();
+    void DrainMeshResults(size_t maxCount = 16);
 
     // ================================================================
     // 11. 游戏逻辑与世界查询辅助函数

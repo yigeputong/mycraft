@@ -5,6 +5,7 @@ add_library(game-server STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WorldGenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WorldSave.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/DensityFunctionJson.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/LightEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/BlockRegistry.cpp
 )

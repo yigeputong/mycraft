@@ -11,19 +11,44 @@
 #include "game/core/LightEngine.h"
 
 #include <SDL3/SDL.h>
-
 #include <chrono>
 #include <cstddef>
 #include <random>
+#include <algorithm>
 
 namespace game::server {
 
+// ============================================================
+// 流水线进度查询（供客户端 UI “小太阳” 使用）
+// ============================================================
+GenPhase GameServer::GetChunkProgress(int cx, int cz) const {
+    uint64_t key = ChunkKey(cx, cz);
+    std::shared_lock lock(m_genMutex); // 共享锁，UI 读取不阻塞
+    auto it = m_generatingChunks.find(key);
+    if (it != m_generatingChunks.end()) {
+        return it->second->phase.load(std::memory_order_relaxed);
+    }
+    if (m_chunks.contains(key)) {
+        return GenPhase::Ready;
+    }
+    return GenPhase::Empty;
+}
+
+// ============================================================
+// 线程池与流水线调度
+// ============================================================
 void GameServer::StartWorkers(uint32_t seed) {
     unsigned hw = std::thread::hardware_concurrency();
     unsigned n  = std::clamp(hw > 2 ? hw - 2 : 2u, 2u, 12u);
     m_workersStop = false;
+    
     for (unsigned i = 0; i < n; ++i) {
-        m_workers.emplace_back([this, seed] { WorkerLoop(seed); });
+        // 使用 RAIIThread，自动处理 stop_token 和 join
+        m_workers.push_back(std::make_unique<Eng::tool::RAIIThread>(
+            [this, seed](const std::stop_token& st) {
+                WorkerLoop(seed, st);
+            }
+        ));
     }
 }
 
@@ -33,33 +58,77 @@ void GameServer::StopWorkers() {
         m_workersStop = true;
     }
     m_taskCv.notify_all();
-    for (auto& t : m_workers) if (t.joinable()) t.join();
-    m_workers.clear();
+    
+    // RAIIThread 析构会自动 request_stop 并 join
+    m_workers.clear(); 
 }
 
-void GameServer::WorkerLoop(uint32_t seed) {
-    TerrainGenerator terrain(seed, m_registry); // ★ 必须把注册表传给生成器
+void GameServer::WorkerLoop(uint32_t seed, const std::stop_token& st) {
+    TerrainGenerator terrain(seed, m_registry);
+    
     while (true) {
-        ChunkTask task;
+        Eng::tool::UniqueFunction task;
         {
             std::unique_lock lk(m_taskMutex);
-            m_taskCv.wait(lk, [this] {
-                return m_workersStop.load() || !m_taskQueue.empty();
+            m_taskCv.wait(lk, [this, &st] {
+                return m_workersStop.load() || st.stop_requested() || !m_taskQueue.empty();
             });
-            if (m_workersStop.load() && m_taskQueue.empty()) return;
-            task = m_taskQueue.front();
+            if ((m_workersStop.load() || st.stop_requested()) && m_taskQueue.empty()) {
+                return;
+            }
+            task = std::move(m_taskQueue.front());
             m_taskQueue.pop();
         }
+        task(); // 执行闭包
+    }
+}
 
+void GameServer::DrainChunkResults() {
+    constexpr int kMaxSendsPerTick = 64;
+    int sends = 0;
+
+    for (;;) {
         ChunkResult r;
-        r.key   = task.key;
-        r.chunk = terrain.GenerateChunk(task.cx, task.cz);
-        LightEngine::InitRegion(m_registry, r.chunk, nullptr, nullptr, nullptr, nullptr); // ★ 传注册表
-
         {
             std::lock_guard lk(m_resultMutex);
-            m_resultQueue.push(r);
+            if (m_resultQueue.empty() || sends >= kMaxSendsPerTick) break;
+            r = std::move(m_resultQueue.front());
+            m_resultQueue.pop();
         }
+
+        // 应用存档修改
+        auto cit = m_pendingChanges.find(r.key);
+        if (cit != m_pendingChanges.end()) {
+            for (const auto& c : cit->second) {
+                int lx = c.x & 15;
+                int lz = c.z & 15;
+                ChunkSet(*r.chunk, lx, c.y, lz, c.block);
+            }
+        }
+
+        if (r.chunk) {
+            // ★ 规避 performance-move-const-arg：
+            // Chunk 是 trivially copyable，std::move(*r.chunk) 会触发警告。
+            // 直接传 *r.chunk 底层会自动拷贝。
+            m_chunks.emplace(r.key, *r.chunk);
+        }
+
+        // 从生成中列表移除
+        {
+            std::unique_lock lock(m_genMutex);
+            m_generatingChunks.erase(r.key);
+        }
+
+        // 发给等待的 client
+        auto it = m_waitingClients.find(r.key);
+        if (it != m_waitingClients.end()) {
+            const Chunk& c = m_chunks.at(r.key);
+            for (int cid : it->second) {
+                SendChunkTo(cid, c);
+            }
+            m_waitingClients.erase(it);
+        }
+        ++sends;
     }
 }
 
@@ -70,65 +139,137 @@ void GameServer::SendChunkTo(int clientId, const Chunk& chunk) {
     w.Write<int32_t>(chunk.chunk_z);
     w.Write<uint16_t>(CHUNK_SIZE_Y);
     
-    // 1. 方块数据
     w.WriteBytes(reinterpret_cast<const uint8_t*>(chunk.blocks.data()),
                  chunk.blocks.size() * sizeof(BlockId));
                  
-    // 2. 天空光数组 (65536 字节)
     w.WriteBytes(chunk.sky.data(), chunk.sky.size());
     
-    // 3. 方块光数组 (65536 * 3 字节)
     w.WriteBytes(reinterpret_cast<const uint8_t*>(chunk.block.data()), 
                  chunk.block.size() * sizeof(LightRGB));
 
     m_server->SendTo(clientId, w.GetBuffer());
 }
 
-void GameServer::DrainChunkResults() {
-    constexpr int kMaxSendsPerTick = 4;
+// ============================================================
+// 服务器主循环
+// ============================================================
+void GameServer::Run() {
+    constexpr float TICK_INTERVAL = 1.0f / TPS;
+    auto last = std::chrono::steady_clock::now();
+    float accumulator = 0.0f;
 
-    int sends = 0;
-    for (;;) {
-        ChunkResult r;
-        {
-            std::lock_guard lk(m_resultMutex);
-            if (m_resultQueue.empty() || sends >= kMaxSendsPerTick) break;
-            r = m_resultQueue.front();
-            m_resultQueue.pop();
-        }
+    m_terrain = std::make_unique<TerrainGenerator>(m_worldSeed, m_registry); 
+    StartWorkers(m_worldSeed);
 
-        auto cit = m_pendingChanges.find(r.key);
-        if (cit != m_pendingChanges.end()) {
-            for (const auto& c : cit->second) {
-                int lx = c.x & 15;
-                int lz = c.z & 15;
-                ChunkSet(r.chunk, lx, c.y, lz, c.block); // ★ 直接传 uint16_t 的 BlockId
+    while (m_running.load()) {
+        m_server->Update();
+
+        auto now = std::chrono::steady_clock::now();
+        float frameTime = std::chrono::duration<float>(now - last).count();
+        last = now;
+        accumulator += frameTime;
+
+        while (accumulator >= TICK_INTERVAL) {
+            auto tickStart = std::chrono::steady_clock::now();
+
+            // -------- 处理区块请求（带背压控制） --------
+            while (!m_chunkQueue.empty()) {
+                // ★ 背压核心：如果当前生成中的区块已经达到上限，暂停本次派发
+                {
+                    std::shared_lock lock(m_genMutex);
+                    if (m_generatingChunks.size() >= MAX_CONCURRENT_GENERATING) {
+                        break; // 直接退出 while，把剩余请求留到下一个 tick
+                    }
+                }
+
+                auto req = m_chunkQueue.front();
+                m_chunkQueue.pop();
+                uint64_t key = ChunkKey(req.cx, req.cz);
+
+                // 如果已经完成，直接发（或者你可以在接收请求时去重）
+                if (m_chunks.contains(key)) {
+                    SendChunkTo(req.clientId, m_chunks.at(key));
+                    continue;
+                }
+
+                // 检查是否已经在流水线中
+                std::unique_lock lock(m_genMutex);
+                if (m_generatingChunks.contains(key)) {
+                    m_waitingClients[key].push_back(req.clientId);
+                    continue;
+                }
+                
+                m_waitingClients[key].push_back(req.clientId);
+
+                auto inFlight = std::make_shared<InFlightChunk>();
+                inFlight->key = key;
+                inFlight->ctx = std::make_unique<ChunkGenContext>();
+                inFlight->ctx->cx = req.cx;
+                inFlight->ctx->cz = req.cz;
+                m_generatingChunks[key] = inFlight;
+
+                std::lock_guard lk(m_taskMutex);
+                m_taskQueue.emplace([this, inFlight]() {
+                    // 1. 密度与生物群系
+                    m_terrain->GeneratePhase_BiomeAndDensity(*inFlight->ctx);
+                    inFlight->phase.store(GenPhase::TerrainBlocks, std::memory_order_relaxed);
+                    
+                    // 2. 填充方块
+                    m_terrain->GeneratePhase_TerrainBlocks(*inFlight->ctx);
+                    inFlight->phase.store(GenPhase::Features, std::memory_order_relaxed);
+                    
+                    // 3. 装饰物（树木等）
+                    m_terrain->GeneratePhase_Features(*inFlight->ctx);
+                    inFlight->phase.store(GenPhase::Lighting, std::memory_order_relaxed);
+                    
+                    // 4. 光照计算
+                    LightEngine::InitRegion(m_registry, *inFlight->ctx->chunk, nullptr, nullptr, nullptr, nullptr);
+                    inFlight->phase.store(GenPhase::Ready, std::memory_order_relaxed);
+                    
+                    // 5. 推入结果队列
+                    std::lock_guard lk4(m_resultMutex);
+                    m_resultQueue.push({ inFlight->key, std::move(inFlight->ctx->chunk) });
+                });
+                m_taskCv.notify_one();
             }
+
+            DrainChunkResults();
+
+            TickWorld(TICK_INTERVAL);
+            TickEntities(TICK_INTERVAL);
+
+            m_saveAccum += TICK_INTERVAL;
+            if (m_dirty && m_saveAccum >= kSaveIntervalSec) {
+                std::vector<BlockChange> flat;
+                for (auto& [k, v] : m_pendingChanges) {
+                    flat.insert(flat.end(), v.begin(), v.end());
+                }
+                m_save->SaveChanges(flat);
+                m_dirty = false;
+                m_saveAccum = 0.0f;
+            }
+
+            BroadcastWorldState();
+
+            auto tickEnd = std::chrono::steady_clock::now();
+            m_lastTickMs = std::chrono::duration<float, std::milli>(tickEnd - tickStart).count();
+
+            accumulator -= TICK_INTERVAL;
         }
 
-        // 存表
-        m_chunks.emplace(r.key, r.chunk);
-        m_inFlight.erase(r.key);
-
-        // 发给等待的 client
-        auto it = m_waitingClients.find(r.key);
-        if (it != m_waitingClients.end()) {
-            const Chunk& c = m_chunks.at(r.key);
-            for (int cid : it->second) SendChunkTo(cid, c);
-            m_waitingClients.erase(it);
-        }
-
-        ++sends;
+        SDL_Delay(1);
     }
+
+    StopWorkers();
 }
 
+// ============================================================
+// 生命周期与网络回调
+// ============================================================
 bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory) {
     if (m_running.load()) return false;
 
-    // 服务端初始化注册表
     m_registry.LoadAll("assets/block");
-
-    // ---- 存档 ----
     m_save = std::make_unique<WorldSave>(saveDir);
 
     uint32_t seed = 0;
@@ -138,8 +279,7 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
         m_spawnPos  = spawn;
         logInfo(m_logger, "[Server] Loaded world, seed=" << seed);
     } else {
-        seed = static_cast<uint32_t>(std::time(nullptr))
-            ^ static_cast<uint32_t>(std::clock());
+        seed = static_cast<uint32_t>(std::time(nullptr)) ^ static_cast<uint32_t>(std::clock());
         m_worldSeed = seed;
         m_spawnPos  = spawn;
         m_save->SaveLevel(seed, spawn);
@@ -178,14 +318,12 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
         p.id = (uint32_t)id;
         m_players.push_back(p);
 
-        // 你的 ID
         {
             Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(net::MessageType::PlayerId));
             w.WriteU32BE((uint32_t)id);
             m_server->SendTo(id, w.GetBuffer());
         }
-        // seed
         {
             Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(net::MessageType::ServerInfo));
@@ -194,13 +332,12 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
             m_server->SendTo(id, w.GetBuffer());
         }
 
-        // 补发所有现有掉落物
         for (auto& [eid, e] : m_entities) {
             Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(net::MessageType::EntitySpawn));
             w.Write<uint32_t>(eid);
             w.WriteVec3(e.position);
-            w.Write<uint16_t>(e.itemType); // ★ BlockId
+            w.Write<uint16_t>(e.itemType);
             m_server->SendTo(id, w.GetBuffer());
         }
 
@@ -242,12 +379,10 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
 void GameServer::Stop() {
     m_running.store(false);
 
-    // 先让网络停止接收和发送，打破子线程的阻塞
     if (m_server) {
         m_server->Shutdown();
     }
 
-    // 然后再等待子线程优雅退出
     if (m_thread.joinable()) {
         m_thread.join();
     }
@@ -279,76 +414,6 @@ std::shared_ptr<Eng::tool::MemoryPipe> GameServer::GetMemoryPipe() const {
     return nullptr;
 }
 
-void GameServer::Run() {
-    constexpr float TICK_INTERVAL = 1.0f / TPS;
-    auto last = std::chrono::steady_clock::now();
-    float accumulator = 0.0f;
-
-    // 服务端主线程也保留一个 terrain（按需），但 chunk 生成已全在 Worker 里
-    m_terrain = std::make_unique<TerrainGenerator>(m_worldSeed, m_registry); // ★
-
-    StartWorkers(m_worldSeed);
-
-    while (m_running.load()) {
-        m_server->Update();
-
-        auto now = std::chrono::steady_clock::now();
-        float frameTime = std::chrono::duration<float>(now - last).count();
-        last = now;
-        accumulator += frameTime;
-
-        while (accumulator >= TICK_INTERVAL) {
-            auto tickStart = std::chrono::steady_clock::now();
-
-            while (!m_chunkQueue.empty()) {
-                auto req = m_chunkQueue.front();
-                m_chunkQueue.pop();
-                uint64_t key = ChunkKey(req.cx, req.cz);
-
-                auto it = m_chunks.find(key);
-                if (it != m_chunks.end()) {
-                    SendChunkTo(req.clientId, it->second);
-                    continue;
-                }
-
-                m_waitingClients[key].push_back(req.clientId);
-
-                if (m_inFlight.count(key)) continue;
-                m_inFlight.insert(key);
-                {
-                    std::lock_guard lk(m_taskMutex);
-                    m_taskQueue.push({req.cx, req.cz, key});
-                }
-                m_taskCv.notify_one();
-            }
-
-            DrainChunkResults();
-
-            TickWorld(TICK_INTERVAL);
-            TickEntities(TICK_INTERVAL);
-            m_saveAccum += TICK_INTERVAL;
-            if (m_dirty && m_saveAccum >= kSaveIntervalSec) {
-                std::vector<BlockChange> flat;
-                for (auto& [k, v] : m_pendingChanges)
-                    flat.insert(flat.end(), v.begin(), v.end());
-                m_save->SaveChanges(flat);
-                m_dirty = false;
-                m_saveAccum = 0.0f;
-            }
-            BroadcastWorldState();
-
-            auto tickEnd = std::chrono::steady_clock::now();
-            m_lastTickMs = std::chrono::duration<float, std::milli>(tickEnd - tickStart).count();
-
-            accumulator -= TICK_INTERVAL;
-        }
-
-        SDL_Delay(1);
-    }
-
-    StopWorkers();
-}
-
 void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
     if (data.empty()) return;
 
@@ -363,7 +428,7 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
             in.jump    = r.Read<uint8_t>() != 0;
             in.dig     = r.Read<uint8_t>() != 0;
             in.place   = r.Read<uint8_t>() != 0;
-            in.placeBlock = r.Read<uint16_t>(); // 已经是 BlockId
+            in.placeBlock = r.Read<uint16_t>();
             in.fly = r.Read<uint8_t>() != 0;
 
             ApplyPlayerInput(clientId, in);
@@ -372,7 +437,6 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
         case game::net::MessageType::ChunkRequest: {
             int cx = r.Read<int>();
             int cz = r.Read<int>();
-
             m_chunkQueue.push({clientId, cx, cz});
             break;
         }
@@ -411,7 +475,7 @@ void GameServer::ApplyPlayerInput(int clientId, const net::PlayerInput& in) {
             p.jump    = in.jump;
             p.flyMode = in.fly;
             if (in.dig)   HandleDig(p);
-            if (in.place) HandlePlace(p, in.placeBlock); // ★ 直接传 BlockId
+            if (in.place) HandlePlace(p, in.placeBlock);
             return;
         }
     }
@@ -444,15 +508,17 @@ void GameServer::SpawnItemDrop(const glm::vec3& pos, BlockId id) {
     e.position = pos;
     e.velocity = glm::vec3(s_dist(s_rng) * 2.0f, 2.5f, s_dist(s_rng) * 2.0f);
     e.pickupDelay = 0.5f;
-    e.itemType    = id; // ★
+    e.itemType    = id;
 
     m_entities[e.id] = e;
 
     Eng::tool::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::EntitySpawn));
-    w.Write<uint32_t>(e.id);
-    w.WriteVec3(e.position);
-    w.Write<uint16_t>(e.itemType); // ★
+    w.Write<uint32_t>(e.id); // 注意：e 被 move 后，e.id 如果还在后面用会报 bugprone-use-after-move！
+                             // 所以我们把 w 的写入移到 m_entities 之前，或者用临时变量存 id
+    w.WriteVec3(pos);        // 这里直接用传进来的 pos 即可，万无一失
+    w.Write<uint16_t>(id);   // 直接用传进来的 id
+    
     m_server->Broadcast(w.GetBuffer());
 }
 
@@ -528,12 +594,11 @@ void GameServer::HandleDig(ServerPlayer& p) {
     if (!hit.hit) return;
 
     BlockId oldBlock = GetBlockAt(hit.bx, hit.by, hit.bz);
-    if (oldBlock == AIR_ID || oldBlock == UNKNOWN_ID) return; // 防止挖空气
+    if (oldBlock == AIR_ID || oldBlock == UNKNOWN_ID) return;
 
     SetBlockAt(hit.bx, hit.by, hit.bz, AIR_ID);
     BroadcastBlockChange(hit.bx, hit.by, hit.bz, AIR_ID);
 
-    // 重算服务端光照
     int cx = game::WorldToChunkX(hit.bx);
     int cz = game::WorldToChunkZ(hit.bz);
     int lx = game::WorldToLocalX(hit.bx);
@@ -543,14 +608,12 @@ void GameServer::HandleDig(ServerPlayer& p) {
         game::LightEngine::OnBlockChanged(m_registry, it->second, lx, hit.by, lz, oldBlock, AIR_ID);
     }
 
-    // 挖掉非空气方块 → 生成掉落物
     SpawnItemDrop(
         glm::vec3(hit.bx + 0.5f, hit.by + 0.5f, hit.bz + 0.5f),
         oldBlock);
 }
 
 void GameServer::HandlePlace(ServerPlayer& p, BlockId type) {
-    // ★ 校验方块是否合法
     if (m_registry.Get(type).id == UNKNOWN_ID) return;
 
     glm::vec3 front;
@@ -565,12 +628,10 @@ void GameServer::HandlePlace(ServerPlayer& p, BlockId type) {
     [this](int x, int y, int z) { return GetBlockAt(x, y, z); });
     if (!hit.hit) return;
 
-    // 放在命中面的外侧
     int px = hit.bx + hit.nx;
     int py = hit.by + hit.ny;
     int pz = hit.bz + hit.nz;
 
-    // 别把方块放进自己身体里
     if (IsInsidePlayer(p, px, py, pz)) return;
     
     BlockId oldBlock = GetBlockAt(px, py, pz);
@@ -579,7 +640,6 @@ void GameServer::HandlePlace(ServerPlayer& p, BlockId type) {
     SetBlockAt(px, py, pz, type);
     BroadcastBlockChange(px, py, pz, type);
 
-    // 重算服务端光照
     int cx = game::WorldToChunkX(px);
     int cz = game::WorldToChunkZ(pz);
     int lx = game::WorldToLocalX(px);
@@ -610,21 +670,18 @@ void GameServer::SetBlockAt(int wx, int wy, int wz, BlockId bt) {
     auto it = m_chunks.find(ChunkKey(cx, cz));
     if (it == m_chunks.end()) return;
     ChunkSet(it->second, lx, wy, lz, bt);
-    // 记录改动（供存档）
     m_pendingChanges[ChunkKey(cx, cz)].push_back({ wx, wy, wz, bt });
     m_dirty = true;
 }
 
 bool GameServer::IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz) {
-
     glm::vec3 pmin{p.position.x - PLAYER_HALF_W, p.position.y,        p.position.z - PLAYER_HALF_W};
     glm::vec3 pmax{p.position.x + PLAYER_HALF_W, p.position.y + PLAYER_HEIGHT, p.position.z + PLAYER_HALF_W};
 
-    // 方块 AABB：[bx, bx+1] × [by, by+1] × [bz, bz+1]
-    glm::vec3 bmin{(float)bx, (float)by, (float)bz};
+    // ★ 规避 -Wimplicit-int-float-conversion：使用显式 static_cast
+    glm::vec3 bmin{static_cast<float>(bx), static_cast<float>(by), static_cast<float>(bz)};
     glm::vec3 bmax{bmin.x + 1.0f, bmin.y + 1.0f, bmin.z + 1.0f};
 
-    // 三个轴都重叠才算相交
     bool overlapX = pmin.x < bmax.x && pmax.x > bmin.x;
     bool overlapY = pmin.y < bmax.y && pmax.y > bmin.y;
     bool overlapZ = pmin.z < bmax.z && pmax.z > bmin.z;
@@ -633,12 +690,12 @@ bool GameServer::IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz) {
 }
 
 bool GameServer::AABBCollides(const glm::vec3& pos) const {
-    int minX = (int)std::floor(pos.x - PLAYER_HALF_W);
-    int maxX = (int)std::floor(pos.x + PLAYER_HALF_W);
-    int minY = (int)std::floor(pos.y);
-    int maxY = (int)std::floor(pos.y + PLAYER_HEIGHT);
-    int minZ = (int)std::floor(pos.z - PLAYER_HALF_W);
-    int maxZ = (int)std::floor(pos.z + PLAYER_HALF_W);
+    int minX = static_cast<int>(std::floor(pos.x - PLAYER_HALF_W));
+    int maxX = static_cast<int>(std::floor(pos.x + PLAYER_HALF_W));
+    int minY = static_cast<int>(std::floor(pos.y));
+    int maxY = static_cast<int>(std::floor(pos.y + PLAYER_HEIGHT));
+    int minZ = static_cast<int>(std::floor(pos.z - PLAYER_HALF_W));
+    int maxZ = static_cast<int>(std::floor(pos.z + PLAYER_HALF_W));
 
     for (int x = minX; x <= maxX; ++x)
         for (int y = minY; y <= maxY; ++y)
@@ -649,7 +706,7 @@ bool GameServer::AABBCollides(const glm::vec3& pos) const {
 
 bool GameServer::IsSolidAt(int wx, int wy, int wz) const {
     BlockId b = GetBlockAt(wx, wy, wz);
-    return m_registry.IsSolid(b); // ★ 使用实例
+    return m_registry.IsSolid(b);
 }
 
 void GameServer::BroadcastWorldState() {
@@ -662,10 +719,11 @@ void GameServer::BroadcastWorldState() {
     for (auto& p : m_players) {
         w.WriteU32BE(p.id);
 
-        uint8_t nlen = (uint8_t)std::min<size_t>(p.name.size(), 32);
+        // ★ 规避 -Wimplicit-int-conversion：使用显式 static_cast
+        uint8_t nlen = static_cast<uint8_t>(std::min<size_t>(p.name.size(), 32));
         w.Write<uint8_t>(nlen);
         for (uint8_t i = 0; i < nlen; ++i) {
-            w.Write<uint8_t>((uint8_t)p.name[i]);
+            w.Write<uint8_t>(static_cast<uint8_t>(p.name[i]));
         }
 
         w.WriteVec3(p.position);
@@ -681,8 +739,8 @@ void GameServer::BroadcastBlockChange(int bx, int by, int bz, BlockId id) {
     w.Write<int32_t>(bx);
     w.Write<int32_t>(by);
     w.Write<int32_t>(bz);
-    w.Write<uint16_t>(id); // ★
+    w.Write<uint16_t>(id);
     m_server->Broadcast(w.GetBuffer());
 }
 
-} // namespace game
+} // namespace game::server
