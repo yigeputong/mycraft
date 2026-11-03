@@ -15,6 +15,10 @@
 
 #include <algorithm>
 #include <cstring>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+#include <ctime>
 
 namespace Eng::tool {
 
@@ -80,6 +84,25 @@ uint32_t GetRecommendedWorkerThreads() {
 
     // 桌面端：main + render 各留一核。
     return hw >= 3u ? hw - 2u : 1u;
+}
+
+std::string GetCurrentTimeString() {
+    using namespace std::chrono;
+    auto now = system_clock::now();
+    auto ms = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
+    std::time_t t = system_clock::to_time_t(now);
+    
+    std::tm tm_buf{};
+#ifdef _WIN32
+    localtime_s(&tm_buf, &t); // 平台隔离在此消化
+#else
+    localtime_r(&t, &tm_buf); // Linux / Android
+#endif
+
+    std::ostringstream oss;
+    oss << std::put_time(&tm_buf, "%m-%d %H:%M:%S") 
+        << "." << std::setfill('0') << std::setw(3) << ms.count();
+    return oss.str();
 }
 
 // ==========================================

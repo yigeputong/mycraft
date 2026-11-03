@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.22.1)
 
 project(mycraft VERSION 0.1.0 LANGUAGES C CXX)
 
@@ -31,7 +31,8 @@ find_package(nlohmann_json         CONFIG REQUIRED)
 add_library(project_options INTERFACE)
 
 target_compile_features(project_options INTERFACE cxx_std_23)
-set_target_properties(project_options PROPERTIES CXX_EXTENSIONS OFF)
+# INTERFACE 库的属性必须带 INTERFACE_ 前缀才能向链接方传播
+set_target_properties(project_options PROPERTIES INTERFACE_CXX_EXTENSIONS OFF)
 
 target_compile_definitions(project_options INTERFACE
     GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -41,8 +42,6 @@ target_compile_definitions(project_options INTERFACE
 )
 
 # 编译器特定选项
-# 注意：clang-cl 环境下 MSVC 宏为真，但它的编译器 ID 是 "Clang"，
-# 必须用 CMAKE_CXX_COMPILER_ID 才能区分"纯 MSVC"和"clang-cl"。
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # ---- 纯 MSVC ----
     target_compile_options(project_options INTERFACE 
@@ -50,17 +49,25 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     )
 
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    # ---- clang-cl 或纯 clang ----
-    # /utf-8 /W4 /permissive-：保持与 MSVC 一致的命令行风格（clang-cl 支持）
-    # -fdiagnostics-format=clang：强制 LLVM 原生诊断格式
-    # -fcolor-diagnostics -fansi-escape-codes：终端里带颜色，与 clangd 视觉统一
-    # 不加 /MP（clang-cl 本身是并发构建，传了会有 unused warning）
-    target_compile_options(project_options INTERFACE 
-        /utf-8 /W4 /WX- /permissive-
-        -clang:-fdiagnostics-format=clang
-        -fcolor-diagnostics
-        -fansi-escape-codes
-    )
+    # ★ 核心修复：使用前端变体来区分 clang-cl 和纯 clang
+    if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+        # ---- clang-cl (仅限 Windows) ----
+        # /utf-8 /W4 /permissive-：保持与 MSVC 一致的命令行风格（clang-cl 支持）
+        # -fdiagnostics-format=clang：强制 LLVM 原生诊断格式
+        # -fcolor-diagnostics -fansi-escape-codes：终端里带颜色
+        target_compile_options(project_options INTERFACE 
+            /utf-8 /W4 /WX- /permissive-
+            -clang:-fdiagnostics-format=clang
+            -fcolor-diagnostics
+            -fansi-escape-codes
+        )
+    else()
+        # ---- 纯 clang (Android NDK / Linux / macOS) ----
+        target_compile_options(project_options INTERFACE 
+            -Wall -Wextra -Wpedantic -Wshadow
+            -fdiagnostics-color=always
+        )
+    endif()
 
 else()
     # ---- GCC / 其他 ----
@@ -72,15 +79,6 @@ endif()
 
 # =============================================================================
 # 3.5 架构基线（SIMD 自动向量化）
-# =============================================================================
-# 目的：为 Perlin 噪声 / 密度函数等热点提供编译器自动向量化能力，
-#       不需要运行时分发代码，代价是要求目标机器至少支持所选基线。
-#
-#   - x86-64-v2 (SSE4.2 + POPCNT)：Nehalem (2008) / Bulldozer (2011) 起
-#   - armv8.2-a (NEON + FP16)    ：Android 8+ / iOS 16+ 设备普遍支持
-#
-# 回退：-DMYCRAFT_ARCH_BASELINE=off 则跳过全部，使用编译器默认基线。
-# 兼容提示：若目标包含极老的 x86 服务器 VM（禁用 SSE4.2），必须设为 off。
 # =============================================================================
 include(CheckCXXCompilerFlag)
 
@@ -94,10 +92,7 @@ if(NOT MYCRAFT_ARCH_BASELINE STREQUAL "off")
         # ---------- x86-64 ----------
         if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
             # 纯 MSVC：x64 下 SSE2 默认已开启，不额外指定基线。
-            # 若确实想上 AVX2（要求 Haswell+ / Steam 硬件调查覆盖率 >97%），
-            # 在下方取消注释：
-            # target_compile_options(project_options INTERFACE /arch:AVX2)
-        elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND MSVC)
+        elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
             # clang-cl：通过 -clang: 前缀把原生 -march 透传给底层 clang
             target_compile_options(project_options INTERFACE -clang:-march=x86-64-v2)
         else()
@@ -114,8 +109,6 @@ if(NOT MYCRAFT_ARCH_BASELINE STREQUAL "off")
         # ---------- ARM64 ----------
         if(APPLE)
             # Apple Silicon：使用 -mcpu 拿到微架构级调度优化。
-            # 选 apple-m1 作为最保守的 Apple Silicon 基线，M2/M3/M4 全兼容。
-            # 若确定只跑 M3+，可改为 -mcpu=apple-m3 获得更好调度。
             target_compile_options(project_options INTERFACE -mcpu=apple-m1)
         else()
             # Android / Linux ARM64：armv8.2-a 为安全基线。
@@ -146,7 +139,8 @@ if (SANITIZER)
             _DISABLE_VECTOR_ANNOTATION _DISABLE_STRING_ANNOTATION _DISABLE_OPTIONAL_ANNOTATION)
     endif()
 
-    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND MSVC)
+    # ★ 这里也统一改用前端变体判断
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
         if (SANITIZER STREQUAL "address")
             target_compile_options(project_sanitizer INTERFACE -fsanitize=address -g /Oy-)
             target_link_options(project_sanitizer INTERFACE /wholearchive:clang_rt.asan_dynamic_runtime_thunk-x86_64.lib)
@@ -188,8 +182,10 @@ endif()
 message(STATUS "glslc: ${GLSLC_EXECUTABLE}")
 
 function(add_glsl_shader TARGET NAME)
-    set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/src)
-    set(OUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/build/${NAME})
+    # assets 位于 mycraft/ 业务层子目录，使用 PROJECT_SOURCE_DIR 显式定位，
+    # 不依赖调用点的 CMAKE_CURRENT_SOURCE_DIR（原写法过于隐式）
+    set(SRC_DIR ${PROJECT_SOURCE_DIR}/mycraft/assets/shaders/src)
+    set(OUT_DIR ${PROJECT_SOURCE_DIR}/mycraft/assets/shaders/build/${NAME})
     file(MAKE_DIRECTORY ${OUT_DIR})
 
     set(VERT_GLSL ${SRC_DIR}/${NAME}.vert)

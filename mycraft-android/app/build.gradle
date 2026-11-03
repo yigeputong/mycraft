@@ -1,0 +1,78 @@
+plugins {
+    id 'com.android.application'
+}
+
+// 默认使用 CMake 构建
+def buildWithCMake = true
+
+def vcpkgRoot = System.getenv("VCPKG_ROOT") ?: "/path/to/your/vcpkg" 
+// 转换为正斜杠，防止 CMake 路径解析错误
+vcpkgRoot = vcpkgRoot.replace("\\", "/")
+
+android {
+    namespace = "com.yigeputong.mycraft"
+    compileSdkVersion 35
+
+    ndkVersion = "30.0.16248370"
+
+    defaultConfig {
+        minSdkVersion 28
+        targetSdkVersion 35
+        versionCode 1
+        versionName "1.0"
+
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=c++_shared",
+                        "-DCMAKE_TOOLCHAIN_FILE=${vcpkgRoot}/scripts/buildsystems/vcpkg.cmake",
+                        "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=${android.ndkDirectory}/build/cmake/android.toolchain.cmake"
+
+                cppFlags "-std=c++23 -fexceptions -frtti"
+
+                abiFilters 'arm64-v8a', 'x86_64'
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // 替换为官方推荐的新版规则文件
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    if (!project.hasProperty('EXCLUDE_NATIVE_LIBS')) {
+        sourceSets.main {
+            jniLibs.srcDir 'libs'
+        }
+
+        externalNativeBuild {
+            if (buildWithCMake) {
+                cmake {
+                    path '../../CMakeLists.txt'
+                    version "3.22.1"
+                }
+            } else {
+                ndkBuild {
+                    path 'jni/Android.mk'
+                }
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            assets.srcDirs = ['../../mycraft/assets']
+        }
+    }
+
+    lint {
+        abortOnError = false
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+}

@@ -3,23 +3,30 @@
     "assimp",
     {
       "name": "glad",
-      "features": ["extensions"]
+      "features": [
+        "extensions"
+      ]
     },
     "glm",
     "nlohmann-json",
-
     {
       "name": "sdl3",
-      "features": ["vulkan"]
+      "features": [
+        "vulkan"
+      ]
     },
     {
       "name": "sdl3-image",
-      "features": ["jpeg", "png"]
+      "features": [
+        "jpeg",
+        "png"
+      ]
     },
     "sdl3-net",
-
+    "libiconv",
     "volk",
     "vulkan",
     "vulkan-memory-allocator"
-  ]
+  ],
+  "builtin-baseline": "c653b77e80d1b61e5f5bd2eabf15bc6ec3bfe7ad"
 }

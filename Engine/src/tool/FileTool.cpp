@@ -57,6 +57,13 @@ namespace Eng::tool {
         return WriteMemoryToFile(path, data);
     }
 
+    void EnsureDirectoryExists(const std::string& dirPath) {
+        std::string fullPath = GetWritablePath(dirPath);
+        // SDL_CreateDirectory 默认只能创建一层，这里为了防错，暴力递归调用一下
+        // 或者直接用它自带的 SDL_EnumerateDirectory 行为，如果存在就返回 true
+        SDL_CreateDirectory(fullPath.c_str()); 
+    }
+
     std::string GetWritablePath(const std::string& filename) {
         // 判断是否为移动端 (Android 或 iOS)
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)

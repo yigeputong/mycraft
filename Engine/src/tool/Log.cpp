@@ -1,24 +1,11 @@
 #include "Engine/tool/Log.h"
 #include "Engine/tool/FileTool.h"
-#include <chrono>
-#include <format>
+#include "Engine/tool/Platform.h"
 #include <SDL3/SDL_log.h>
 
 namespace Eng::tool {
 
     namespace {
-        std::string GetTime() {
-            using namespace std::chrono;
-            auto now = system_clock::now();
-            auto secs = floor<seconds>(now);
-            auto ms = duration_cast<milliseconds>(now - secs);
-
-            static const auto tz = current_zone();
-            auto local = zoned_time{tz, secs};
-
-            return std::format("{:%m-%d %H:%M:%S}.{:03d}", local.get_local_time(), ms.count());
-        }
-
         constexpr const char* ColorCode(LogLevel lv) {
             switch (lv) {
                 case LogLevel::FATAL:
@@ -42,14 +29,11 @@ namespace Eng::tool {
             }
         }
 
-        // 辅助函数：安全打开日志文件
-        static SDL_IOStream* OpenLogFile(const std::string& filename) {
-            std::string fullPath = tool::GetWritablePath("logs/" + filename);
-#if defined(__ANDROID__) || defined(__APPLE__)
-            std::string dirPath = tool::GetWritablePath("logs");
-            SDL_CreateDirectory(dirPath.c_str());
-#endif
-            return SDL_IOFromFile(fullPath.c_str(), "a"); // "a" 代表追加模式
+        SDL_IOStream* OpenLogFile(const std::string& filename) {
+            // 统一在 FileTool 里创建目录，Log 层完全无感知
+            EnsureDirectoryExists("logs");
+            std::string const fullPath = GetWritablePath("logs/" + filename);
+            return SDL_IOFromFile(fullPath.c_str(), "a");
         }
 
     }
@@ -108,7 +92,8 @@ void Log::log(LogLevel level, const std::string& message) {
 void Log::out(LogLevel level, const std::string& message) {
     std::lock_guard<std::mutex> lock(m_mutex);
     
-    std::string timeStr = GetTime();
+    // 统一调用 Platform 接口获取时间
+    std::string timeStr = GetCurrentTimeString(); 
     std::string levelStr = LevelToString(level);
 
     // 1. 写入文件
@@ -128,10 +113,10 @@ void Log::out(LogLevel level, const std::string& message) {
 }
 
 void Log::StaticLog(LogLevel level, const std::string& message) {
-    // 静态方法无法访问实例的 m_minLevel，默认 INFO 以上才输出
+    // 静态日志同理
     if (level < LogLevel::INFO) return;
 
-    std::string timeStr = GetTime();
+    std::string timeStr = GetCurrentTimeString();
     std::string levelStr = LevelToString(level);
 
     std::string consoleLine = std::string(ColorCode(level)) 

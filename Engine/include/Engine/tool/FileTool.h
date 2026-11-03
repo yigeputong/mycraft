@@ -13,6 +13,8 @@ namespace Eng::tool {
     bool WriteMemoryToFile(const std::string& path, const std::vector<uint8_t>& data);
     bool WriteStringToFile(const std::string& path, const std::string& content);
 
+    void EnsureDirectoryExists(const std::string& dirPath);
+
     // 获取 Android 可写的沙盒路径（桌面端直接返回空字符串，意味着用当前路径）
     std::string GetWritablePath(const std::string& filename);
 

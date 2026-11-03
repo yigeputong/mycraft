@@ -60,9 +60,24 @@ TexturePtr AssetService::LoadTexture(const std::string& path) {
     auto it = m_textureCache.find(path);
     if (it != m_textureCache.end()) return it->second;
 
-    SDL_Surface* loaded = IMG_Load(path.c_str());
+    // 不再直接让 IMG_Load 去碰路径，而是通过 ReadFile 读入内存
+    auto fileData = ReadFile(path);
+    if (!fileData) {
+        // ReadFile 里面已经打印了 logError，这里直接返回
+        return nullptr;
+    }
+
+    // 从内存创建 SDL_IOStream
+    SDL_IOStream* io = SDL_IOFromConstMem(fileData->data(), fileData->size());
+    if (!io) {
+        logError(m_logger, "[AssetService] SDL_IOFromConstMem failed: " << SDL_GetError());
+        return nullptr;
+    }
+
+    // 从 IOStream 加载 Surface（第二个参数 true 表示加载完后自动关闭 io）
+    SDL_Surface* loaded = IMG_Load_IO(io, true);
     if (!loaded) {
-        logError(m_logger, "[AssetService] IMG_Load failed: " << path << " - " << SDL_GetError());
+        logError(m_logger, "[AssetService] IMG_Load_IO failed: " << path << " - " << SDL_GetError());
         return nullptr;
     }
 
@@ -87,13 +102,14 @@ TexturePtr AssetService::LoadTexture(const std::string& path) {
     tci.minFilter = rhi::MinFilterMode::Nearest_Mipmap_Linear; 
     tci.wrapU = rhi::WrapMode::ClampToEdge;
     tci.wrapV = rhi::WrapMode::ClampToEdge;
-    tci.enableAnisotropy = false; // 普通 2D 贴图/UI 通常不需要各向异性
+    tci.enableAnisotropy = false;
 
     TexturePtr tex = m_rhi->CreateTexture(tci);
     SDL_DestroySurface(surf);
 
     if (tex) m_textureCache[path] = tex;
     else     logError(m_logger, "[AssetService] Failed to create texture: " << path);
+    
     return tex;
 }
 
@@ -131,13 +147,24 @@ ShaderPtr AssetService::LoadShader(const rhi::ShaderCreateInfo& info) {
 // ============================================================
 // ReadFile —— SDL_IOStream 读盘去重
 // ============================================================
-std::shared_ptr<const std::vector<std::byte>>
-AssetService::ReadFile(const std::string& path) {
-    if (auto it = m_fileReadCache.find(path); it != m_fileReadCache.end()) {
+std::shared_ptr<const std::vector<std::byte>> AssetService::ReadFile(const std::string& path) {
+#ifdef __ANDROID__
+    // 核心大招：Android 端强制剥离 "assets/" 前缀
+    std::string actualPath = path;
+    if (actualPath.rfind("assets/", 0) == 0) {
+        actualPath = actualPath.substr(7); // 剥离前 7 个字符
+    }
+#else
+    const std::string& actualPath = path;
+#endif
+
+    // 缓存检查用 actualPath，防止桌面端和安卓端串包
+    if (auto it = m_fileReadCache.find(actualPath); it != m_fileReadCache.end()) {
         if (auto locked = it->second.lock()) return locked;
     }
 
-    SDL_IOStream* io = SDL_IOFromFile(path.c_str(), "rb");
+    // 打开文件用 actualPath
+    SDL_IOStream* io = SDL_IOFromFile(actualPath.c_str(), "rb");
     if (!io) {
         logError(m_logger, "[AssetService] ReadFile: SDL_IOFromFile failed: "
                            << path << " - " << SDL_GetError());

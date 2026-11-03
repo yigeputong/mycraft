@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <string>
 #include <unordered_map>
+#include <cmath>
 
 namespace game::client {
 

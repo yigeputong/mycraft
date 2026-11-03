@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <string>
 
 namespace Eng::tool {
 
@@ -24,6 +25,9 @@ bool IsMobilePlatform();
 //   桌面端: max(1, hw - 2)  （给主线程和渲染线程预留 2 核）
 //   移动端: min(hw, 4)      （大小核异构，限制上限防 E-core 抖动）
 uint32_t GetRecommendedWorkerThreads();
+
+// 获取格式化的当前本地时间字符串 (格式: MM-DD HH:MM:SS.mmm)
+std::string GetCurrentTimeString();
 
 // ==========================================
 // CPU 指令集探测（供 SIMD 运行时分发使用）

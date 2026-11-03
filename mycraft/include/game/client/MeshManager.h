@@ -1,6 +1,7 @@
 #pragma once
 #include "game/core/World.h"
 #include <Engine/service/IRenderService.h>
+#include "Engine/tool/RAIIThread.h"
 #include <mutex>
 #include <condition_variable>
 #include <queue>
@@ -36,17 +37,20 @@ public:
     void Stop();
 
     void Submit(uint64_t key, std::shared_ptr<Chunk> chunk, 
-                         std::shared_ptr<Chunk> nXm, std::shared_ptr<Chunk> nXp, 
-                         std::shared_ptr<Chunk> nZm, std::shared_ptr<Chunk> nZp);
+                std::shared_ptr<Chunk> nXm, std::shared_ptr<Chunk> nXp, 
+                std::shared_ptr<Chunk> nZm, std::shared_ptr<Chunk> nZp);
 
     void DrainResults(std::function<void(MeshResult&&)>&& onComplete);
 
     ~MeshManager() { Stop(); }
 private:
-    void WorkerLoop();
+    // 签名修改：接收 stop_token
+    void WorkerLoop(const std::stop_token& st);
     static void BuildChunkMeshData(MeshTask& task, MeshResult& result);
 
-    std::vector<std::thread>              m_workers;
+    // 线程池替换为 RAIIThread
+    std::vector<std::unique_ptr<Eng::tool::RAIIThread>> m_workers;
+    
     std::mutex                            m_taskMutex;
     std::condition_variable               m_taskCv;
     std::queue<std::shared_ptr<MeshTask>> m_taskQueue;

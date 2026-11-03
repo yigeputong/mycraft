@@ -6,7 +6,7 @@
 
 namespace Eng::tool {
 
-enum class KeyCode {
+enum class KeyCode : std::uint8_t {
     None,
 
     A, B, C, D, E, F, G, H, I, J, K, L, M,
@@ -43,7 +43,7 @@ public:
     // 鼠标相对移动（自上一帧以来的偏移）
     static glm::vec2 GetMouseDelta();
     // 获取垂直滚轮偏移量（正=向上滚动）
-    static float GetScrollDelta(); ;
+    static float GetScrollDelta();
     // 设置鼠标位置（用于重置或锁定）
     static void SetMousePosition(SDL_Window* window, float x, float y);
 

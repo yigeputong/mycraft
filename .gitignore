@@ -1,9 +1,58 @@
+# =========================
+# C++ / CMake / vcpkg
+# =========================
+build/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+vcpkg_installed/
+*.obj
+*.o
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.pdb
+
+# 着色器编译产物（源码保留，产物不入库）
+assets/shaders/build/
+
+# 运行时文件
+**/imgui.ini
+
+# =========================
+# Android / Gradle / Java
+# =========================
+mycraft-android/.gradle/
+mycraft-android/build/
+mycraft-android/app/build/
+mycraft-android/app/.cxx/
+mycraft-android/local.properties
+mycraft-android/.idea/
+*.apk
+*.aab
+*.keystore
+!debug.keystore
+
+# =========================
+# IDE / 编辑器
+# =========================
 .vs/
 .vscode/
+.idea/
+*.swp
+*.swo
+*.suo
+*.user
+*.sln
+*.vcxproj*
 
-.cache/
-**/build*/
-dist/
-CMakeUserPresets.json
-
-**/imgui.ini
+# =========================
+# 系统文件
+# =========================
+.DS_Store
+Thumbs.db

@@ -2,28 +2,34 @@
 #include "game/client/MeshBuilderUtils.h"
 #include "game/client/TextureAtlas.h"
 #include "game/core/BlockRegistry.h"
+#include "Engine/tool/Platform.h"
 #include <algorithm>
 
 namespace game::client {
 
-// ============================================================
-// 线程生命周期管理
-// ============================================================
 void MeshManager::Start() {
-    if (!m_workers.empty()) return; // 已启动
+    if (!m_workers.empty()) return;
     m_stop = false;
 
-    auto threadCount = std::thread::hardware_concurrency();
+    // 使用平台抽象获取推荐线程数（移动端 2~4，桌面端 hw-2）
+    unsigned n = Eng::tool::GetRecommendedWorkerThreads();
 
-    if (threadCount == 0) threadCount = 4; // 兜底
-
-    for (unsigned int i = 0; i < threadCount; ++i) {
-        m_workers.emplace_back(&MeshManager::WorkerLoop, this);
+    for (unsigned int i = 0; i < n; ++i) {
+        m_workers.push_back(std::make_unique<Eng::tool::RAIIThread>(
+            [this](const std::stop_token& st) { WorkerLoop(st); }
+        ));
     }
 }
 
 void MeshManager::Stop() {
     if (m_workers.empty()) return;
+
+    // 1. 请求所有线程停止
+    for (auto& w : m_workers) {
+        w->RequestStop();
+    }
+
+    // 2. 清空任务队列，唤醒可能阻塞在 wait 的线程
     {
         std::lock_guard<std::mutex> lock(m_taskMutex);
         m_stop = true;
@@ -31,18 +37,16 @@ void MeshManager::Stop() {
     }
     m_taskCv.notify_all(); 
     
-    // 必须唤醒可能因为结果队列满而阻塞的线程
+    // 3. 唤醒可能因为结果队列满而阻塞的线程
+    {
+        std::lock_guard<std::mutex> lock(m_resultMutex);
+    }
     m_resultCv.notify_all(); 
 
-    for (auto& t : m_workers) {
-        if (t.joinable()) t.join();
-    }
+    // 4. 清空 vector，触发 RAIIThread 的析构（内部自动 join）
     m_workers.clear();
 }
 
-// ============================================================
-// 任务提交
-// ============================================================
 void MeshManager::Submit(uint64_t key, std::shared_ptr<Chunk> chunk, 
                          std::shared_ptr<Chunk> nXm, std::shared_ptr<Chunk> nXp, 
                          std::shared_ptr<Chunk> nZm, std::shared_ptr<Chunk> nZp) 
@@ -54,7 +58,7 @@ void MeshManager::Submit(uint64_t key, std::shared_ptr<Chunk> chunk,
     task->nXp = std::move(nXp);
     task->nZm = std::move(nZm);
     task->nZp = std::move(nZp);
-    task->reg = m_registry; // 注入注册表
+    task->reg = m_registry;
 
     {
         std::lock_guard<std::mutex> lock(m_taskMutex);
@@ -63,17 +67,13 @@ void MeshManager::Submit(uint64_t key, std::shared_ptr<Chunk> chunk,
     m_taskCv.notify_one();
 }
 
-// ============================================================
-// 结果收集（主线程调用）
-// ============================================================
-
 void MeshManager::DrainResults(std::function<void(MeshResult&&)>&& onComplete) {
     std::queue<MeshResult> localQueue;
     {
         std::lock_guard<std::mutex> lock(m_resultMutex);
         std::swap(localQueue, m_resultQueue);
     }
-    m_resultCv.notify_all(); // 唤醒因为队列满而卡住的 Worker
+    m_resultCv.notify_all();
 
     while (!localQueue.empty()) {
         onComplete(std::move(localQueue.front()));
@@ -81,17 +81,18 @@ void MeshManager::DrainResults(std::function<void(MeshResult&&)>&& onComplete) {
     }
 }
 
-// ============================================================
-// Worker 线程主循环
-// ============================================================
-
-void MeshManager::WorkerLoop() {
-    while (true) {
+void MeshManager::WorkerLoop(const std::stop_token& st) {
+    while (!st.stop_requested()) {
         std::shared_ptr<MeshTask> task;
         {
             std::unique_lock<std::mutex> lock(m_taskMutex);
-            m_taskCv.wait(lock, [this] { return m_stop || !m_taskQueue.empty(); });
-            if (m_stop && m_taskQueue.empty()) return;
+            m_taskCv.wait(lock, [this, &st] { 
+                return st.stop_requested() || m_stop || !m_taskQueue.empty(); 
+            });
+            
+            if ((st.stop_requested() || m_stop) && m_taskQueue.empty()) return;
+            if (m_taskQueue.empty()) continue;
+            
             task = std::move(m_taskQueue.front());
             m_taskQueue.pop();
         }
@@ -103,8 +104,10 @@ void MeshManager::WorkerLoop() {
         {
             std::unique_lock<std::mutex> lock(m_resultMutex);
             // 背压核心：如果结果攒了 64 个还没消费，Worker 停止干活，防止内存爆炸
-            m_resultCv.wait(lock, [this] { return m_stop || m_resultQueue.size() < 64; });
-            if (m_stop) return;
+            m_resultCv.wait(lock, [this, &st] { 
+                return st.stop_requested() || m_stop || m_resultQueue.size() < 64; 
+            });
+            if (st.stop_requested() || m_stop) return;
             m_resultQueue.push(std::move(result));
         }
     }

@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <memory>
 
-int main() {
+static int MycraftMain(int argc, char* argv[]) {
     try {
         Eng::EngineConfig engConfig = {
             .mode          = Eng::Mode::SinglePlayer,
@@ -40,3 +40,16 @@ int main() {
         return 1;
     }
 }
+
+// 根据平台决定入口函数
+#if defined(__ANDROID__)
+// Android 专属入口：纯 C 风格，强制可见，让 Java 层能通过 dlsym 找到
+extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char* argv[]) {
+    return MycraftMain(argc, argv);
+}
+#else
+// 桌面端（Windows/Linux/macOS）标准入口
+int main(int argc, char* argv[]) {
+    return MycraftMain(argc, argv);
+}
+#endif
