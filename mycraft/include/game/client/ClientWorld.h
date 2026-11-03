@@ -1,6 +1,9 @@
 #pragma once
 #include "game/core/World.h"
-#include "Engine/service/IRenderService.h"
+
+#include <glm/glm.hpp>
+
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -35,7 +38,8 @@ public:
     bool IsSolidAt(int wx, int wy, int wz) const;
 
     void UpdateStreaming(const glm::vec3& cameraPos, int renderDistance,
-                         std::function<void(int, int)>&& sendRequest);
+                         std::function<void(int, int)>&& sendRequest,
+                         std::function<void(int, int, const ClientChunk&)>&& onUnload);
 
     void MarkDirty(uint64_t key);
     std::vector<uint64_t> FetchDirtyChunks(size_t maxCount);

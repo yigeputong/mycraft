@@ -215,9 +215,7 @@ TexturePtr OpenGLRenderService::CreateTexture(const rhi::TextureCreateInfo& info
     }
     if (!info.pixels.data() || info.width <= 0 || info.height <= 0) return nullptr;
 
-    TextureHandle th = CreateTextureInternal(
-        reinterpret_cast<const uint8_t*>(info.pixels.data()),
-        info.width, info.height, info.requestedMips);
+    TextureHandle th = CreateTextureInternal(info);
     if (th == 0) return nullptr;
     return TexturePtr(new Texture(th), [this](Texture* t) {
         this->DestroyTextureInternal(t->GetHandle());
@@ -413,43 +411,71 @@ void OpenGLRenderService::DrawIndexedIndirect(const BufferPtr& indirectBuffer, u
 // ==========================================
 // 内部实现辅助
 // ==========================================
-TextureHandle OpenGLRenderService::CreateTextureInternal(const uint8_t* rgba, int w, int h, int requestedMips) {
+TextureHandle OpenGLRenderService::CreateTextureInternal(const rhi::TextureCreateInfo& info) {
+    if (!info.pixels.data() || info.width <= 0 || info.height <= 0)
+        return 0;
+
     GLuint tex;
     glCreateTextures(GL_TEXTURE_2D, 1, &tex);
 
-    int maxPossibleMips = static_cast<int>(std::floor(std::log2(std::max(w, h)))) + 1;
+    int maxPossibleMips = static_cast<int>(std::floor(std::log2(std::max(info.width, info.height)))) + 1;
     int mipLevels = 1;
-    if (requestedMips == 0) {
+    if (info.requestedMips == 0) {
         if (m_renderConfig.mipmapLevels > 0) {
             mipLevels = std::min(maxPossibleMips, m_renderConfig.mipmapLevels + 1);
         }
     } else {
-        mipLevels = std::min(maxPossibleMips, requestedMips);
+        mipLevels = std::min(maxPossibleMips, info.requestedMips);
     }
 
-    glTextureStorage2D(tex, mipLevels, GL_RGBA8, w, h);
-    glTextureSubImage2D(tex, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glTextureStorage2D(tex, mipLevels, GL_RGBA8, info.width, info.height);
+    glTextureSubImage2D(tex, 0, 0, 0, info.width, info.height, GL_RGBA, GL_UNSIGNED_BYTE, info.pixels.data());
     
     if (mipLevels > 1) {
         glGenerateTextureMipmap(tex);
-        glTextureParameteri(tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
-    } else {
-        glTextureParameteri(tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     }
 
-    glTextureParameteri(tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTextureParameteri(tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTextureParameteri(tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // 映射 MAG_FILTER
+    GLint glMag = (info.magFilter == rhi::FilterMode::Linear) ? GL_LINEAR : GL_NEAREST;
+    glTextureParameteri(tex, GL_TEXTURE_MAG_FILTER, glMag);
 
-    if (mipLevels > 1 && m_renderConfig.enableAnisotropic && GLAD_GL_EXT_texture_filter_anisotropic) {
+    // 映射 MIN_FILTER
+    GLint glMin = GL_NEAREST;
+    switch (info.minFilter) {
+        case rhi::MinFilterMode::Nearest:                glMin = GL_NEAREST; break;
+        case rhi::MinFilterMode::Linear:                 glMin = GL_LINEAR; break;
+        case rhi::MinFilterMode::Nearest_Mipmap_Nearest: glMin = GL_NEAREST_MIPMAP_NEAREST; break;
+        case rhi::MinFilterMode::Linear_Mipmap_Nearest:  glMin = GL_LINEAR_MIPMAP_NEAREST; break;
+        case rhi::MinFilterMode::Nearest_Mipmap_Linear:  glMin = GL_NEAREST_MIPMAP_LINEAR; break;
+        case rhi::MinFilterMode::Linear_Mipmap_Linear:   glMin = GL_LINEAR_MIPMAP_LINEAR; break;
+        default:                                         glMin = GL_NEAREST; break;
+    }
+    
+    // 如果没有生成 Mipmap，必须降级，否则采样全黑
+    if (mipLevels <= 1) {
+        if (glMin == GL_NEAREST_MIPMAP_NEAREST || glMin == GL_NEAREST_MIPMAP_LINEAR) glMin = GL_NEAREST;
+        else if (glMin == GL_LINEAR_MIPMAP_NEAREST || glMin == GL_LINEAR_MIPMAP_LINEAR) glMin = GL_LINEAR;
+    }
+    glTextureParameteri(tex, GL_TEXTURE_MIN_FILTER, glMin);
+
+    // 映射 WRAP_MODE
+    GLint glWrapU = (info.wrapU == rhi::WrapMode::Repeat) ? GL_REPEAT : 
+                    (info.wrapU == rhi::WrapMode::MirroredRepeat ? GL_MIRRORED_REPEAT : GL_CLAMP_TO_EDGE);
+    GLint glWrapV = (info.wrapV == rhi::WrapMode::Repeat) ? GL_REPEAT : 
+                    (info.wrapV == rhi::WrapMode::MirroredRepeat ? GL_MIRRORED_REPEAT : GL_CLAMP_TO_EDGE);
+    glTextureParameteri(tex, GL_TEXTURE_WRAP_S, glWrapU);
+    glTextureParameteri(tex, GL_TEXTURE_WRAP_T, glWrapV);
+
+    // 各向异性过滤
+    if (mipLevels > 1 && info.enableAnisotropy && m_renderConfig.enableAnisotropic && GLAD_GL_EXT_texture_filter_anisotropic) {
         GLfloat maxAniso = 0.0f;
         glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &maxAniso);
-        float aniso = std::min(m_renderConfig.maxAnisotropy, maxAniso);
+        float aniso = std::min(static_cast<float>(m_renderConfig.maxAnisotropy), maxAniso);
         glTextureParameterf(tex, GL_TEXTURE_MAX_ANISOTROPY_EXT, aniso);
     }
 
     TextureHandle handle = m_nextTextureHandle++;
-    m_textures[handle] = { tex, w, h, GL_RGBA };
+    m_textures[handle] = { tex, info.width, info.height, GL_RGBA };
     return handle;
 }
 

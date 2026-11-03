@@ -671,16 +671,21 @@ ShaderHandle VulkanRenderService::CreateShaderInternal(const rhi::ShaderCreateIn
     return handle;
 }
 
-TextureHandle VulkanRenderService::CreateTextureInternal(const uint8_t* rgba, int w, int h, int requestedMips) {
-    TextureInternal internal;
-    VkDeviceSize imageSize = static_cast<size_t>(w) * h * 4;
+TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreateInfo& info) {
+    if (!info.pixels.data() || info.width <= 0 || info.height <= 0)
+        return 0;
 
-    uint32_t maxPossibleMips = static_cast<uint32_t>(std::floor(std::log2(std::max(w, h)))) + 1;
+    TextureInternal internal;
+    VkDeviceSize imageSize = static_cast<size_t>(info.width) * info.height * 4;
+
+    uint32_t maxPossibleMips = static_cast<uint32_t>(std::floor(std::log2(std::max(info.width, info.height)))) + 1;
     uint32_t mipLevels = 1;
-    if (requestedMips == 0) {
-        if (m_renderConfig.mipmapLevels > 0) mipLevels = std::min(maxPossibleMips, static_cast<uint32_t>(m_renderConfig.mipmapLevels + 1));
+    if (info.requestedMips == 0) {
+        if (m_renderConfig.mipmapLevels > 0) {
+            mipLevels = std::min(maxPossibleMips, static_cast<uint32_t>(m_renderConfig.mipmapLevels + 1));
+        }
     } else {
-        mipLevels = std::min(maxPossibleMips, static_cast<uint32_t>(requestedMips));
+        mipLevels = std::min(maxPossibleMips, static_cast<uint32_t>(info.requestedMips));
     }
 
     VkBuffer stagingBuf; VmaAllocation stagingAlloc;
@@ -690,12 +695,12 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const uint8_t* rgba, in
 
     void* mapped;
     vmaMapMemory(m_allocator, stagingAlloc, &mapped);
-    memcpy(mapped, rgba, imageSize);
+    memcpy(mapped, info.pixels.data(), imageSize);
     vmaUnmapMemory(m_allocator, stagingAlloc);
 
     vk::ImageCreateInfo imageInfo{
         .imageType = vk::ImageType::e2D, .format = vk::Format::eR8G8B8A8Unorm,
-        .extent = { static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1 },
+        .extent = { static_cast<uint32_t>(info.width), static_cast<uint32_t>(info.height), 1 },
         .mipLevels = mipLevels, .arrayLayers = 1, .samples = vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
         .usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eSampled,
@@ -718,7 +723,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const uint8_t* rgba, in
     vk::BufferImageCopy region{
         .bufferOffset = 0, .bufferRowLength = 0, .bufferImageHeight = 0,
         .imageSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
-        .imageOffset = { 0, 0, 0 }, .imageExtent = { static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1 }
+        .imageOffset = { 0, 0, 0 }, .imageExtent = { static_cast<uint32_t>(info.width), static_cast<uint32_t>(info.height), 1 }
     };
     cmd.copyBufferToImage(stagingBuf, internal.image, vk::ImageLayout::eTransferDstOptimal, region);
 
@@ -731,7 +736,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const uint8_t* rgba, in
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier0 });
 
-        int32_t mipW = w, mipH = h;
+        int32_t mipW = info.width, mipH = info.height;
         for (uint32_t i = 1; i < mipLevels; ++i) {
             vk::ImageMemoryBarrier2 dstBarrier{
                 .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eNone,
@@ -762,9 +767,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const uint8_t* rgba, in
             if (mipW > 1) mipW /= 2;
             if (mipH > 1) mipH /= 2;
         }
-    }
 
-    if (mipLevels > 1) {
         vk::ImageMemoryBarrier2 lastBarrier{
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
             .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
@@ -799,11 +802,48 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const uint8_t* rgba, in
     };
     internal.view = vk::raii::ImageView(m_device, viewInfo);
 
+    // ★ 核心修改：构建 Sampler
+    vk::Filter vkMagFilter = (info.magFilter == rhi::FilterMode::Linear) ? vk::Filter::eLinear : vk::Filter::eNearest;
+
+    vk::Filter vkMinFilter = vk::Filter::eNearest;
+    vk::SamplerMipmapMode vkMipmapMode = vk::SamplerMipmapMode::eNearest;
+    switch (info.minFilter) {
+        case rhi::MinFilterMode::Nearest:
+            vkMinFilter = vk::Filter::eNearest; vkMipmapMode = vk::SamplerMipmapMode::eNearest; break;
+        case rhi::MinFilterMode::Linear:
+            vkMinFilter = vk::Filter::eLinear; vkMipmapMode = vk::SamplerMipmapMode::eNearest; break;
+        case rhi::MinFilterMode::Nearest_Mipmap_Nearest:
+            vkMinFilter = vk::Filter::eNearest; vkMipmapMode = vk::SamplerMipmapMode::eNearest; break;
+        case rhi::MinFilterMode::Linear_Mipmap_Nearest:
+            vkMinFilter = vk::Filter::eLinear; vkMipmapMode = vk::SamplerMipmapMode::eNearest; break;
+        case rhi::MinFilterMode::Nearest_Mipmap_Linear:
+            vkMinFilter = vk::Filter::eNearest; vkMipmapMode = vk::SamplerMipmapMode::eLinear; break;
+        case rhi::MinFilterMode::Linear_Mipmap_Linear:
+            vkMinFilter = vk::Filter::eLinear; vkMipmapMode = vk::SamplerMipmapMode::eLinear; break;
+    }
+    // 没 Mipmap 时降级
+    if (mipLevels <= 1) vkMipmapMode = vk::SamplerMipmapMode::eNearest;
+
+    auto mapWrap = [](rhi::WrapMode w) -> vk::SamplerAddressMode {
+        switch (w) {
+            case rhi::WrapMode::Repeat: return vk::SamplerAddressMode::eRepeat;
+            case rhi::WrapMode::MirroredRepeat: return vk::SamplerAddressMode::eMirroredRepeat;
+            default: return vk::SamplerAddressMode::eClampToEdge;
+        }
+    };
+    vk::SamplerAddressMode vkWrapU = mapWrap(info.wrapU);
+    vk::SamplerAddressMode vkWrapV = mapWrap(info.wrapV);
+
     vk::SamplerCreateInfo samplerInfo{
-        .magFilter = vk::Filter::eNearest, .minFilter = vk::Filter::eNearest, .mipmapMode = vk::SamplerMipmapMode::eLinear,
-        .addressModeU = vk::SamplerAddressMode::eClampToEdge, .addressModeV = vk::SamplerAddressMode::eClampToEdge, .addressModeW = vk::SamplerAddressMode::eClampToEdge,
-        .anisotropyEnable = (mipLevels > 1 && m_renderConfig.enableAnisotropic) ? vk::True : vk::False,
-        .maxAnisotropy = m_renderConfig.maxAnisotropy, .maxLod = static_cast<float>(mipLevels)
+        .magFilter = vkMagFilter, 
+        .minFilter = vkMinFilter, 
+        .mipmapMode = vkMipmapMode,
+        .addressModeU = vkWrapU, 
+        .addressModeV = vkWrapV, 
+        .addressModeW = vkWrapU,
+        .anisotropyEnable = (mipLevels > 1 && info.enableAnisotropy && m_renderConfig.enableAnisotropic) ? vk::True : vk::False,
+        .maxAnisotropy = static_cast<float>(m_renderConfig.maxAnisotropy), 
+        .maxLod = static_cast<float>(mipLevels)
     };
     internal.sampler = vk::raii::Sampler(m_device, samplerInfo);
 
@@ -984,7 +1024,7 @@ BufferPtr VulkanRenderService::CreateBuffer(const rhi::BufferCreateInfo& info) {
 TexturePtr VulkanRenderService::CreateTexture(const rhi::TextureCreateInfo& info) {
     if (info.format != rhi::TextureFormat::RGBA8_UNORM) return nullptr;
     if (!info.pixels.data() || info.width <= 0 || info.height <= 0) return nullptr;
-    TextureHandle th = CreateTextureInternal(reinterpret_cast<const uint8_t*>(info.pixels.data()), info.width, info.height, info.requestedMips);
+    TextureHandle th = CreateTextureInternal(info);
     if (th == 0) return nullptr;
     return TexturePtr(new Texture(th), [this](Texture* t) {
         this->DestroyTextureInternal(t->GetHandle());

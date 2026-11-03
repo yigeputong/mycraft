@@ -77,6 +77,8 @@ private:
     game::BlockRegistry m_blockRegistry;
     game::GameContext   m_ctx{ m_blockRegistry };
     int                 m_renderDistance = 32;
+    int                 m_lodRenderDistance = m_renderDistance * 4;
+    bool                m_enableLod = true;
 
     // 核心渲染资产 (地形、天空、实体、手部 Shader 及贴图)
     Eng::service::ShaderPtr      m_cubeShader;

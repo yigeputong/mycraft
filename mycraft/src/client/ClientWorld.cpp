@@ -108,13 +108,14 @@ std::vector<uint64_t> ClientWorld::FetchDirtyChunks(size_t maxCount) {
 }
 
 void ClientWorld::UpdateStreaming(const glm::vec3& cameraPos, int renderDistance,
-                                  std::function<void(int, int)>&& sendRequest) {
+                                  std::function<void(int, int)>&& sendRequest,
+                                  std::function<void(int, int, const ClientChunk&)>&& onUnload) {
     int pcx = static_cast<int>(std::floor(cameraPos.x)) >> 4;
     int pcz = static_cast<int>(std::floor(cameraPos.z)) >> 4;
 
     const int unloadR = renderDistance + 2;
 
-    // ★ 只有跨越区块边界时，才重新计算需要加载的区块并排序
+    // 只有跨越区块边界时，才重新计算需要加载的区块并排序
     if (pcx != m_lastPlayerChunkX || pcz != m_lastPlayerChunkZ) {
         m_lastPlayerChunkX = pcx;
         m_lastPlayerChunkZ = pcz;
@@ -124,6 +125,9 @@ void ClientWorld::UpdateStreaming(const glm::vec3& cameraPos, int renderDistance
             int cx = static_cast<int>(static_cast<int32_t>(it->first & 0xFFFFFFFFu));
             int cz = static_cast<int>(static_cast<int32_t>(it->first >> 32));
             if (std::abs(cx - pcx) > unloadR || std::abs(cz - pcz) > unloadR) {
+                // 在丢弃前，把真实数据传给 LOD 缓存
+                if (onUnload) onUnload(cx, cz, it->second);
+
                 m_pending.erase(it->first);
                 m_dirtyChunks.erase(it->first);
                 it = m_chunks.erase(it);

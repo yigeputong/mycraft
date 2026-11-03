@@ -79,8 +79,15 @@ TexturePtr AssetService::LoadTexture(const std::string& path) {
         static_cast<const uint8_t*>(surf->pixels), byteCount));
     tci.width         = surf->w;
     tci.height        = surf->h;
-    tci.requestedMips = 0;
+    tci.requestedMips = 0; // 0 代表按引擎全局配置生成 Mipmap
     tci.format        = rhi::TextureFormat::RGBA8_UNORM;
+    
+    // 显式配置采样参数
+    tci.magFilter = rhi::FilterMode::Nearest; 
+    tci.minFilter = rhi::MinFilterMode::Nearest_Mipmap_Linear; 
+    tci.wrapU = rhi::WrapMode::ClampToEdge;
+    tci.wrapV = rhi::WrapMode::ClampToEdge;
+    tci.enableAnisotropy = false; // 普通 2D 贴图/UI 通常不需要各向异性
 
     TexturePtr tex = m_rhi->CreateTexture(tci);
     SDL_DestroySurface(surf);

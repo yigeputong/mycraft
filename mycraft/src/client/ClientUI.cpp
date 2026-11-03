@@ -1,6 +1,7 @@
 #include "game/client/ClientUI.h"
 #include "game/Game.h"
 #include "game/client/TextureAtlas.h"
+#include "imgui.h"
 #include "Engine/tool/Window.h"
 #include <cmath>
 #include <cstdio>
@@ -285,6 +286,24 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
             ImGui::SetNextItemWidth(150);
             ImGui::SliderInt("##rd", &game.m_renderDistance, 2, 32, "%d chunks");
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+            
+            // 1. LOD 开关
+            ImGui::Checkbox("Enable LOD", &game.m_enableLod);
+            
+            // 2. LOD 视距输入框（开关关闭时置灰）
+            ImGui::BeginDisabled(!game.m_enableLod);
+            ImGui::Text("LOD Render Distance"); ImGui::SameLine(leftWidth * 1.2f);
+            ImGui::SetNextItemWidth(200); 
+            ImGui::InputInt("##lrd", &game.m_lodRenderDistance, 1, 10);
+            // 防止输入非法值
+            int minLodDist = game.m_renderDistance;
+            int maxLodDist = game.m_renderDistance * 16; // 最高支持 16 倍视距
+            if (game.m_lodRenderDistance < minLodDist) game.m_lodRenderDistance = minLodDist;
+            if (game.m_lodRenderDistance > maxLodDist) game.m_lodRenderDistance = maxLodDist;
+            ImGui::SameLine();
+            ImGui::Text("chunks");
+            ImGui::EndDisabled();
+            ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
             ImGui::Text("Fullscreen Mode"); ImGui::SameLine(leftWidth * 1.2f);
             bool fs = wcfg.fullscreen;
@@ -513,11 +532,12 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         }
     }
 
-    // ---- F3 调试面板 ----
+// ---- F3 调试面板 ----
     if (game.m_showDebug) {
         auto DrawLineBgLeft = [&](float x, float y, ImU32 color, const char* fmt, ...) {
             char buf[512];
-            va_list args; va_start(args, fmt);
+            va_list args;
+            va_start(args, fmt);
             vsnprintf(buf, sizeof(buf), fmt, args);
             va_end(args);
 
@@ -532,7 +552,8 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
 
         auto DrawLineBgRight = [&](float rightX, float y, ImU32 color, const char* fmt, ...) {
             char buf[512];
-            va_list args; va_start(args, fmt);
+            va_list args;
+            va_start(args, fmt);
             vsnprintf(buf, sizeof(buf), fmt, args);
             va_end(args);
 
@@ -550,6 +571,7 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         float lineHeight = ImGui::GetTextLineHeight() + 4.0f; 
         ImU32 white = IM_COL32(255, 255, 255, 255);
         ImU32 green = IM_COL32(85, 255, 85, 255);
+        ImU32 yellow = IM_COL32(255, 255, 85, 255);
 
         // 左侧信息
         float leftX = 14.0f;
@@ -557,7 +579,20 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         DrawLineBgLeft(leftX, dbgY, white, "%.0f fps | Frame: %.2f ms", game.m_fpsDisplay, game.m_frameMsDisplay); dbgY += lineHeight;
         DrawLineBgLeft(leftX, dbgY, white, "Server tick: %.2f ms", game.m_serverTickMs); dbgY += lineHeight;
         dbgY += lineHeight * 0.5f;
-        // 区分客户端和服务端区块
+
+        // 坐标与视角
+        int bx = (int)std::floor(game.cameraPos.x);
+        int by = (int)std::floor(game.cameraPos.y);
+        int bz = (int)std::floor(game.cameraPos.z);
+        int pcx = bx >> 4;
+        int pcz = bz >> 4;
+        DrawLineBgLeft(leftX, dbgY, white, "XYZ: %.2f / %.2f / %.2f", game.cameraPos.x, game.cameraPos.y, game.cameraPos.z); dbgY += lineHeight;
+        DrawLineBgLeft(leftX, dbgY, white, "Block: %d, %d, %d", bx, by, bz); dbgY += lineHeight;
+        DrawLineBgLeft(leftX, dbgY, white, "Chunk: %d, %d", pcx, pcz); dbgY += lineHeight;
+        DrawLineBgLeft(leftX, dbgY, white, "Yaw / Pitch: %.1f / %.1f", game.yaw, game.pitch); dbgY += lineHeight;
+        dbgY += lineHeight * 0.5f;
+
+        // 客户端和服务端区块
         DrawLineBgLeft(leftX, dbgY, white, "Data Chunks: %zu", game.m_world.GetChunks().size()); dbgY += lineHeight;
         DrawLineBgLeft(leftX, dbgY, white, "Mesh Chunks: %zu", game.m_world.GetMeshCount()); dbgY += lineHeight;
         DrawLineBgLeft(leftX, dbgY, white, "Client Pending: %zu", game.m_world.GetPendingSize()); dbgY += lineHeight;
@@ -566,13 +601,24 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         } else {
             DrawLineBgLeft(leftX, dbgY, white, "Server Chunks: N/A (Multiplayer)"); dbgY += lineHeight;
         }
-        DrawLineBgLeft(leftX, dbgY, white, "Render Distance: %d chunks", game.m_renderDistance); dbgY += lineHeight;
-        DrawLineBgLeft(leftX, dbgY, white, "Player ID: %d", game.m_myClientId); dbgY += lineHeight;
         dbgY += lineHeight * 0.5f;
 
-        int hh = (int)game.m_timeOfDay;
-        int mm = (int)((game.m_timeOfDay - hh) * 60);
-                DrawLineBgLeft(leftX, dbgY, white, "Time: %02d:%02d", hh, mm);
+        // 视距与 LOD 信息
+        DrawLineBgLeft(leftX, dbgY, white, "Native Distance: %d chunks", game.m_renderDistance); dbgY += lineHeight;
+        
+        if (game.m_enableLod) {
+            DrawLineBgLeft(leftX, dbgY, yellow, "LOD Distance: %d chunks", game.m_lodRenderDistance); dbgY += lineHeight;
+            DrawLineBgLeft(leftX, dbgY, yellow, "LOD Units: %zu", game.m_lodManager.GetLodUnitCount()); dbgY += lineHeight;
+        } else {
+            DrawLineBgLeft(leftX, dbgY, yellow, "LOD: Disabled"); dbgY += lineHeight;
+        }
+        dbgY += lineHeight * 0.5f;
+
+        DrawLineBgLeft(leftX, dbgY, white, "Player ID: %d", game.m_myClientId); dbgY += lineHeight;
+        
+        int hh = static_cast<int>(game.m_timeOfDay);
+        int mm = static_cast<int>((game.m_timeOfDay - hh) * 60);
+        DrawLineBgLeft(leftX, dbgY, white, "Time: %02d:%02d", hh, mm);
         dbgY += lineHeight;
 
         // 右侧信息

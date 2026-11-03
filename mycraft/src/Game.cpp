@@ -282,14 +282,14 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
         logInfo(logger, "[Game] Loaded Unifont with all BMP glyphs at size " << scaledFontSize);
     }
 
-    // ★ 从 Engine 拿 AssetService（生命周期归 Engine）
+    // 从 Engine 拿 AssetService（生命周期归 Engine）
     m_assetManager = engine.GetAssetService();
     if (!m_assetManager) {
         logError(logger, "[Game] AssetService is null");
         return false;
     }
 
-    // ★ 创建 SceneRenderer（构造会加载 'mesh' shader；失败抛异常）
+    // 创建 SceneRenderer（构造会加载 'mesh' shader；失败抛异常）
     try {
         m_sceneRenderer = std::make_unique<Eng::client::SceneRenderer>(renderer, m_assetManager);
     } catch (const std::exception& e) {
@@ -307,6 +307,13 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     tci.width = atlasW;
     tci.height = atlasH;
     tci.format = Eng::service::rhi::TextureFormat::RGBA8_UNORM;
+    // 给地形图集配置正确的采样器
+    tci.requestedMips = 0; // 让引擎自动生成 Mipmap
+    tci.magFilter = Eng::service::rhi::FilterMode::Nearest;                     // 近处保持方块像素风
+    tci.minFilter = Eng::service::rhi::MinFilterMode::Nearest_Mipmap_Linear;    // 远处平滑过渡防摩尔纹
+    tci.wrapU = Eng::service::rhi::WrapMode::ClampToEdge;
+    tci.wrapV = Eng::service::rhi::WrapMode::ClampToEdge;
+    tci.enableAnisotropy = true; // 倾斜看水面时用各向异性过滤
     m_atlasTexture = renderer->CreateTexture(tci);
 
     if (!m_atlasTexture) {
@@ -604,6 +611,10 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
             w.Write<int32_t>(cx);
             w.Write<int32_t>(cz);
             m_client->Send(w.GetBuffer());
+        },
+        // 卸载时拦截，存给 LOD
+        [this](int cx, int cz, const game::client::ClientChunk& chunk) {
+            m_lodManager.StoreRealChunk(cx, cz, chunk);
         }
     );
 
@@ -623,7 +634,8 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         if (cc) QueueChunkMeshTask(key);
     }
 
-    m_lodManager.Update(cameraPos, m_world, m_renderDistance, renderer);
+    int actualLodDistance = m_enableLod ? m_lodRenderDistance : 0;
+    m_lodManager.Update(cameraPos, m_world, m_renderDistance, actualLodDistance, renderer);
     
     // 每帧最多从结果队列拿 16 个出来给 GPU，不把显存撑爆
     DrainMeshResults(16); 
@@ -673,11 +685,11 @@ void MyGame::OnRender(Eng::Engine& engine) {
 
         m_sceneRenderer->BeginScene();
 
-        // 2. LOD（使用刚算好的 frameFrustum 剔除）
-        m_lodManager.CollectVisibleMeshes(frameFrustum, m_visibleLodMeshes);
-        for (const auto& mesh : m_visibleLodMeshes) {
-            m_sceneRenderer->SubmitMesh(mesh, m_lodShader, m_atlasTexture);
-        }
+        // 2. LOD（走 MDI 超级合批，不经过 SceneRenderer 的队列）
+        // 1) 根据视锥体剔除并生成 Indirect 指令
+        m_lodManager.PrepareDraw(renderer, frameFrustum);
+        // 2) 直接向底层发送 1 次 DrawIndexedIndirect 绘制全部远景
+        m_lodManager.Draw(renderer, m_cubeShader, m_atlasTexture);
 
         // 3. 其他玩家
         if (!m_playerMesh.vbo) m_playerMesh = BuildPlayerMesh();

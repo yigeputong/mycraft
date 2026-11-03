@@ -225,12 +225,42 @@ struct BufferCreateInfo {
     BufferUsage usage = BufferUsage::Vertex;
 };
 
+// 纹理坐标包裹模式
+enum class WrapMode : std::uint8_t {
+    Repeat,
+    ClampToEdge,
+    MirroredRepeat
+};
+
+// 放大过滤模式（通常不需要 Mipmap）
+enum class FilterMode : std::uint8_t {
+    Nearest,    // 像素风首选
+    Linear      // 平滑
+};
+
+// 缩小过滤模式（包含 Mipmap 策略）
+enum class MinFilterMode : std::uint8_t {
+    Nearest,
+    Linear,
+    Nearest_Mipmap_Nearest,
+    Linear_Mipmap_Nearest,
+    Nearest_Mipmap_Linear,  // 像素风远景神器
+    Linear_Mipmap_Linear    // 三线性过滤
+};
+
 struct TextureCreateInfo {
     std::span<const std::byte> pixels;
     int                        width         = 0;
     int                        height        = 0;
     int                        requestedMips = 0;
     TextureFormat              format        = TextureFormat::RGBA8_UNORM;
+
+    // 采样器配置 (赋予默认值，兼容旧代码)
+    FilterMode                 magFilter     = FilterMode::Nearest;
+    MinFilterMode              minFilter     = MinFilterMode::Nearest_Mipmap_Linear;
+    WrapMode                   wrapU         = WrapMode::ClampToEdge;
+    WrapMode                   wrapV         = WrapMode::ClampToEdge;
+    bool                       enableAnisotropy = true;
 };
 
 struct ShaderCreateInfo {

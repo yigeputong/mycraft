@@ -282,7 +282,7 @@ private:
     // =========================================================================
     // 内部辅助
     // =========================================================================
-    TextureHandle     CreateTextureInternal(const uint8_t* rgba, int w, int h, int requestedMips = 0);
+    TextureHandle     CreateTextureInternal(const rhi::TextureCreateInfo& info);
     ShaderHandle      CreateShaderInternal(const rhi::ShaderCreateInfo& info);
     FramebufferHandle CreateFramebufferInternal(const rhi::FramebufferCreateInfo& info);
     BufferHandle      CreateBufferInternal(size_t size, rhi::BufferUsage usage);
