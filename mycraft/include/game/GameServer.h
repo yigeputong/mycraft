@@ -12,7 +12,6 @@
 #include "game/server/WorldSave.h"
 
 #include <memory>
-#include <thread>
 #include <atomic>
 #include <glm/glm.hpp>
 #include <queue>

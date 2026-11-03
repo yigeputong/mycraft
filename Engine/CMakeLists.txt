@@ -4,6 +4,7 @@
 add_library(engine-core STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tool/Log.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tool/Platform.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tool/FileTool.cpp
 )
 target_link_libraries(engine-core 
     PUBLIC SDL3::SDL3

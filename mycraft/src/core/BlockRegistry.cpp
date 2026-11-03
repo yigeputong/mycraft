@@ -1,11 +1,10 @@
 #include "game/core/BlockRegistry.h"
 #include <nlohmann/json.hpp>
-#include <filesystem>
-#include <fstream>
+#include "Engine/tool/FileTool.h"
+#include <SDL3/SDL_filesystem.h>
 #include <algorithm>
 #include <stdexcept>
 
-namespace fs = std::filesystem;
 using nlohmann::json;
 
 namespace game {
@@ -70,28 +69,38 @@ void BlockRegistry::LoadAll(const std::string& directory) {
     m_sortedIds.clear();
     m_registeredIds.clear();
 
-    fs::path dir(directory);
-    if (!fs::exists(dir) || !fs::is_directory(dir)) {
-        logError(m_logger.get(), "BlockRegistry: assets dir not found: " << directory);
+    std::vector<std::string> files;
+
+    // 用 SDL 的跨平台目录遍历替换 std::filesystem
+    SDL_EnumerateDirectory(directory.c_str(), 
+        [](void* userdata, const char* dirname, const char* fname) -> SDL_EnumerationResult {
+            auto* fileList = static_cast<std::vector<std::string>*>(userdata);
+            std::string filename(fname);
+            
+            // 检查是不是 .json 结尾
+            if (filename.size() > 5 && filename.substr(filename.size() - 5) == ".json") {
+                // 把路径拼起来 (注意加上 /)
+                fileList->push_back(std::string(dirname) + "/" + filename);
+            }
+            return SDL_ENUM_CONTINUE;
+        }, &files);
+
+    if (files.empty()) {
+        logError(m_logger.get(), "BlockRegistry: no json files found in: " << directory);
         return;
     }
 
-    // 预分配一个合理的初始大小，比如 128
-    m_blocks.resize(128);
-    for (auto& b : m_blocks) b.id = UNKNOWN_ID; // 标记未使用
-
-    std::vector<fs::path> files;
-    for (auto& e : fs::directory_iterator(dir))
-        if (e.is_regular_file() && e.path().extension() == ".json")
-            files.push_back(e.path());
     std::sort(files.begin(), files.end());
 
-    for (auto& p : files) {
+    // 预分配初始大小
+    m_blocks.resize(128);
+    for (auto& b : m_blocks) b.id = UNKNOWN_ID;
+
+    for (const auto& p : files) {
         try {
-            ParseOne(p.string());
+            ParseOne(p);
         } catch (const std::exception& e) {
-            logError(m_logger.get(), "BlockRegistry: skip " << p.string()
-                                     << " due to error: " << e.what());
+            logError(m_logger.get(), "BlockRegistry: skip " << p << " due to error: " << e.what());
         }
     }
 
@@ -110,7 +119,6 @@ void BlockRegistry::LoadAll(const std::string& directory) {
         logWarning(m_logger.get(), "BlockRegistry: air.json missing or invalid, synthesized default");
     }
 
-    // 收集所有加载成功的 ID 用于排序
     for (size_t i = 0; i < m_blocks.size(); ++i) {
         if (m_blocks[i].id != UNKNOWN_ID) {
             m_sortedIds.push_back(static_cast<BlockId>(i));
@@ -121,12 +129,13 @@ void BlockRegistry::LoadAll(const std::string& directory) {
 }
 
 void BlockRegistry::ParseOne(const std::string& filePath) {
-    std::ifstream in(filePath);
-    if (!in) throw std::runtime_error("cannot open file");
+    auto data = Eng::tool::ReadFileToMemory(filePath);
+    if (data.empty()) throw std::runtime_error("cannot open file");
 
     json j;
-    try { in >> j; }
-    catch (const std::exception& e) {
+    try { 
+        j = json::parse(data.begin(), data.end()); 
+    } catch (const std::exception& e) {
         throw std::runtime_error("JSON parse error: " + std::string(e.what()));
     }
 

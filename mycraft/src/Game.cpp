@@ -25,7 +25,7 @@
 #include <cmath>
 #include <memory>
 #include <nlohmann/json.hpp>
-#include <fstream>
+#include <Engine/tool/FileTool.h>
 
 using json = nlohmann::json;
 
@@ -82,13 +82,18 @@ namespace {
 // 设置持久化
 // ============================================================
 void MyGame::LoadSettings(Eng::Engine& engine) {
-    std::ifstream f("settings.json");
-    if (!f.is_open()) return;
-    try {
-        json j;
-        f >> j;
-        auto& wcfg = engine.GetConfig().window;
+    // 使用 GetWritablePath 获取跨平台的沙盒路径
+    std::string path = Eng::tool::GetWritablePath("settings.json");
+    auto data = Eng::tool::ReadFileToMemory(path);
+    
+    // 如果文件不存在（首次进入），直接返回，使用默认配置
+    if (data.empty()) return; 
 
+    try {
+        // 直接从内存数据解析 JSON
+        auto j = json::parse(data.begin(), data.end());
+        
+        auto& wcfg = engine.GetConfig().window;
         if (j.contains("apitype")) {
             int v = j["apitype"];
             if (v >= 0 && v <= 2) {
@@ -114,8 +119,8 @@ void MyGame::SaveSettings(Eng::Engine& engine) {
     j["fov"] = rcfg.fov;
     j["aoStrength"] = rcfg.m_aoStrength;
 
-    std::ofstream f("settings.json");
-    if (f.is_open()) f << j.dump(4);
+    std::string path = Eng::tool::GetWritablePath("settings.json");
+    Eng::tool::WriteStringToFile(path, j.dump(4));
 }
 
 // ============================================================

@@ -1,7 +1,6 @@
 #pragma once
 #include "game/core/World.h"
 #include <Engine/service/IRenderService.h>
-#include <thread>
 #include <mutex>
 #include <condition_variable>
 #include <queue>

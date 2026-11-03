@@ -1,18 +1,31 @@
 #include "game/server/WorldSave.h"
+#include "Engine/tool/FileTool.h"
+#include "Engine/tool/Log.h"
 
 #include <cctype>
-#include <filesystem>
-#include <fstream>
 #include <nlohmann/json.hpp>
 
-namespace fs = std::filesystem;
+// SDL3 的原生文件系统与 IO 接口
+#include <SDL3/SDL_filesystem.h>
+#include <SDL3/SDL_iostream.h>
+
 using json = nlohmann::json;
 
 namespace game::server {
 
 WorldSave::WorldSave(std::string dir) : m_dir(std::move(dir)) {
-    std::error_code ec;
-    fs::create_directories(m_dir, ec);
+    // 清理掉可能存在的 "./" 前缀，防止沙盒路径拼接出错
+    if (m_dir.starts_with("./")) {
+        m_dir = m_dir.substr(2);
+    }
+    
+    // 创建主存档目录
+    std::string fullDir = Eng::tool::GetWritablePath(m_dir);
+    SDL_CreateDirectory(fullDir.c_str());
+
+    // 顺便把 players 子目录也建了
+    std::string playersDir = Eng::tool::GetWritablePath(m_dir + "/players");
+    SDL_CreateDirectory(playersDir.c_str());
 }
 
 std::string WorldSave::SanitizeName(const std::string& in) {
@@ -23,14 +36,26 @@ std::string WorldSave::SanitizeName(const std::string& in) {
     return out.empty() ? "player" : out;
 }
 
-bool WorldSave::HasLevel()   const { return fs::exists(LevelPath()); }
-bool WorldSave::HasChanges() const { return fs::exists(ChangesPath()); }
+// 通过尝试打开文件来判断是否存在，代替 fs::exists
+static bool FileExists(const std::string& path) {
+    SDL_IOStream* io = SDL_IOFromFile(Eng::tool::GetWritablePath(path).c_str(), "r");
+    if (io) {
+        SDL_CloseIO(io);
+        return true;
+    }
+    return false;
+}
+
+bool WorldSave::HasLevel()   const { return FileExists(LevelPath()); }
+bool WorldSave::HasChanges() const { return FileExists(ChangesPath()); }
 
 bool WorldSave::LoadLevel(uint32_t& outSeed, glm::vec3& outSpawn) {
-    if (!HasLevel()) return false;
+    std::string path = Eng::tool::GetWritablePath(LevelPath());
+    auto data = Eng::tool::ReadFileToMemory(path);
+    if (data.empty()) return false;
+
     try {
-        std::ifstream f(LevelPath());
-        json j; f >> j;
+        auto j = json::parse(data.begin(), data.end());
         outSeed  = j.value("seed", 0u);
         outSpawn = glm::vec3(
             j.value("spawnX", 0.0f),
@@ -47,16 +72,20 @@ void WorldSave::SaveLevel(uint32_t seed, const glm::vec3& spawn) {
     j["spawnX"]  = spawn.x;
     j["spawnY"]  = spawn.y;
     j["spawnZ"]  = spawn.z;
-    std::ofstream f(LevelPath(), std::ios::trunc);
-    f << j.dump(2);
+    
+    std::string path = Eng::tool::GetWritablePath(LevelPath());
+    Eng::tool::WriteStringToFile(path, j.dump(2));
 }
 
 std::vector<BlockChange> WorldSave::LoadChanges() {
     std::vector<BlockChange> out;
-    if (!HasChanges()) return out;
+    
+    std::string path = Eng::tool::GetWritablePath(ChangesPath());
+    auto data = Eng::tool::ReadFileToMemory(path);
+    if (data.empty()) return out;
+
     try {
-        std::ifstream f(ChangesPath());
-        json j; f >> j;
+        auto j = json::parse(data.begin(), data.end());
         for (auto& e : j) {
             BlockChange c;
             c.x     = e.value("x", 0);
@@ -65,7 +94,9 @@ std::vector<BlockChange> WorldSave::LoadChanges() {
             c.block = e.value("b", (uint16_t)0);
             out.push_back(c);
         }
-    } catch (...) {}
+    } catch (const std::exception& e) {
+        stLogWarning("[WorldSave] Failed to parse changes.json: " << e.what());
+    }
     return out;
 }
 
@@ -74,17 +105,18 @@ void WorldSave::SaveChanges(const std::vector<BlockChange>& changes) {
     for (const auto& c : changes) {
         j.push_back({ {"x", c.x}, {"y", c.y}, {"z", c.z}, {"b", c.block} });
     }
-    std::ofstream f(ChangesPath(), std::ios::trunc);
-    f << j.dump();
+    
+    std::string path = Eng::tool::GetWritablePath(ChangesPath());
+    Eng::tool::WriteStringToFile(path, j.dump());
 }
 
-bool WorldSave::LoadPlayer(const std::string& name, glm::vec3& pos,
-                            float& yaw, float& pitch) {
-    std::string path = PlayerPath(SanitizeName(name));
-    if (!fs::exists(path)) return false;
+bool WorldSave::LoadPlayer(const std::string& name, glm::vec3& pos, float& yaw, float& pitch) {
+    std::string path = Eng::tool::GetWritablePath(PlayerPath(SanitizeName(name)));
+    auto data = Eng::tool::ReadFileToMemory(path);
+    if (data.empty()) return false;
+
     try {
-        std::ifstream f(path);
-        json j; f >> j;
+        auto j = json::parse(data.begin(), data.end());
         pos   = glm::vec3(j.value("x", 0.0f), j.value("y", 256.0f), j.value("z", 0.0f));
         yaw   = j.value("yaw", 0.0f);
         pitch = j.value("pitch", 0.0f);
@@ -92,15 +124,17 @@ bool WorldSave::LoadPlayer(const std::string& name, glm::vec3& pos,
     } catch (...) { return false; }
 }
 
-void WorldSave::SavePlayer(const std::string& name, const glm::vec3& pos,
-                            float yaw, float pitch) {
-    std::error_code ec;
-    fs::create_directories(m_dir + "/players", ec);
+void WorldSave::SavePlayer(const std::string& name, const glm::vec3& pos, float yaw, float pitch) {
+    // 确保目录存在（虽然构造时建了，但这里再保个险）
+    std::string playersDir = Eng::tool::GetWritablePath(m_dir + "/players");
+    SDL_CreateDirectory(playersDir.c_str());
+    
     json j;
     j["x"] = pos.x; j["y"] = pos.y; j["z"] = pos.z;
     j["yaw"] = yaw; j["pitch"] = pitch;
-    std::ofstream f(PlayerPath(SanitizeName(name)), std::ios::trunc);
-    f << j.dump(2);
+    
+    std::string path = Eng::tool::GetWritablePath(PlayerPath(SanitizeName(name)));
+    Eng::tool::WriteStringToFile(path, j.dump(2));
 }
 
-}
+} // namespace game::server
