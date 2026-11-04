@@ -19,11 +19,11 @@
 namespace game::server {
 
 // ============================================================
-// 流水线进度查询（供客户端 UI “小太阳” 使用）
+// 流水线进度查询
 // ============================================================
 GenPhase GameServer::GetChunkProgress(int cx, int cz) const {
     uint64_t key = ChunkKey(cx, cz);
-    std::shared_lock lock(m_genMutex); // 共享锁，UI 读取不阻塞
+    std::shared_lock lock(m_genMutex);
     auto it = m_generatingChunks.find(key);
     if (it != m_generatingChunks.end()) {
         return it->second->phase.load(std::memory_order_relaxed);
@@ -43,7 +43,6 @@ void GameServer::StartWorkers(uint32_t seed) {
     m_workersStop = false;
     
     for (unsigned i = 0; i < n; ++i) {
-        // 使用 RAIIThread，自动处理 stop_token 和 join
         m_workers.push_back(std::make_unique<Eng::tool::RAIIThread>(
             [this, seed](const std::stop_token& st) {
                 WorkerLoop(seed, st);
@@ -59,7 +58,6 @@ void GameServer::StopWorkers() {
     }
     m_taskCv.notify_all();
     
-    // RAIIThread 析构会自动 request_stop 并 join
     m_workers.clear(); 
 }
 
@@ -79,7 +77,7 @@ void GameServer::WorkerLoop(uint32_t seed, const std::stop_token& st) {
             task = std::move(m_taskQueue.front());
             m_taskQueue.pop();
         }
-        task(); // 执行闭包
+        task();
     }
 }
 
@@ -96,7 +94,6 @@ void GameServer::DrainChunkResults() {
             m_resultQueue.pop();
         }
 
-        // 应用存档修改
         auto cit = m_pendingChanges.find(r.key);
         if (cit != m_pendingChanges.end()) {
             for (const auto& c : cit->second) {
@@ -107,19 +104,14 @@ void GameServer::DrainChunkResults() {
         }
 
         if (r.chunk) {
-            // ★ 规避 performance-move-const-arg：
-            // Chunk 是 trivially copyable，std::move(*r.chunk) 会触发警告。
-            // 直接传 *r.chunk 底层会自动拷贝。
             m_chunks.emplace(r.key, *r.chunk);
         }
 
-        // 从生成中列表移除
         {
             std::unique_lock lock(m_genMutex);
             m_generatingChunks.erase(r.key);
         }
 
-        // 发给等待的 client
         auto it = m_waitingClients.find(r.key);
         if (it != m_waitingClients.end()) {
             const Chunk& c = m_chunks.at(r.key);
@@ -172,13 +164,11 @@ void GameServer::Run() {
         while (accumulator >= TICK_INTERVAL) {
             auto tickStart = std::chrono::steady_clock::now();
 
-            // -------- 处理区块请求（带背压控制） --------
             while (!m_chunkQueue.empty()) {
-                // ★ 背压核心：如果当前生成中的区块已经达到上限，暂停本次派发
                 {
                     std::shared_lock lock(m_genMutex);
                     if (m_generatingChunks.size() >= MAX_CONCURRENT_GENERATING) {
-                        break; // 直接退出 while，把剩余请求留到下一个 tick
+                        break;
                     }
                 }
 
@@ -186,13 +176,11 @@ void GameServer::Run() {
                 m_chunkQueue.pop();
                 uint64_t key = ChunkKey(req.cx, req.cz);
 
-                // 如果已经完成，直接发（或者你可以在接收请求时去重）
                 if (m_chunks.contains(key)) {
                     SendChunkTo(req.clientId, m_chunks.at(key));
                     continue;
                 }
 
-                // 检查是否已经在流水线中
                 std::unique_lock lock(m_genMutex);
                 if (m_generatingChunks.contains(key)) {
                     m_waitingClients[key].push_back(req.clientId);
@@ -210,23 +198,18 @@ void GameServer::Run() {
 
                 std::lock_guard lk(m_taskMutex);
                 m_taskQueue.emplace([this, inFlight]() {
-                    // 1. 密度与生物群系
                     m_terrain->GeneratePhase_BiomeAndDensity(*inFlight->ctx);
                     inFlight->phase.store(GenPhase::TerrainBlocks, std::memory_order_relaxed);
                     
-                    // 2. 填充方块
                     m_terrain->GeneratePhase_TerrainBlocks(*inFlight->ctx);
                     inFlight->phase.store(GenPhase::Features, std::memory_order_relaxed);
                     
-                    // 3. 装饰物（树木等）
                     m_terrain->GeneratePhase_Features(*inFlight->ctx);
                     inFlight->phase.store(GenPhase::Lighting, std::memory_order_relaxed);
                     
-                    // 4. 光照计算
                     LightEngine::InitRegion(m_registry, *inFlight->ctx->chunk, nullptr, nullptr, nullptr, nullptr);
                     inFlight->phase.store(GenPhase::Ready, std::memory_order_relaxed);
                     
-                    // 5. 推入结果队列
                     std::lock_guard lk4(m_resultMutex);
                     m_resultQueue.push({ inFlight->key, std::move(inFlight->ctx->chunk) });
                 });
@@ -266,24 +249,35 @@ void GameServer::Run() {
 // ============================================================
 // 生命周期与网络回调
 // ============================================================
-bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory) {
+bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory) {
     if (m_running.load()) return false;
 
     m_registry.LoadAll("assets/block");
-    m_save = std::make_unique<WorldSave>(saveDir);
+    m_save = std::make_unique<WorldSave>(worldId);
 
-    uint32_t seed = 0;
+    // 1. 获取硬锁，防止同一个存档被多开
+    if (!m_save->Lock()) {
+        logError(m_logger, "[Server] World " << worldId << " is locked (already in use or crashed).");
+        return false;
+    }
+
+    // 2. 加载元数据
+    WorldMetadata meta;
     glm::vec3 spawn(0.0f, 256.0f, 0.0f);
-    if (m_save->LoadLevel(seed, spawn)) {
-        m_worldSeed = seed;
+    if (m_save->LoadLevel(meta, spawn)) {
+        m_worldSeed = meta.seed;
         m_spawnPos  = spawn;
-        logInfo(m_logger, "[Server] Loaded world, seed=" << seed);
+        
+        // 更新最后游玩时间
+        meta.lastPlayedTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        m_save->SaveLevel(meta, spawn);
+        
+        logInfo(m_logger, "[Server] Loaded world '" << meta.displayName << "', seed=" << meta.seed);
     } else {
-        seed = static_cast<uint32_t>(std::time(nullptr)) ^ static_cast<uint32_t>(std::clock());
-        m_worldSeed = seed;
-        m_spawnPos  = spawn;
-        m_save->SaveLevel(seed, spawn);
-        logInfo(m_logger, "[Server] New world, seed=" << seed);
+        logError(m_logger, "[Server] Failed to load level.json for " << worldId);
+        m_save->Unlock();
+        return false;
     }
 
     auto changes = m_save->LoadChanges();
@@ -309,6 +303,7 @@ bool GameServer::Start(uint16_t port, const std::string& saveDir, bool useMemory
     if (!m_server->Listen(port)) {
         logError(m_logger, "[Server] Listen failed");
         m_running.store(false);
+        m_save->Unlock(); // ★ 释放锁
         return false;
     }
 
@@ -388,20 +383,25 @@ void GameServer::Stop() {
     }
 
     if (m_save) {
+        // 保存所有玩家
         for (auto& p : m_players) {
             if (!p.name.empty()) {
                 m_save->SavePlayer(p.name, p.position, p.yaw, p.pitch);
             }
         }
-    }
-
-    if (m_save && m_dirty) {
-        std::vector<BlockChange> flat;
-        for (auto& [k, v] : m_pendingChanges) {
-            flat.insert(flat.end(), v.begin(), v.end());
+        
+        // 保存方块更改
+        if (m_dirty) {
+            std::vector<BlockChange> flat;
+            for (auto& [k, v] : m_pendingChanges) {
+                flat.insert(flat.end(), v.begin(), v.end());
+            }
+            m_save->SaveChanges(flat);
+            m_dirty = false;
         }
-        m_save->SaveChanges(flat);
-        m_dirty = false;
+
+        // ★ 释放硬锁
+        m_save->Unlock();
     }
 
     logInfo(m_logger, "[Server] Stopped");
@@ -514,10 +514,9 @@ void GameServer::SpawnItemDrop(const glm::vec3& pos, BlockId id) {
 
     Eng::tool::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::EntitySpawn));
-    w.Write<uint32_t>(e.id); // 注意：e 被 move 后，e.id 如果还在后面用会报 bugprone-use-after-move！
-                             // 所以我们把 w 的写入移到 m_entities 之前，或者用临时变量存 id
-    w.WriteVec3(pos);        // 这里直接用传进来的 pos 即可，万无一失
-    w.Write<uint16_t>(id);   // 直接用传进来的 id
+    w.Write<uint32_t>(e.id);
+    w.WriteVec3(pos);
+    w.Write<uint16_t>(id);
     
     m_server->Broadcast(w.GetBuffer());
 }
@@ -678,7 +677,6 @@ bool GameServer::IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz) {
     glm::vec3 pmin{p.position.x - PLAYER_HALF_W, p.position.y,        p.position.z - PLAYER_HALF_W};
     glm::vec3 pmax{p.position.x + PLAYER_HALF_W, p.position.y + PLAYER_HEIGHT, p.position.z + PLAYER_HALF_W};
 
-    // ★ 规避 -Wimplicit-int-float-conversion：使用显式 static_cast
     glm::vec3 bmin{static_cast<float>(bx), static_cast<float>(by), static_cast<float>(bz)};
     glm::vec3 bmax{bmin.x + 1.0f, bmin.y + 1.0f, bmin.z + 1.0f};
 
@@ -719,7 +717,6 @@ void GameServer::BroadcastWorldState() {
     for (auto& p : m_players) {
         w.WriteU32BE(p.id);
 
-        // ★ 规避 -Wimplicit-int-conversion：使用显式 static_cast
         uint8_t nlen = static_cast<uint8_t>(std::min<size_t>(p.name.size(), 32));
         w.Write<uint8_t>(nlen);
         for (uint8_t i = 0; i < nlen; ++i) {

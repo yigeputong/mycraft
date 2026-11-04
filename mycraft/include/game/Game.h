@@ -6,6 +6,7 @@
 #include "Engine/service/AssetService.h"
 #include "game/Protocol.h"
 #include "game/GameServer.h"
+#include "game/server/WorldSave.h"
 #include "game/core/GameContext.h"
 #include "game/core/RayCast.h"
 #include "game/client/MeshManager.h"
@@ -16,6 +17,7 @@
 #include <unordered_set>
 #include <vector>
 #include <array>
+#include <string>
 
 namespace game {
 
@@ -56,6 +58,7 @@ private:
     // ================================================================
     enum class GameState : std::uint8_t {
         MainMenu,
+        WorldSelect, // ★ 新增：世界选择界面
         Connecting,
         Playing,
     };
@@ -95,12 +98,10 @@ private:
     // 4. 会话资源 (每次进游戏创建，退游戏销毁)
     // ================================================================
     // --- 4.1 网络相关 ---
-    std::unique_ptr<Eng::tool::IClientTransport> m_client;
-    std::unique_ptr<game::server::GameServer>    m_server = nullptr;
-    uint32_t                                     m_myClientId = 0;
-    bool                                         m_showMultiplayerDialog = false;
-    char                                         m_ipBuffer[128] = "localhost";
-    int                                          m_portInput = 25565;
+    std::unique_ptr<Eng::tool::IClientTransport>   m_client;
+    std::unique_ptr<game::server::GameServer>      m_server = nullptr;
+    uint32_t                                       m_myClientId = 0;
+    uint32_t                                       m_worldSeed = 0;
     std::unordered_map<uint32_t, net::PlayerState> m_otherPlayers;
 
     // --- 4.2 世界与后台线程 ---
@@ -108,10 +109,28 @@ private:
     client::MeshManager                          m_meshManager;
     client::LodManager                           m_lodManager;
     std::unordered_set<uint64_t>                 m_knownSceneChunks;
-    std::vector<Eng::client::RenderMesh>           m_visibleLodMeshes;
+    std::vector<Eng::client::RenderMesh>         m_visibleLodMeshes;
 
     // --- 4.3 渲染大脑 ---
     std::unique_ptr<Eng::client::SceneRenderer>  m_sceneRenderer;
+
+    // --- 4.4 存档与界面交互状态 (★ 新增集中区) ---
+    // 世界选择界面参数
+    std::vector<game::server::WorldMetadata> m_savedWorlds;
+    std::string m_selectedWorldId;
+    char m_searchBuffer[128] = "";
+    
+    // 弹窗状态
+    bool m_showNewWorldDialog = false;
+    char m_newWorldNameBuffer[128] = "";
+    char m_newWorldSeedBuffer[64] = "";
+    bool m_showDeleteConfirmDialog = false;
+    std::string m_worldToDelete;
+    
+    // 多人连接弹窗
+    bool m_showMultiplayerDialog = false;
+    char m_ipBuffer[128] = "localhost";
+    int  m_portInput = 25565;
 
     // ================================================================
     // 5. 玩家状态与物理 (每次进游戏必须彻底重置)
@@ -221,8 +240,9 @@ private:
     // ================================================================
     // 9. 网络与设置辅助函数
     // ================================================================
-    bool StartLocalServer(bool useMemory = false, bool createClient = true);
+    bool StartLocalServer(bool useMemory, bool createClient, const std::string& worldId);
     bool ConnectToServer(const std::string& host, uint16_t port);
+    void RefreshWorldList();
     void LoadSettings(Eng::Engine& engine);
     void SaveSettings(Eng::Engine& engine);
     static constexpr const char* SETTINGS_FILE = "settings.json";

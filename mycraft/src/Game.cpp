@@ -83,15 +83,12 @@ namespace {
 // 设置持久化
 // ============================================================
 void MyGame::LoadSettings(Eng::Engine& engine) {
-    // 使用 GetWritablePath 获取跨平台的沙盒路径
-    std::string path = Eng::tool::GetWritablePath("settings.json");
+    std::string path = Eng::tool::GetWritablePath(SETTINGS_FILE);
     auto data = Eng::tool::ReadFileToMemory(path);
     
-    // 如果文件不存在（首次进入），直接返回，使用默认配置
     if (data.empty()) return; 
 
     try {
-        // 直接从内存数据解析 JSON
         auto j = json::parse(data.begin(), data.end());
         
         auto& wcfg = engine.GetConfig().window;
@@ -120,19 +117,26 @@ void MyGame::SaveSettings(Eng::Engine& engine) {
     j["fov"] = rcfg.fov;
     j["aoStrength"] = rcfg.m_aoStrength;
 
-    std::string path = Eng::tool::GetWritablePath("settings.json");
+    std::string path = Eng::tool::GetWritablePath(SETTINGS_FILE);
     Eng::tool::WriteStringToFile(path, j.dump(4));
 }
 
 // ============================================================
-// 网络启动
+// 存档列表刷新与网络启动
 // ============================================================
-bool MyGame::StartLocalServer(bool useMemory, bool createClient) {
+void MyGame::RefreshWorldList() {
+    m_savedWorlds = game::server::WorldSave::ListAllWorlds();
+    logInfo(logger, "[Game] Found " << m_savedWorlds.size() << " saved worlds.");
+}
+
+bool MyGame::StartLocalServer(bool useMemory, bool createClient, const std::string& worldId) {
     if (m_server) return true;
 
     auto server = std::make_unique<game::server::GameServer>();
-    if (!server->Start(25565, "./saves/world", useMemory)) {
-        logError(logger, "[Game] Failed to start local server");
+    // ★ 传入 worldId，底层自动处理硬锁和加载逻辑
+    if (!server->Start(25565, worldId, useMemory)) {
+        logError(logger, "[Game] Failed to start local server for world: " << worldId);
+        m_statusText = "Failed to start: World is locked or corrupted.";
         return false;
     }
 
@@ -226,7 +230,6 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
         return false;
     }
 
-    // 1. 把 AssetService 的获取提前到最前面，防止空指针调用
     m_assetManager = engine.GetAssetService();
     if (!m_assetManager) {
         logError(logger, "[Game] AssetService is null");
@@ -283,12 +286,7 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     if (dpiScale <= 0.0f) dpiScale = 1.0f;
     m_uiScale = dpiScale;
 
-    // 用 FontScaleMain 替代废弃的 FontGlobalScale
-    // 它会自动影响整个 UI 的字体大小，且保持清晰
     style.FontScaleMain = dpiScale; 
-
-    // 注意：1.92+ 动态字体系统会自动根据 FontScaleMain 光栅化，
-    // 所以这里不需要再调用 style.ScaleAllSizes(m_uiScale); 了。
 
     static const ImWchar allGlyphs[] = { 0x0020, 0xFFFF, 0 };
 
@@ -297,7 +295,6 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     fontConfig.OversampleV = 1;
     fontConfig.PixelSnapH = true;
 
-    // 2. 基础字体尺寸设为 16.0f 即可（由 FontScaleMain 负责放大）
     float baseFontSize = 16.0f;
 
     ImFont* unifont = nullptr;
@@ -313,7 +310,7 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
         unifont = io.Fonts->AddFontFromMemoryTTF(
             fontMem, 
             static_cast<int>(fontSize), 
-            baseFontSize, // 直接传基础尺寸
+            baseFontSize,
             &memFontConfig, 
             allGlyphs
         );
@@ -325,7 +322,6 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
         logInfo(logger, "[Game] Loaded Unifont with all BMP glyphs at size " << baseFontSize << " (Scale: " << dpiScale << ")");
     }
 
-    // 创建 SceneRenderer（构造会加载 'mesh' shader；失败抛异常）
     try {
         m_sceneRenderer = std::make_unique<Eng::client::SceneRenderer>(renderer, m_assetManager);
     } catch (const std::exception& e) {
@@ -417,13 +413,14 @@ void MyGame::SetupShaders() {
     }
 }
 
+// ============================================================
+// 游戏生命周期
+// ============================================================
 void MyGame::EnterGame() {
     logInfo(logger, "[Game] Entering game session...");
 
-    // ==================== 1. 后台线程 ====================
     m_meshManager.Start();
 
-    // ==================== 2. 玩家物理与镜头 ====================
     cameraPos        = glm::vec3(0.0f, 40.0f, 0.0f);
     cameraFront      = glm::vec3(0.0f, 0.0f, -1.0f);
     yaw              = -90.0f;
@@ -433,18 +430,15 @@ void MyGame::EnterGame() {
     m_lastMoveDir    = glm::vec3(0.0f);
     m_playerOnGround = false;
     
-    // ==================== 3. 时间与动画 ====================
     m_timeOfDay      = 8.0f;
     m_animTime       = 0.0f;
     m_walkDist       = 0.0f;
     m_swingProgress  = 0.0f;
 
-    // ==================== 4. 交互冷却与计时器 ====================
     m_jumpHoldTimer  = 0.0f;
     m_placeCooldown  = 0.0f;
     m_digCooldown    = 0.0f;
 
-    // ==================== 5. FPS 与性能统计 ====================
     m_fpsTimer       = 0.0f;
     m_fpsFrameCount  = 0;
     m_fpsAccumMs     = 0.0f;
@@ -457,11 +451,9 @@ void MyGame::EnterGame() {
     m_serverTickAvg  = 0.0f;
     m_serverTickMax  = 0.0f;
 
-    // ==================== 6. 背包与物品栏 ====================
     m_hotbarIndex    = 0;
     m_inventoryOpen  = false;
 
-    // ==================== 7. 清理网络与实体数据 ====================
     m_itemEntities.clear();
     m_otherPlayers.clear();
     m_myClientId = 0;
@@ -471,7 +463,6 @@ void MyGame::EnterGame() {
     }
     m_knownSceneChunks.clear();
 
-    // ==================== 8. 切换状态 ====================
     m_state = GameState::Playing;
     m_menuOpen = false;
     m_statusText.clear();
@@ -479,11 +470,54 @@ void MyGame::EnterGame() {
     logInfo(logger, "[Game] Game session entered successfully.");
 }
 
+void MyGame::ExitGame() {
+    logInfo(logger, "[Game] Exiting game session...");
+
+    if (renderer) renderer->WaitIdle();
+
+    m_lodManager.Stop();
+    m_meshManager.Stop();
+
+    if (m_client) m_client.reset();
+    if (m_server) { m_server->Stop(); m_server.reset(); }
+
+    m_world.Clear();
+    m_lodManager.Clear();
+    m_itemEntities.clear();
+    m_otherPlayers.clear();
+    
+    m_playerMesh = {};
+    m_handMesh = {};
+    m_skyboxMesh = {};
+    m_itemMeshCache.clear();
+
+    if (m_sceneRenderer) {
+        m_sceneRenderer->Clear();
+    }
+    m_knownSceneChunks.clear();
+
+    m_state = GameState::MainMenu;
+    m_selectedWorldId.clear(); // ★ 退出时清空当前选中的世界
+    m_menuOpen = false;
+    m_statusText.clear();
+
+    logInfo(logger, "[Game] Game session exited.");
+}
+
+void MyGame::ReturnToMainMenu() {
+    ExitGame();
+    logInfo(logger, "[Game] Returned to main menu");
+}
+
+// ============================================================
+// 核心循环
+// ============================================================
 void MyGame::OnStart(Eng::Engine& engine) {
     if (!logger) logger = std::make_unique<Eng::tool::Log>();
 
     if (engine.IsDedicatedServer()) {
-        if (!StartLocalServer(false, false)) {
+        // 服务端模式（假设你有固定的目录）
+        if (!StartLocalServer(false, false, "world_server")) {
             logError(logger, "[Game] Failed to start dedicated server");
             m_shouldQuit = true;
             return;
@@ -494,14 +528,12 @@ void MyGame::OnStart(Eng::Engine& engine) {
 
     LoadSettings(engine);
 
-    // ★ 1) 先加载方块注册表并生成图集纹理（SetupRenderer 里面要用）
     m_blockRegistry.LoadAll("assets/block");
     {
         auto tileTints = m_blockRegistry.CollectTileTints();
         client::BuildAtlas(tileTints);
     }
 
-    // ★ 2) 窗口与渲染器
     try {
         if (!SetupWindow(engine)) return;
         if (!mainWin->GetFallbackReason().empty()) {
@@ -516,17 +548,19 @@ void MyGame::OnStart(Eng::Engine& engine) {
     if (!SetupRenderer(engine)) return;
     SetupShaders();
 
-    // ★ 3) 注入注册表指针
     m_lodManager.SetRegistry(&m_blockRegistry);
     m_meshManager.SetRegistry(&m_blockRegistry);
     m_world.SetRegistry(&m_blockRegistry);
     m_meshManager.Start();
 
-    // ★ 4) 热栏初始化（此时注册表已就绪）
+    // 初始化热栏
     m_hotbar[0] = game::MakeItemStack(m_blockRegistry.Get("mycraft:torch").id,       64);
     m_hotbar[1] = game::MakeItemStack(m_blockRegistry.Get("mycraft:dirt").id,        64);
     m_hotbar[2] = game::MakeItemStack(m_blockRegistry.Get("mycraft:grass_block").id, 64);
     m_hotbar[3] = game::MakeItemStack(m_blockRegistry.Get("mycraft:sand").id,        64);
+
+    // ★ 初始化时扫描存档列表
+    RefreshWorldList();
 
     m_state = GameState::MainMenu;
 }
@@ -655,7 +689,6 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
             w.Write<int32_t>(cz);
             m_client->Send(w.GetBuffer());
         },
-        // 卸载时拦截，存给 LOD
         [this](int cx, int cz, const game::client::ClientChunk& chunk) {
             m_lodManager.StoreRealChunk(cx, cz, chunk);
         }
@@ -670,7 +703,6 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
         }
     }
 
-    // 每帧最多提取 8 个脏区块去建 Mesh，不一次性全塞进去
     auto dirtyKeys = m_world.FetchDirtyChunks(8); 
     for (uint64_t key : dirtyKeys) {
         auto* cc = m_world.GetChunk(key);
@@ -680,7 +712,6 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     int actualLodDistance = m_enableLod ? m_lodRenderDistance : 0;
     m_lodManager.Update(cameraPos, m_world, m_renderDistance, actualLodDistance, renderer);
     
-    // 每帧最多从结果队列拿 16 个出来给 GPU，不把显存撑爆
     DrainMeshResults(16); 
 
     return false;
@@ -721,20 +752,15 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->BeginFrame();
 
     if (m_state == GameState::Playing) {
-        // ★ 1. 统一在这一帧计算一次视锥体
         glm::mat4 viewProj = projection * view;
         Eng::client::Frustum frameFrustum;
         frameFrustum.UpdatePlanes(viewProj);
 
         m_sceneRenderer->BeginScene();
 
-        // 2. LOD（走 MDI 超级合批，不经过 SceneRenderer 的队列）
-        // 1) 根据视锥体剔除并生成 Indirect 指令
         m_lodManager.PrepareDraw(renderer, frameFrustum);
-        // 2) 直接向底层发送 1 次 DrawIndexedIndirect 绘制全部远景
         m_lodManager.Draw(renderer, m_cubeShader, m_atlasTexture);
 
-        // 3. 其他玩家
         if (!m_playerMesh.vbo) m_playerMesh = BuildPlayerMesh();
         for (auto& [id, ps] : m_otherPlayers) {
             Eng::service::rhi::PerObjectData data;
@@ -743,7 +769,6 @@ void MyGame::OnRender(Eng::Engine& engine) {
             m_sceneRenderer->SubmitMesh(m_playerMesh, m_entityShader, m_playerTexture, data);
         }
 
-        // 4. 掉落物
         if (!m_itemEntities.empty()) {
             std::unordered_map<BlockId, std::vector<Eng::service::rhi::PerObjectData>> instances;
             for (const auto& [id, e] : m_itemEntities) {
@@ -763,11 +788,9 @@ void MyGame::OnRender(Eng::Engine& engine) {
             }
         }
 
-        // 5. 天空盒
         if (!m_skyboxMesh.vbo) m_skyboxMesh = BuildSkyboxMesh();
         m_sceneRenderer->SubmitMesh(m_skyboxMesh, m_skyShader, m_atlasTexture);
 
-        // 6. 第一人称手部
         if (!m_handMesh.vbo) m_handMesh = BuildHandMesh();
 
         glm::vec3 basePos(0.5f, -0.5f, -1.0f);
@@ -805,7 +828,6 @@ void MyGame::OnRender(Eng::Engine& engine) {
             }
         }
 
-        // 7. 把计算好的 frameFrustum 传给 EndScene
         m_sceneRenderer->EndScene(frameFrustum, m_cubeShader, m_atlasTexture);
     }
 
@@ -813,55 +835,9 @@ void MyGame::OnRender(Eng::Engine& engine) {
     renderer->EndFrame();
 }
 
-void MyGame::ExitGame() {
-    logInfo(logger, "[Game] Exiting game session...");
-
-    // 保证 GPU 处理完毕
-    if (renderer) renderer->WaitIdle();
-
-    // ==================== 1. 停掉后台线程 ====================
-    m_lodManager.Stop();
-    m_meshManager.Stop();
-
-    // ==================== 2. 断开网络 ====================
-    if (m_client) m_client.reset();
-    if (m_server) { m_server->Stop(); m_server.reset(); }
-
-    // ==================== 3. 清理世界数据 ====================
-    m_world.Clear();
-    m_lodManager.Clear();
-    m_itemEntities.clear();
-    m_otherPlayers.clear();
-    
-    // ==================== 4. 清理渲染动态资源 ====================
-    m_playerMesh = {};
-    m_handMesh = {};
-    m_skyboxMesh = {};
-    m_itemMeshCache.clear();
-
-    if (m_sceneRenderer) {
-        m_sceneRenderer->Clear();
-    }
-    m_knownSceneChunks.clear();
-
-    // ==================== 5. 切换回主菜单 ====================
-    m_state = GameState::MainMenu;
-    m_menuOpen = false;
-    m_statusText.clear();
-
-    logInfo(logger, "[Game] Game session exited.");
-}
-
-void MyGame::ReturnToMainMenu() {
-    ExitGame();
-    logInfo(logger, "[Game] Returned to main menu");
-}
-
 void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
-    // 统一通过 ExitGame 清理所有会话级资源
     ExitGame();
 
-    // 只有引擎级别的清理留在这里
     m_globalStateUBO.reset();
     m_mainFbo.reset();
     m_skyShader.reset();
@@ -954,11 +930,9 @@ bool MyGame::GetInput(float dt) {
 
     if (m_hotbarIndex < 0 || m_hotbarIndex >= kHotbarSize) m_hotbarIndex = 0;
 
-    // —— 拾取/挖掘/放置 ——
     bool wantDig   = Input::IsKeyDown(KeyCode::MouseLeft);
     bool wantPlace = Input::IsKeyDown(KeyCode::MouseRight);
 
-    // ★ 1. 本地射线检测（距离 5 格）
     glm::vec3 eyePos = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
     m_currentRayHit = game::RayCast(
         m_blockRegistry, 
@@ -974,7 +948,6 @@ bool MyGame::GetInput(float dt) {
     if (input.dig)   m_digCooldown   = kDigInterval;
     if (input.place) m_placeCooldown = kPlaceInterval;
 
-    // 原有逻辑：扣除物品和设置 input.placeBlock
     auto& curSlot = m_hotbar[m_hotbarIndex];
     if (curSlot.isEmpty()) {
         input.placeBlock = AIR_ID;
@@ -1150,6 +1123,9 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
         case game::net::MessageType::ServerInfo: {
             uint32_t seed = r.ReadU32BE();
             glm::vec3 spawn = r.ReadVec3();
+            
+            m_worldSeed = seed;
+            
             m_lodManager.Start(seed);
             logInfo(logger, "[LOD] Received world seed: " << seed
                     << " spawn: " << spawn.x << "," << spawn.y << "," << spawn.z);
@@ -1264,7 +1240,7 @@ Eng::client::RenderMesh MyGame::BuildSkyboxMesh() {
 // ============================================================
 // 世界查询
 // ============================================================
-BlockId MyGame::GetBlockAt(int wx, int wy, int wz) const { // ★
+BlockId MyGame::GetBlockAt(int wx, int wy, int wz) const {
     return m_world.GetBlockAt(wx, wy, wz);
 }
 
@@ -1290,7 +1266,7 @@ bool MyGame::AABBCollides(const glm::vec3& pos) const {
 // ============================================================
 // 背包
 // ============================================================
-void MyGame::AddToInventory(BlockId id, int count) { // ★
+void MyGame::AddToInventory(BlockId id, int count) {
     if (id == AIR_ID || count <= 0) return;
 
     for (auto& slot : m_hotbar) {
@@ -1323,7 +1299,6 @@ void MyGame::QueueChunkMeshTask(uint64_t key) {
     auto* cZm = m_world.GetChunk(ChunkKey(cx, cz - 1));
     auto* cZp = m_world.GetChunk(ChunkKey(cx, cz + 1));
 
-    // 邻居不存在就传 nullptr
     m_meshManager.Submit(
         key, pC->chunk,
         cXm ? cXm->chunk : nullptr,
@@ -1338,7 +1313,7 @@ void MyGame::DrainMeshResults(size_t maxCount) {
 
     size_t processed = 0;
     m_meshManager.DrainResults([this, &processed, maxCount](game::client::MeshResult&& r) {
-        if (processed >= maxCount) return; // 达到本帧上限就丢弃（底层其实还在队列里等下一帧）
+        if (processed >= maxCount) return;
         processed++;
 
         auto* cc = m_world.GetChunk(r.chunkKey);
