@@ -1125,6 +1125,9 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             glm::vec3 spawn = r.ReadVec3();
             
             m_worldSeed = seed;
+            cameraPos = spawn;
+            m_playerVelocity = glm::vec3(0.0f);
+            m_positionError = glm::vec3(0.0f);
             
             m_lodManager.Start(seed);
             logInfo(logger, "[LOD] Received world seed: " << seed
@@ -1313,7 +1316,7 @@ void MyGame::DrainMeshResults(size_t maxCount) {
 
     size_t processed = 0;
     m_meshManager.DrainResults([this, &processed, maxCount](game::client::MeshResult&& r) {
-        if (processed >= maxCount) return;
+        if (processed >= maxCount) return; // 这里 return 会导致 r 被直接销毁，如果下一帧取不到就泄漏了。
         processed++;
 
         auto* cc = m_world.GetChunk(r.chunkKey);
@@ -1348,5 +1351,4 @@ void MyGame::DrainMeshResults(size_t maxCount) {
         }
     });
 }
-
 } // namespace game

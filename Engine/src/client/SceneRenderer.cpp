@@ -50,20 +50,25 @@ void SceneRenderer::OnChunkMeshReady(uint64_t chunkKey,
         .aabbMax  = aabbMax
     };
 
-    if (!m_rebuildInProgress.load()) {
-        AppendIncremental(chunkKey, m_allChunks[chunkKey]);
+    // ★ 如果正在重建，放入延迟队列
+    if (m_rebuildInProgress.load()) {
+        m_deferredAppends[chunkKey] = m_allChunks[chunkKey];
+        return; 
     }
+    
+    AppendIncremental(chunkKey, m_allChunks[chunkKey]);
 }
 
 void SceneRenderer::OnChunkUnloaded(uint64_t chunkKey) {
     std::lock_guard lock(m_chunkDataMutex);
+    // 如果网格表里有，就把垃圾统计加上，并剔除
     if (auto it = m_chunkMeshTable.find(chunkKey); it != m_chunkMeshTable.end()) {
         m_garbageVertices += it->second.vertexCount;
         m_garbageIndices  += it->second.indexCount;
-        it->second.indexCount  = 0;
-        it->second.vertexCount = 0;
+        m_chunkMeshTable.erase(it);
     }
     m_allChunks.erase(chunkKey);
+    m_deferredAppends.erase(chunkKey);
 }
 
 void SceneRenderer::TriggerAsyncRebuild() {
@@ -130,6 +135,7 @@ void SceneRenderer::Clear() {
     {
         std::lock_guard lock(m_chunkDataMutex);
         m_allChunks.clear();
+        m_deferredAppends.clear(); 
     }
     m_chunkMeshTable.clear();
 
@@ -157,8 +163,9 @@ void SceneRenderer::AppendIncremental(uint64_t key, const ChunkRenderData& data)
     bool outOfCapacity = (m_vertexCursor + data.vertices.size() > maxVertices) ||
                          (m_indexCursor  + data.indices.size()  > maxIndices);
 
-    bool tooMuchGarbage = (m_garbageVertices > m_vertexCursor * 0.8) &&
-                          (m_garbageVertices > 2000000);
+    // ★ 核心修改：只要垃圾超过 50 万，或者垃圾占比超过 10%，立刻重建！
+    bool tooMuchGarbage = (m_garbageVertices > 500000) || 
+                          (m_vertexCursor > 0 && m_garbageVertices > m_vertexCursor * 0.1);
 
     if (outOfCapacity || tooMuchGarbage || !m_terrainVbo || !m_terrainIbo || m_vertexCursor == 0) {
         TriggerAsyncRebuild();
@@ -204,15 +211,18 @@ void SceneRenderer::ProcessPendingRebuild() {
     size_t needVboBytes = std::max<size_t>(geo->vertices.size() * sizeof(service::Vertex) * 2, 128ull * 1024 * 1024);
     size_t needIboBytes = std::max<size_t>(geo->indices.size() * sizeof(uint32_t) * 2, 32ull * 1024 * 1024);
 
-    if (!m_terrainVbo || m_terrainVboCapacityBytes < needVboBytes) {
+    if (!m_terrainVbo || m_terrainVboCapacityBytes < needVboBytes || m_terrainVboCapacityBytes > needVboBytes * 2) {
+        m_terrainVbo.reset();
         m_terrainVbo = m_rhi->CreateBuffer({ .size = needVboBytes, .usage = service::rhi::BufferUsage::Vertex });
         m_terrainVboCapacityBytes = needVboBytes;
     }
-    if (!m_terrainIbo || m_terrainIboCapacityBytes < needIboBytes) {
+    if (!m_terrainIbo || m_terrainIboCapacityBytes < needIboBytes || m_terrainIboCapacityBytes > needIboBytes * 2) {
+        m_terrainIbo.reset();
         m_terrainIbo = m_rhi->CreateBuffer({ .size = needIboBytes, .usage = service::rhi::BufferUsage::Index });
         m_terrainIboCapacityBytes = needIboBytes;
     }
 
+    // 1. 上传重建后的老地形数据
     if (!geo->vertices.empty()) {
         m_rhi->UpdateBuffer(m_terrainVbo, 0, std::as_bytes(std::span<const service::Vertex>(geo->vertices)));
     }
@@ -228,7 +238,49 @@ void SceneRenderer::ProcessPendingRebuild() {
     m_garbageIndices  = 0;
     m_rebuildInProgress = false;
 
-    logInfo(m_logger, std::format("[SceneRenderer] Async Rebuild Complete. Verts: {}", m_vertexCursor));
+    // ★ 打印当前活跃区块数量，观察是否无限增长
+    logInfo(m_logger, std::format("[SceneRenderer] Async Rebuild Complete. Verts: {}, Active Chunks: {}", m_vertexCursor, m_allChunks.size()));
+
+    // 2. 强行合并挂起的新网格
+    std::vector<uint32_t> globalizedIndices;
+    for (auto& [key, data] : m_deferredAppends) {
+        // ★ 保护：如果该区块在延迟期间已经被卸载了，直接跳过！
+        if (m_allChunks.find(key) == m_allChunks.end()) continue;
+
+        size_t maxVertices = m_terrainVboCapacityBytes / sizeof(service::Vertex);
+        size_t maxIndices  = m_terrainIboCapacityBytes / sizeof(uint32_t);
+
+        if (m_vertexCursor + data.vertices.size() <= maxVertices &&
+            m_indexCursor + data.indices.size() <= maxIndices) 
+        {
+            globalizedIndices.clear();
+            globalizedIndices.reserve(data.indices.size());
+            const uint32_t vOffset = static_cast<uint32_t>(m_vertexCursor);
+            for (uint32_t idx : data.indices) {
+                globalizedIndices.push_back(idx + vOffset);
+            }
+
+            m_rhi->UpdateBuffer(
+                m_terrainVbo,
+                m_vertexCursor * sizeof(service::Vertex),
+                std::as_bytes(std::span<const service::Vertex>(data.vertices)));
+
+            m_rhi->UpdateBuffer(
+                m_terrainIbo,
+                m_indexCursor * sizeof(uint32_t),
+                std::as_bytes(std::span<const uint32_t>(globalizedIndices)));
+
+            m_chunkMeshTable[key] = ChunkMeshData{
+                .firstIndex  = static_cast<uint32_t>(m_indexCursor),
+                .indexCount  = static_cast<uint32_t>(data.indices.size()),
+                .vertexCount = static_cast<uint32_t>(data.vertices.size())
+            };
+
+            m_vertexCursor += data.vertices.size();
+            m_indexCursor  += data.indices.size();
+        }
+    }
+    m_deferredAppends.clear();
 }
 
 // ============================================================

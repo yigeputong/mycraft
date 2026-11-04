@@ -1,6 +1,7 @@
 #include "Engine/tool/Log.h"
 #include "Engine/tool/MessageReader.h"
 #include "Engine/tool/MessageWriter.h"
+#include "Engine/tool/Platform.h"
 #include "Engine/tool/Transport.h"
 #include "Engine/tool/NetworkTransport.h"
 #include "game/GameServer.h"
@@ -271,15 +272,129 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
         // 更新最后游玩时间
         meta.lastPlayedTime = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
-        m_save->SaveLevel(meta, spawn);
-        
-        logInfo(m_logger, "[Server] Loaded world '" << meta.displayName << "', seed=" << meta.seed);
     } else {
         logError(m_logger, "[Server] Failed to load level.json for " << worldId);
         m_save->Unlock();
         return false;
     }
 
+    // 出生点校验与 512 格安全寻陆
+    // 如果老存档坐标在海底（<60）或者异常高空（>100），强制重算
+    bool needNewSpawn = (m_spawnPos.y < 60.0f || m_spawnPos.y > 100.0f);
+
+    if (needNewSpawn) {
+        logInfo(m_logger, "[Server] Current spawn is invalid (Y=" << m_spawnPos.y << "). Searching for safe land...");
+        
+        TerrainGenerator tempGen(m_worldSeed, m_registry);
+        int foundCx = 0, foundCz = 0;
+        int bestX = 0, bestY = 65, bestZ = 0;
+        bool foundLand = false;
+
+        constexpr int MAX_RADIUS_CHUNKS = 32; // 32 区块 = 512 格
+        
+        // 按同心方环由内向外搜索
+        for (int r = 0; r <= MAX_RADIUS_CHUNKS && !foundLand; ++r) {
+            for (int cx = -r; cx <= r && !foundLand; ++cx) {
+                for (int cz = -r; cz <= r && !foundLand; ++cz) {
+                    if (std::max(std::abs(cx), std::abs(cz)) != r) continue;
+                    
+                    ChunkGenContext ctx;
+                    ctx.cx = cx;
+                    ctx.cz = cz;
+                    
+                    // 极速生成：只算基础地形，跳过树和花
+                    tempGen.GeneratePhase_BiomeAndDensity(ctx);
+                    tempGen.GeneratePhase_TerrainBlocks(ctx);
+                    
+                    for (int lx = 0; lx < 16 && !foundLand; ++lx) {
+                        for (int lz = 0; lz < 16 && !foundLand; ++lz) {
+                            // 从高空往下扫，严格限制 Y >= 60，绝不在水下出生
+                            for (int y = CHUNK_SIZE_Y - 2; y >= 60; --y) {
+                                BlockId currentBlock = ChunkGet(*ctx.chunk, lx, y, lz);
+                                BlockId aboveBlock1  = ChunkGet(*ctx.chunk, lx, y + 1, lz);
+                                BlockId aboveBlock2  = ChunkGet(*ctx.chunk, lx, y + 2, lz);
+                                
+                                const auto& defCur = m_registry.Get(currentBlock);
+                                const auto& defAbv1 = m_registry.Get(aboveBlock1);
+                                const auto& defAbv2 = m_registry.Get(aboveBlock2);
+                                
+                                bool isSolidGround = m_registry.IsSolid(currentBlock);
+                                bool isSafeGround = !defCur.render.isLiquid && defCur.id != UNKNOWN_ID; 
+                                bool isClearAbove = (!m_registry.IsSolid(aboveBlock1) && !defAbv1.render.isLiquid) && 
+                                                    (!m_registry.IsSolid(aboveBlock2) && !defAbv2.render.isLiquid);
+                                                    
+                                if (isSolidGround && isSafeGround && isClearAbove) {
+                                    bestX = cx * 16 + lx;
+                                    bestY = y + 1;
+                                    bestZ = cz * 16 + lz;
+                                    foundLand = true;
+                                    foundCx = cx;
+                                    foundCz = cz;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 终极兜底：如果 512 格全是水，直接在原点造一个草方块平台
+        if (!foundLand) {
+            logWarning(m_logger, "[Server] No dry land found in 512 radius. Forcing a grass platform at (0, 64, 0).");
+            foundCx = 0;
+            foundCz = 0;
+            bestX = 0;
+            bestY = 65;
+            bestZ = 0;
+        }
+
+        // ★ 核心修改：生成 3x3 的区块阵列，并全部计算光照
+        for (int dx = -1; dx <= 1; ++dx) {
+            for (int dz = -1; dz <= 1; ++dz) {
+                ChunkGenContext ctx;
+                ctx.cx = foundCx + dx;
+                ctx.cz = foundCz + dz;
+                
+                tempGen.GeneratePhase_BiomeAndDensity(ctx);
+                tempGen.GeneratePhase_TerrainBlocks(ctx);
+                tempGen.GeneratePhase_Features(ctx);
+                
+                // 如果是中心区块且触发了兜底逻辑，就强改地形铺草方块
+                if (dx == 0 && dz == 0 && !foundLand) {
+                    BlockId grassId = m_registry.Get("mycraft:grass_block").id;
+                    for (int i = -2; i <= 2; ++i) {
+                        for (int j = -2; j <= 2; ++j) {
+                            int lx = (i + 16) % 16;
+                            int lz = (j + 16) % 16;
+                            ChunkSet(*ctx.chunk, lx, 64, lz, grassId);
+                            for (int clearY = 65; clearY <= 69; ++clearY) {
+                                ChunkSet(*ctx.chunk, lx, clearY, lz, AIR_ID);
+                            }
+                        }
+                    }
+                }
+                
+                // ★ 对每个区块进行光照计算
+                LightEngine::InitRegion(m_registry, *ctx.chunk, nullptr, nullptr, nullptr, nullptr);
+                
+                // ★ 将周围的区块也一并塞入缓存，玩家进场直接秒发
+                m_chunks[ChunkKey(ctx.cx, ctx.cz)] = *ctx.chunk;
+            }
+        }
+        
+        // 保存安全坐标
+        m_spawnPos = glm::vec3(static_cast<float>(bestX) + 0.5f, static_cast<float>(bestY), static_cast<float>(bestZ) + 0.5f);
+        m_save->SaveLevel(meta, m_spawnPos);
+        
+        logInfo(m_logger, "[Server] Spawn point set to: " << m_spawnPos.x << ", " << m_spawnPos.y << ", " << m_spawnPos.z);
+    } else {
+        // 坐标合法，直接更新游玩时间即可
+        m_save->SaveLevel(meta, m_spawnPos);
+        logInfo(m_logger, "[Server] Loaded world '" << meta.displayName << "', seed=" << meta.seed);
+    }
+
+    // 加载方块改变记录
     auto changes = m_save->LoadChanges();
     for (auto& c : changes) {
         uint64_t k = ChunkKey(c.x >> 4, c.z >> 4);
@@ -288,13 +403,15 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
     logInfo(m_logger, "[Server] Loaded " << changes.size() << " block changes");
 
     {
-        unsigned hw = std::thread::hardware_concurrency();
-        unsigned n  = std::clamp(hw > 2 ? hw - 2 : 2u, 2u, 12u);
+        unsigned n  = Eng::tool::GetRecommendedWorkerThreads();
         logInfo(m_logger, "[Server] Server Run");
         logInfo(m_logger, "[Server] World Seed = " << m_worldSeed);
         logInfo(m_logger, "[Server] Starting " << n << " chunk workers");
     }
 
+    // ============================================================
+    // 3. 网络监听与回调
+    // ============================================================
     if (useMemory) {
         m_server = std::make_unique<Eng::tool::MemoryServerTransport>();
     } else {
@@ -303,7 +420,7 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
     if (!m_server->Listen(port)) {
         logError(m_logger, "[Server] Listen failed");
         m_running.store(false);
-        m_save->Unlock(); // ★ 释放锁
+        m_save->Unlock();
         return false;
     }
 
@@ -311,14 +428,19 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
         std::lock_guard<std::mutex> lock(m_playersMutex);
         ServerPlayer p;
         p.id = (uint32_t)id;
+        
+        // ★ 核心修复：在 push_back 之前设置正确的出生点
+        p.position = m_spawnPos; 
         m_players.push_back(p);
 
+        // 发送 PlayerId
         {
             Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(net::MessageType::PlayerId));
             w.WriteU32BE((uint32_t)id);
             m_server->SendTo(id, w.GetBuffer());
         }
+        // 发送 ServerInfo (包含种子和安全出生点)
         {
             Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(net::MessageType::ServerInfo));
@@ -327,9 +449,10 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
             m_server->SendTo(id, w.GetBuffer());
         }
 
+        // 广播已经存在的掉落物
         for (auto& [eid, e] : m_entities) {
             Eng::tool::MessageWriter w;
-            w.Write(static_cast<uint8_t>(net::MessageType::EntitySpawn));
+            w.Write(static_cast<uint8_t>(game::net::MessageType::EntitySpawn));
             w.Write<uint32_t>(eid);
             w.WriteVec3(e.position);
             w.Write<uint16_t>(e.itemType);
@@ -348,14 +471,18 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
         for (auto& p : m_players) {
             if (p.id == (uint32_t)id) {
                 if (m_save && !p.name.empty()) {
+                    // 保存玩家离线位置
                     m_save->SavePlayer(p.name, p.position, p.yaw, p.pitch);
                 }
                 break;
             }
         }
+        
+        // 移除玩家
         m_players.erase(std::remove_if(m_players.begin(), m_players.end(),
             [id](const ServerPlayer& p) { return p.id == (uint32_t)id; }), m_players.end());
 
+        // 清理该玩家的待发送区块请求
         std::queue<PendingChunkRequest> keep;
         while (!m_chunkQueue.empty()) {
             if (m_chunkQueue.front().clientId != id) keep.push(m_chunkQueue.front());
@@ -366,6 +493,9 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
         logInfo(m_logger, "[Server] Player " << id << " left");
     });
 
+    // ============================================================
+    // 4. 启动服务器主循环线程
+    // ============================================================
     m_running.store(true);
     m_thread = std::thread([this]() { Run(); });
     return true;
@@ -452,9 +582,13 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
                     glm::vec3 sp; float sy = 0, spitch = 0;
                     if (m_save && m_save->LoadPlayer(name, sp, sy, spitch)) {
                         p.position = sp; p.yaw = sy; p.pitch = spitch;
-                        logInfo(m_logger, "[Server] Player '" << name << "' restored");
+                        if (p.position.y < 60.0f || p.position.y > 150.0f) {
+                            p.position = m_spawnPos;
+                            logInfo(m_logger, "[Server] Player '" << name << "' had invalid Y, forced to safe spawn.");
+                        }
                     } else {
-                        logInfo(m_logger, "[Server] Player '" << name << "' is new");
+                        p.position = m_spawnPos; 
+                        logInfo(m_logger, "[Server] Player '" << name << "' is new, spawned at " << m_spawnPos.y);
                     }
                     break;
                 }

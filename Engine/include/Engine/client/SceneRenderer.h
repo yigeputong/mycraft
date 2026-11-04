@@ -165,6 +165,9 @@ private:
     std::atomic<bool> m_rebuildInProgress{false};
     std::unique_ptr<Eng::tool::RAIIThread> m_rebuildThread;
 
+    // 用于在后台重建期间挂起新到的网格
+    std::unordered_map<uint64_t, ChunkRenderData> m_deferredAppends; 
+
     // 每帧指令队列
     std::vector<service::rhi::DrawIndexedIndirectCommand> m_indirectCommands;
     std::vector<DrawCommand> m_drawQueue;
