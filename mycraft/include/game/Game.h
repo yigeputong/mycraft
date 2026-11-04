@@ -110,11 +110,12 @@ private:
     client::LodManager                           m_lodManager;
     std::unordered_set<uint64_t>                 m_knownSceneChunks;
     std::vector<Eng::client::RenderMesh>         m_visibleLodMeshes;
+    std::unordered_map<uint64_t, uint32_t>       m_chunkMeshVersions;
 
     // --- 4.3 渲染大脑 ---
     std::unique_ptr<Eng::client::SceneRenderer>  m_sceneRenderer;
 
-    // --- 4.4 存档与界面交互状态 (★ 新增集中区) ---
+    // --- 4.4 存档与界面交互状态 ---
     // 世界选择界面参数
     std::vector<game::server::WorldMetadata> m_savedWorlds;
     std::string m_selectedWorldId;

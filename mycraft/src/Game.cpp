@@ -501,6 +501,8 @@ void MyGame::ExitGame() {
     m_menuOpen = false;
     m_statusText.clear();
 
+    m_chunkMeshVersions.clear();
+
     logInfo(logger, "[Game] Game session exited.");
 }
 
@@ -697,6 +699,7 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     for (auto it = m_knownSceneChunks.begin(); it != m_knownSceneChunks.end(); ) {
         if (m_world.GetChunk(*it) == nullptr) {
             if (m_sceneRenderer) m_sceneRenderer->OnChunkUnloaded(*it);
+            m_chunkMeshVersions.erase(*it);
             it = m_knownSceneChunks.erase(it);
         } else {
             ++it;
@@ -1302,8 +1305,11 @@ void MyGame::QueueChunkMeshTask(uint64_t key) {
     auto* cZm = m_world.GetChunk(ChunkKey(cx, cz - 1));
     auto* cZp = m_world.GetChunk(ChunkKey(cx, cz + 1));
 
+    // 版本号自增并提交
+    uint32_t currentVersion = ++m_chunkMeshVersions[key];
+
     m_meshManager.Submit(
-        key, pC->chunk,
+        key, currentVersion, pC->chunk, 
         cXm ? cXm->chunk : nullptr,
         cXp ? cXp->chunk : nullptr,
         cZm ? cZm->chunk : nullptr,
@@ -1314,10 +1320,14 @@ void MyGame::QueueChunkMeshTask(uint64_t key) {
 void MyGame::DrainMeshResults(size_t maxCount) {
     if (!m_sceneRenderer) return;
 
-    size_t processed = 0;
-    m_meshManager.DrainResults([this, &processed, maxCount](game::client::MeshResult&& r) {
-        if (processed >= maxCount) return; // 这里 return 会导致 r 被直接销毁，如果下一帧取不到就泄漏了。
-        processed++;
+    // 把 maxCount 传给底层 MeshManager，并在回调中校验版本号
+    m_meshManager.DrainResults(maxCount, [this](game::client::MeshResult&& r) {
+        
+        // 1. 版本校验：如果这个结果比当前记录的版本旧，直接丢弃，防止旧网格覆盖新网格
+        auto it = m_chunkMeshVersions.find(r.chunkKey);
+        if (it != m_chunkMeshVersions.end() && r.version < it->second) {
+            return; 
+        }
 
         auto* cc = m_world.GetChunk(r.chunkKey);
         if (!cc) return;
@@ -1351,4 +1361,5 @@ void MyGame::DrainMeshResults(size_t maxCount) {
         }
     });
 }
+
 } // namespace game

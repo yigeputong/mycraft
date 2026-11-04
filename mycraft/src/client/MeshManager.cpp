@@ -1,18 +1,17 @@
 #include "game/client/MeshManager.h"
 #include "game/client/MeshBuilderUtils.h"
 #include "game/client/TextureAtlas.h"
-#include "game/core/BlockRegistry.h"
 #include "Engine/tool/Platform.h"
-#include <algorithm>
-
+#include "Engine/tool/Log.h"
 namespace game::client {
 
 void MeshManager::Start() {
     if (!m_workers.empty()) return;
     m_stop = false;
 
-    // 使用平台抽象获取推荐线程数（移动端 2~4，桌面端 hw-2）
     unsigned n = Eng::tool::GetRecommendedWorkerThreads();
+    auto logger = std::make_unique<Eng::tool::Log>();
+    logInfo(logger, "[MeshManager] Starting " << n << " mesh worker threads");
 
     for (unsigned int i = 0; i < n; ++i) {
         m_workers.push_back(std::make_unique<Eng::tool::RAIIThread>(
@@ -29,7 +28,7 @@ void MeshManager::Stop() {
         w->RequestStop();
     }
 
-    // 2. 清空任务队列，唤醒可能阻塞在 wait 的线程
+    // 2. 清空任务队列
     {
         std::lock_guard<std::mutex> lock(m_taskMutex);
         m_stop = true;
@@ -37,22 +36,24 @@ void MeshManager::Stop() {
     }
     m_taskCv.notify_all(); 
     
-    // 3. 唤醒可能因为结果队列满而阻塞的线程
+    // 3. 唤醒阻塞在结果队列的线程
     {
         std::lock_guard<std::mutex> lock(m_resultMutex);
     }
     m_resultCv.notify_all(); 
 
-    // 4. 清空 vector，触发 RAIIThread 的析构（内部自动 join）
+    // 4. 触发 RAIIThread 析构 join
     m_workers.clear();
 }
 
-void MeshManager::Submit(uint64_t key, std::shared_ptr<Chunk> chunk, 
+void MeshManager::Submit(uint64_t key, uint32_t version, 
+                         std::shared_ptr<Chunk> chunk, 
                          std::shared_ptr<Chunk> nXm, std::shared_ptr<Chunk> nXp, 
                          std::shared_ptr<Chunk> nZm, std::shared_ptr<Chunk> nZp) 
 {
     auto task = std::make_shared<MeshTask>();
     task->chunkKey = key;
+    task->version = version;
     task->chunk = std::move(chunk);
     task->nXm = std::move(nXm);
     task->nXp = std::move(nXp);
@@ -67,18 +68,26 @@ void MeshManager::Submit(uint64_t key, std::shared_ptr<Chunk> chunk,
     m_taskCv.notify_one();
 }
 
-void MeshManager::DrainResults(std::function<void(MeshResult&&)>&& onComplete) {
-    std::queue<MeshResult> localQueue;
-    {
-        std::lock_guard<std::mutex> lock(m_resultMutex);
-        std::swap(localQueue, m_resultQueue);
+void MeshManager::DrainResults(size_t maxCount, std::function<void(MeshResult&&)>&& onComplete) {
+    size_t processed = 0;
+    
+    while (processed < maxCount) {
+        MeshResult result;
+        {
+            std::lock_guard<std::mutex> lock(m_resultMutex);
+            if (m_resultQueue.empty()) break;
+            
+            // ★ 一次只取 maxCount 个，剩下的安全留在队列里
+            result = std::move(m_resultQueue.front());
+            m_resultQueue.pop();
+        }
+        
+        onComplete(std::move(result));
+        processed++;
     }
+    
+    // 唤醒因为结果队列满（>=64）而阻塞的 Worker
     m_resultCv.notify_all();
-
-    while (!localQueue.empty()) {
-        onComplete(std::move(localQueue.front()));
-        localQueue.pop();
-    }
 }
 
 void MeshManager::WorkerLoop(const std::stop_token& st) {
@@ -99,34 +108,36 @@ void MeshManager::WorkerLoop(const std::stop_token& st) {
 
         MeshResult result;
         result.chunkKey = task->chunkKey;
+        result.version = task->version; // ★ 传递版本号
+        
         BuildChunkMeshData(*task, result);
 
         {
             std::unique_lock<std::mutex> lock(m_resultMutex);
-            // 背压核心：如果结果攒了 64 个还没消费，Worker 停止干活，防止内存爆炸
+            // 背压：结果队列攒了 64 个还没消费，Worker 停止干活
             m_resultCv.wait(lock, [this, &st] { 
                 return st.stop_requested() || m_stop || m_resultQueue.size() < 64; 
             });
             if (st.stop_requested() || m_stop) return;
+            
             m_resultQueue.push(std::move(result));
         }
     }
 }
 
 // ============================================================
-// 核心 Mesh 构建逻辑
+// 核心 Mesh 构建逻辑 (保留原版的高效逻辑)
 // ============================================================
-void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
+void MeshManager::BuildChunkMeshData(const MeshTask& task, MeshResult& result) {
     result.vertices.clear();
     result.indices.clear();
     result.waterVertices.clear();
     result.waterIndices.clear();
     
-    // 将恐怖的 150000 调小，改为按需扩容
     result.vertices.reserve(8192); 
     result.indices.reserve(12288);
 
-    if (!task.reg) return; 
+    if (!task.reg || !task.chunk) return; 
     const game::BlockRegistry& reg = *task.reg;
     const Chunk& chunk = *task.chunk;
     const BlockId* pC  = chunk.blocks.data();
@@ -186,7 +197,6 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
     const float faceUVs[4][2] = {{0,0},{0,1},{1,1},{1,0}};
     const int faceAxes[6][2] = { {2, 1}, {2, 1}, {0, 2}, {0, 2}, {0, 1}, {0, 1} };
 
-
     for (int ly = 0; ly < 256; ++ly) {
         for (int lz = 0; lz < 16; ++lz) {
             for (int lx = 0; lx < 16; ++lx) {
@@ -231,20 +241,16 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                     else { tile = ResolveTile(def.render.ForSide().tile); }
                     if (tile < 0) tile = 0;
 
-                    // 使用 GetTileUV 获取内缩的 UV 边界
                     float u0, v0, u1, v1;
                     GetTileUV(tile, u0, v0, u1, v1);
                     
-                    // 真实贴图宽度/高度（已跳过 padding）
                     float uScale = u1 - u0;
                     float vScale = v1 - v0;
 
-                    // 提前判断是不是液体，决定塞到哪个容器里
                     bool isLiquid = def.render.isLiquid;
                     auto& outV = isLiquid ? result.waterVertices : result.vertices;
                     auto& outI = isLiquid ? result.waterIndices  : result.indices;
 
-                    // 偏移量取对应容器的大小
                     auto baseV = static_cast<uint32_t>(outV.size());
 
                     int Nx = normals[f].x, Ny = normals[f].y, Nz = normals[f].z;
@@ -259,7 +265,6 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
                         vert.position = glm::vec3(baseX + lx + vx + 0.5f, ly + vy + 0.5f, baseZ + lz + vz + 0.5f);
                         vert.normal = glm::vec3(Nx, Ny, Nz);
                         
-                        // 液体高度截断
                         if (isLiquid && vert.position.y > ly + 0.01f) vert.position.y = (float)ly + 0.9f;
                         
                         vert.uv = { u0 + faceUVs[v][0] * uScale, v0 + (1.0f - faceUVs[v][1]) * vScale };
@@ -286,11 +291,9 @@ void MeshManager::BuildChunkMeshData(MeshTask& task, MeshResult& result) {
 
                         vert.light = getLight(lx + normals[f].x, ly + normals[f].y, lz + normals[f].z); 
                         
-                        // 塞入对应的顶点数组
                         outV.push_back(vert);
                     }
 
-                    // 塞入对应的索引数组
                     outI.push_back(baseV + 0);
                     outI.push_back(baseV + 1);
                     outI.push_back(baseV + 2);

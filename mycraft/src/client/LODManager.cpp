@@ -436,16 +436,15 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
     outMin = glm::vec3(1e30f);
     outMax = glm::vec3(-1e30f);
 
-    // ★ 核心修复：提前查好 BlockID，不用 static，避免多线程重入或多实例污染
+    // 提前查好 BlockID
     const BlockId waterId = m_registry->Get("mycraft:water").id;
     const BlockId sandId = m_registry->Get("mycraft:sand").id;
     const BlockId snowId = m_registry->Get("mycraft:snow").id;
     const BlockId stoneId = m_registry->Get("mycraft:stone").id;
 
-    // ★ 核心修复 2：批量提取真实区块数据到局部 Map，避免在循环里高频加锁
+    // 批量提取真实区块数据到局部 Map，避免在循环里高频加锁
     std::unordered_map<uint64_t, RealChunkData> localRealData;
     {
-        // 这里因为加了 mutable，在 const 函数里也能正常加锁了
         std::lock_guard lock(m_realDataMutex);
         int minCx = baseBlockX >> 4;
         int maxCx = (baseBlockX + N * sampleStep) >> 4;
@@ -551,17 +550,6 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
         outMax = glm::max(outMax, p);
     };
 
-    const float atlasCols = static_cast<float>(AtlasCols());
-    auto getTileUV = [&](int tile, float& u0, float& v0, float& u1, float& v1) {
-        const float pad = 0.005f; 
-        int col = tile % static_cast<int>(atlasCols);
-        int row = tile / static_cast<int>(atlasCols);
-        u0 = (col / atlasCols) + pad; v0 = (row / atlasCols) + pad;
-        u1 = ((col + 1) / atlasCols) - pad; v1 = ((row + 1) / atlasCols) - pad;
-    };
-
-    float uvStep = std::min(static_cast<float>(sampleStep), 2.0f);
-
     for (int j = 0; j < N; ++j) {
         for (int i = 0; i < N; ++i) {
             float ySelf = cellY(i, j);
@@ -569,9 +557,7 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
             int   tile  = cellTile(i, j, selfIsWater);
             
             float u0, v0, u1, v1;
-            getTileUV(tile, u0, v0, u1, v1);
-            float uR = u0 + (u1 - u0) * uvStep;
-            float vB = v0 + (v1 - v0) * uvStep;
+            GetTileUV(tile, u0, v0, u1, v1);
 
             float x0 = static_cast<float>(baseBlockX + i * sampleStep);
             float x1 = static_cast<float>(baseBlockX + (i + 1) * sampleStep);
@@ -588,9 +574,9 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                 ao = std::max(ao, 0.6f);
 
                 uint32_t base = static_cast<uint32_t>(outV.size());
-                pushVertex({x0, ySelf, z0}, {0,1,0}, {u0, vB}, ao);
-                pushVertex({x1, ySelf, z0}, {0,1,0}, {uR, vB}, ao);
-                pushVertex({x1, ySelf, z1}, {0,1,0}, {uR, v0}, ao);
+                pushVertex({x0, ySelf, z0}, {0,1,0}, {u0, v1}, ao);
+                pushVertex({x1, ySelf, z0}, {0,1,0}, {u1, v1}, ao);
+                pushVertex({x1, ySelf, z1}, {0,1,0}, {u1, v0}, ao);
                 pushVertex({x0, ySelf, z1}, {0,1,0}, {u0, v0}, ao);
                 outI.push_back(base+0); outI.push_back(base+3); outI.push_back(base+2);
                 outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+1);
@@ -626,40 +612,39 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                     if (selfIsWater && !nbIsWater && yNb > SEA_LEVEL) yBottom = yNb; 
                     if (yBottom > ySelf) yBottom = ySelf - 1.0f;
 
+                    // ★ 修复：使用全局标准 API
                     float nu0, nv0, nu1, nv1; 
-                    getTileUV(nt, nu0, nv0, nu1, nv1);
-                    float nUR = nu0 + (nu1 - nu0) * uvStep;
-                    float nVB = nv0 + (nv1 - nv0) * uvStep;
+                    GetTileUV(nt, nu0, nv0, nu1, nv1);
                     
                     uint32_t base = static_cast<uint32_t>(outV.size());
                     glm::vec3 n = normals[f];
 
                     if (f == 0) {
-                        pushVertex({x1, yBottom, z0}, n, {nu0, nVB}, sideAO);
+                        pushVertex({x1, yBottom, z0}, n, {nu0, nv1}, sideAO);
                         pushVertex({x1, ySelf,   z0}, n, {nu0, nv0}, sideAO);
-                        pushVertex({x1, ySelf,   z1}, n, {nUR, nv0}, sideAO);
-                        pushVertex({x1, yBottom, z1}, n, {nUR, nVB}, sideAO);
+                        pushVertex({x1, ySelf,   z1}, n, {nu1, nv0}, sideAO);
+                        pushVertex({x1, yBottom, z1}, n, {nu1, nv1}, sideAO);
                         outI.push_back(base+0); outI.push_back(base+1); outI.push_back(base+2);
                         outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+3);
                     } else if (f == 1) {
-                        pushVertex({x0, yBottom, z1}, n, {nu0, nVB}, sideAO);
+                        pushVertex({x0, yBottom, z1}, n, {nu0, nv1}, sideAO);
                         pushVertex({x0, ySelf,   z1}, n, {nu0, nv0}, sideAO);
-                        pushVertex({x0, ySelf,   z0}, n, {nUR, nv0}, sideAO);
-                        pushVertex({x0, yBottom, z0}, n, {nUR, nVB}, sideAO);
+                        pushVertex({x0, ySelf,   z0}, n, {nu1, nv0}, sideAO);
+                        pushVertex({x0, yBottom, z0}, n, {nu1, nv1}, sideAO);
                         outI.push_back(base+0); outI.push_back(base+1); outI.push_back(base+2);
                         outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+3);
                     } else if (f == 2) {
-                        pushVertex({x0, yBottom, z1}, n, {nu0, nVB}, sideAO);
+                        pushVertex({x0, yBottom, z1}, n, {nu0, nv1}, sideAO);
                         pushVertex({x0, ySelf,   z1}, n, {nu0, nv0}, sideAO);
-                        pushVertex({x1, ySelf,   z1}, n, {nUR, nv0}, sideAO);
-                        pushVertex({x1, yBottom, z1}, n, {nUR, nVB}, sideAO);
+                        pushVertex({x1, ySelf,   z1}, n, {nu1, nv0}, sideAO);
+                        pushVertex({x1, yBottom, z1}, n, {nu1, nv1}, sideAO);
                         outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+1);
                         outI.push_back(base+0); outI.push_back(base+3); outI.push_back(base+2);
                     } else if (f == 3) {
-                        pushVertex({x1, yBottom, z0}, n, {nu0, nVB}, sideAO);
+                        pushVertex({x1, yBottom, z0}, n, {nu0, nv1}, sideAO);
                         pushVertex({x1, ySelf,   z0}, n, {nu0, nv0}, sideAO);
-                        pushVertex({x0, ySelf,   z0}, n, {nUR, nv0}, sideAO);
-                        pushVertex({x0, yBottom, z0}, n, {nUR, nVB}, sideAO);
+                        pushVertex({x0, ySelf,   z0}, n, {nu1, nv0}, sideAO);
+                        pushVertex({x0, yBottom, z0}, n, {nu1, nv1}, sideAO);
                         outI.push_back(base+0); outI.push_back(base+1); outI.push_back(base+2);
                         outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+3);
                     }
@@ -668,4 +653,5 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
         }
     }
 }
+
 } // namespace game::client
