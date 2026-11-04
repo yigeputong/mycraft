@@ -90,9 +90,11 @@ public:
 
 private:
     static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+    
     const std::vector<const char*> validationLayers = { "VK_LAYER_KHRONOS_validation" };
-
-#ifdef NDEBUG
+// 在 Android 平台上，模拟器和真机通常都没有预装验证层
+// 如果强行开启会直接报 ErrorLayerNotPresent 崩溃
+#if defined(NDEBUG) || defined(__ANDROID__)
     static constexpr bool enableValidationLayers = false;
 #else
     static constexpr bool enableValidationLayers = true;

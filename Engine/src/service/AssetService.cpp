@@ -16,6 +16,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "Engine/tool/Platform.h"
 
 namespace Eng::service {
 
@@ -148,15 +149,15 @@ ShaderPtr AssetService::LoadShader(const rhi::ShaderCreateInfo& info) {
 // ReadFile —— SDL_IOStream 读盘去重
 // ============================================================
 std::shared_ptr<const std::vector<std::byte>> AssetService::ReadFile(const std::string& path) {
-#ifdef __ANDROID__
-    // 核心大招：Android 端强制剥离 "assets/" 前缀
+    // 统一拷贝一份，避免修改原字符串或引用重绑定的问题
     std::string actualPath = path;
-    if (actualPath.rfind("assets/", 0) == 0) {
-        actualPath = actualPath.substr(7); // 剥离前 7 个字符
+    
+    // 核心大招：移动端强制剥离 "assets/" 前缀
+    if (Eng::tool::IsMobilePlatform()) {
+        if (actualPath.rfind("assets/", 0) == 0) {
+            actualPath.erase(0, 7); // 原地擦除，比 substr 更高效，避免临时对象
+        }
     }
-#else
-    const std::string& actualPath = path;
-#endif
 
     // 缓存检查用 actualPath，防止桌面端和安卓端串包
     if (auto it = m_fileReadCache.find(actualPath); it != m_fileReadCache.end()) {

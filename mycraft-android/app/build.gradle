@@ -9,6 +9,15 @@ def vcpkgRoot = System.getenv("VCPKG_ROOT") ?: "/path/to/your/vcpkg"
 // 转换为正斜杠，防止 CMake 路径解析错误
 vcpkgRoot = vcpkgRoot.replace("\\", "/")
 
+// 在 android 块外，根据当前注入的 ABI 动态决定 triplet
+def currentAbi = project.findProperty("android.injected.build.abi") ?: "arm64-v8a"
+def targetTriplet = "arm64-android"
+if (currentAbi == "x86_64") {
+    targetTriplet = "x64-android"
+} else if (currentAbi == "armeabi-v7a") {
+    targetTriplet = "arm-android"
+}
+
 android {
     namespace = "com.yigeputong.mycraft"
     compileSdkVersion 35
@@ -21,15 +30,18 @@ android {
         versionCode 1
         versionName "1.0"
 
+        ndk {
+           abiFilters 'arm64-v8a'
+        }
+
         externalNativeBuild {
             cmake {
                 arguments "-DANDROID_STL=c++_shared",
                         "-DCMAKE_TOOLCHAIN_FILE=${vcpkgRoot}/scripts/buildsystems/vcpkg.cmake",
+                        "-DVCPKG_TARGET_TRIPLET=${targetTriplet}",
                         "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=${android.ndkDirectory}/build/cmake/android.toolchain.cmake"
-
+                
                 cppFlags "-std=c++23 -fexceptions -frtti"
-
-                abiFilters 'arm64-v8a', 'x86_64'
             }
         }
     }

@@ -1,6 +1,7 @@
 #include "game/core/BlockRegistry.h"
 #include <nlohmann/json.hpp>
 #include "Engine/tool/FileTool.h"
+#include "Engine/tool/Platform.h"
 #include <SDL3/SDL_filesystem.h>
 #include <algorithm>
 #include <stdexcept>
@@ -71,16 +72,26 @@ void BlockRegistry::LoadAll(const std::string& directory) {
 
     std::vector<std::string> files;
 
-    // 用 SDL 的跨平台目录遍历替换 std::filesystem
-    SDL_EnumerateDirectory(directory.c_str(), 
+    // 1. 处理平台差异：Android 下剥离 "assets/" 前缀
+    // 在非 Android 平台，这确实只是一次单纯拷贝，但为了跨平台代码统一，我们接受它。
+    // 如果 clang-tidy 依然抱怨，可以用 [[maybe_unused]] 修饰，但这里直接使用 erase 会更好。
+    std::string actualDir = directory; // NOLINT(performance-unnecessary-copy-initialization)
+    if (Eng::tool::IsMobilePlatform()) {
+        if (actualDir.rfind("assets/", 0) == 0) {
+            actualDir.erase(0, 7); 
+        }
+    }
+
+    // 2. 遍历目录
+    SDL_EnumerateDirectory(actualDir.c_str(), 
         [](void* userdata, const char* dirname, const char* fname) -> SDL_EnumerationResult {
+            (void)dirname; // 消除 unused parameter 警告
             auto* fileList = static_cast<std::vector<std::string>*>(userdata);
             std::string filename(fname);
             
             // 检查是不是 .json 结尾
             if (filename.size() > 5 && filename.substr(filename.size() - 5) == ".json") {
-                // 把路径拼起来 (注意加上 /)
-                fileList->push_back(std::string(dirname) + "/" + filename);
+                fileList->push_back(filename); 
             }
             return SDL_ENUM_CONTINUE;
         }, &files);
@@ -92,15 +103,19 @@ void BlockRegistry::LoadAll(const std::string& directory) {
 
     std::sort(files.begin(), files.end());
 
-    // 预分配初始大小
     m_blocks.resize(128);
     for (auto& b : m_blocks) b.id = UNKNOWN_ID;
 
-    for (const auto& p : files) {
+    for (const auto& filename : files) {
         try {
-            ParseOne(p);
+            // 3. 拼接完整的读取路径
+            std::string fullPath = actualDir;
+            fullPath += '/';
+            fullPath += filename;
+            
+            ParseOne(fullPath);
         } catch (const std::exception& e) {
-            logError(m_logger.get(), "BlockRegistry: skip " << p << " due to error: " << e.what());
+            logError(m_logger.get(), "BlockRegistry: skip " << filename << " due to error: " << e.what());
         }
     }
 

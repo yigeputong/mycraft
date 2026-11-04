@@ -11,6 +11,7 @@
 #include <array>
 #include <stdexcept>
 #include <algorithm>
+#include <utility>
 #include <vulkan/vulkan.hpp>
 
 namespace Eng::service {
@@ -343,6 +344,11 @@ void VulkanRenderService::createSwapChain() {
     m_swapChainExtent = chooseSwapExtent(caps);
     uint32_t imageCount = chooseSwapMinImageCount(caps);
 
+    // 强制使用 eIdentity，让驱动程序不要自动旋转我们的画面
+    vk::SurfaceTransformFlagBitsKHR preTransform = 
+        (caps.supportedTransforms & vk::SurfaceTransformFlagBitsKHR::eIdentity) ? 
+        vk::SurfaceTransformFlagBitsKHR::eIdentity : caps.currentTransform;
+
     vk::SwapchainCreateInfoKHR createInfo{
         .surface = *m_surface,
         .minImageCount = imageCount,
@@ -352,7 +358,7 @@ void VulkanRenderService::createSwapChain() {
         .imageArrayLayers = 1,
         .imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst,
         .imageSharingMode = vk::SharingMode::eExclusive,
-        .preTransform = caps.currentTransform,
+        .preTransform = preTransform,
         .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
         .presentMode = presentMode,
         .clipped = VK_TRUE
@@ -419,10 +425,9 @@ void VulkanRenderService::cleanupSwapChain() {
 void VulkanRenderService::recreateSwapChain() {
     int width = 0, height = 0;
     SDL_GetWindowSizeInPixels(m_window->GetSDLWindow(), &width, &height);
-    while (width == 0 || height == 0) {
-        SDL_WaitEvent(nullptr);
-        SDL_GetWindowSizeInPixels(m_window->GetSDLWindow(), &width, &height);
-    }
+    
+    // 如果不是 0，直接往下走；是 0 就跳过这一帧
+    if (width == 0 || height == 0) return; 
 
     m_device.waitIdle();
     cleanupSwapChain();
@@ -1152,6 +1157,20 @@ void VulkanRenderService::DrawIndexedIndirect(const BufferPtr& indirectBuffer, u
 // ==========================================
 void VulkanRenderService::BeginFrame() {
     m_frameStarted = false;
+
+    // 每帧检查窗口实际尺寸，如果变了就立刻重建 Swapchain
+    int curW = 0, curH = 0;
+    SDL_GetWindowSizeInPixels(m_window->GetSDLWindow(), &curW, &curH);
+    if (curW > 0 && curH > 0 && 
+        (std::cmp_not_equal(curW, m_swapChainExtent.width) || 
+         std::cmp_not_equal(curH, m_swapChainExtent.height))) {
+        m_framebufferResized = true;
+    }
+
+    if (m_framebufferResized) {
+        recreateSwapChain();
+    }
+
     (void)m_device.waitForFences({ *m_inFlightFences[m_frameIndex] }, VK_TRUE, UINT64_MAX);
 
     try {
@@ -1363,12 +1382,7 @@ bool VulkanRenderService::InitImGuiBackend() {
     pool_info.poolSizeCount = (uint32_t)IM_ARRAYSIZE(pool_sizes);
     pool_info.pPoolSizes = pool_sizes;
     vkCreateDescriptorPool(*m_device, &pool_info, nullptr, &m_imguiDescriptorPool);
-
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-
+    
     ImGui_ImplSDL3_InitForVulkan(m_window->GetSDLWindow());
 
     ImGui_ImplVulkan_InitInfo init_info = {};
@@ -1405,7 +1419,6 @@ void VulkanRenderService::ShutdownImGuiBackend() {
     m_device.waitIdle();
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplSDL3_Shutdown();
-    ImGui::DestroyContext();
     vkDestroyDescriptorPool(*m_device, m_imguiDescriptorPool, nullptr);
     m_imguiInitialized = false;
 }

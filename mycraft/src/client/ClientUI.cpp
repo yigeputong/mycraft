@@ -3,17 +3,44 @@
 #include "game/client/TextureAtlas.h"
 #include "imgui.h"
 #include "Engine/tool/Window.h"
+#include "Engine/tool/Platform.h"
 #include <cmath>
 #include <cstdio>
 #include <tuple>
+#include <cstdarg>
 
 namespace game::client {
+
+namespace {
+    // ==========================================
+    // UI 尺寸与颜色常量（基于 FontSize 动态缩放）
+    // ==========================================
+    constexpr float PADDING_RATIO           = 1.0f;   // 基础内边距
+    constexpr float LEFT_PANEL_WIDTH_RATIO  = 10.0f;  // 左侧导航栏宽度
+    constexpr float ITEM_WIDTH_RATIO        = 10.0f;  // 右侧控件宽度
+    constexpr float BUTTON_HEIGHT_RATIO     = 1.75f;  // 按钮高度
+    constexpr float MIN_BTN_WIDTH_RATIO     = 6.0f;   // 按钮最小宽度
+    constexpr float TEXT_WRAP_RATIO         = 15.0f;  // 文本换行宽度
+
+    // 移动端安全区比例（避开状态栏、导航条、曲面屏边缘）
+    constexpr float SAFE_TOP_RATIO          = 1.5f;   // 顶部状态栏高度占比
+    constexpr float SAFE_BOTTOM_RATIO       = 2.5f;   // 底部导航栏高度占比
+    constexpr float SAFE_SIDE_RATIO         = 1.0f;   // 左右边缘安全距离
+
+    // 主题颜色
+    constexpr ImVec4 COLOR_ACCENT      = ImVec4(0.20f, 0.80f, 0.80f, 1.00f); // 青色
+    constexpr ImVec4 COLOR_TEXT_ACTIVE = ImVec4(0.20f, 0.80f, 0.80f, 1.00f);
+    constexpr ImVec4 COLOR_TEXT_MUTED  = ImVec4(0.60f, 0.60f, 0.60f, 1.00f);
+    constexpr ImVec4 COLOR_WARNING     = ImVec4(1.00f, 0.80f, 0.20f, 1.00f);
+    constexpr ImVec4 COLOR_ERROR       = ImVec4(1.00f, 0.30f, 0.30f, 1.00f);
+}
 
 // ==========================================
 // UI 辅助工具实现
 // ==========================================
 void ClientUI::DrawTextWithShadow(ImDrawList* dl, ImVec2 pos, ImU32 color, const char* text) {
-    dl->AddText(ImVec2(pos.x + 2, pos.y + 2), IM_COL32(30, 30, 30, 255), text);
+    float offset = ImGui::GetFontSize() * 0.1f;
+    dl->AddText(ImVec2(pos.x + offset, pos.y + offset), IM_COL32(30, 30, 30, 255), text);
     dl->AddText(pos, color, text);
 }
 
@@ -27,9 +54,12 @@ bool ClientUI::DrawButton(const char* label, ImVec2 size) {
     ImU32 bgColor = hovered ? IM_COL32(120, 120, 120, 255) : IM_COL32(100, 100, 100, 255);
     dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bgColor);
 
-    dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(0, 0, 0, 255), 0.0f, 0, 2.0f);
+    float borderThickness = std::max(1.0f, ImGui::GetFontSize() * 0.1f);
+    dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(0, 0, 0, 255), 0.0f, 0, borderThickness * 2.0f);
     ImU32 innerColor = hovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(80, 80, 80, 255);
-    dl->AddRect(ImVec2(pos.x + 1, pos.y + 1), ImVec2(pos.x + size.x - 1, pos.y + size.y - 1), innerColor, 0.0f, 0, 2.0f);
+    dl->AddRect(ImVec2(pos.x + borderThickness, pos.y + borderThickness), 
+                ImVec2(pos.x + size.x - borderThickness, pos.y + size.y - borderThickness), 
+                innerColor, 0.0f, 0, borderThickness);
 
     ImVec2 textSize = ImGui::CalcTextSize(label);
     ImVec2 textPos = ImVec2(pos.x + (size.x - textSize.x) * 0.5f, pos.y + (size.y - textSize.y) * 0.5f);
@@ -43,7 +73,8 @@ void ClientUI::DrawRotatedText(ImDrawList* dl, ImVec2 center, const char* text, 
     ImVec2 pos = ImVec2(center.x - textSize.x * 0.5f, center.y - textSize.y * 0.5f);
     
     int vtxStart = dl->VtxBuffer.Size;
-    dl->AddText(ImVec2(pos.x + 2, pos.y + 2), IM_COL32(30, 30, 30, 255), text);
+    float offset = ImGui::GetFontSize() * 0.1f;
+    dl->AddText(ImVec2(pos.x + offset, pos.y + offset), IM_COL32(30, 30, 30, 255), text);
     dl->AddText(pos, color, text);
     int vtxEnd = dl->VtxBuffer.Size;
 
@@ -64,11 +95,9 @@ void ClientUI::DrawIsometricBlock(ImDrawList* dl, ImVec2 center, float size, Blo
 
     const auto& def = reg.Get(id);
     
-    // ★ 从 BlockRender 获取贴图名字，再查图集索引
     int topTile   = ResolveTile(def.render.ForTop().tile);
     int sideTile  = ResolveTile(def.render.ForSide().tile);
     
-    // 如果没找到，fallback 到 0
     if (topTile < 0) topTile = 0;
     if (sideTile < 0) sideTile = 0;
 
@@ -133,22 +162,61 @@ void ClientUI::DrawMainMenu([[maybe_unused]] Eng::Engine& engine, MyGame& game) 
     ImGui::SetNextWindowSize(io.DisplaySize);
     ImGui::Begin("##MainMenuRoot", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground);
 
-    float menuWidth = 400.0f;
-    float buttonHeight = 40.0f;
+    float fontSize = ImGui::GetFontSize();
+    
+    float safeTop = 0.0f;
+    float safeBottom = 0.0f;
+    if (Eng::tool::IsMobilePlatform()) {
+        safeTop = fontSize * SAFE_TOP_RATIO;
+        safeBottom = fontSize * SAFE_BOTTOM_RATIO;
+    }
+
+    // 整体尺寸
+    float menuWidth = fontSize * 15.0f;      
+    float buttonHeight = fontSize * 1.8f;    
+    float buttonGap = fontSize * 0.6f;       
+    
+    // 动态标题防溢出（基础缩放调小）
+    float titleTextBaseWidth = ImGui::CalcTextSize("MYCRAFT").x;
+    float desiredScale = 2.0f;               
+    if (titleTextBaseWidth * desiredScale > io.DisplaySize.x * 0.8f) {
+        desiredScale = (io.DisplaySize.x * 0.8f) / titleTextBaseWidth;
+    }
+    
+    ImGui::PushFont(ImGui::GetFont(), fontSize * desiredScale);
+    ImVec2 titleSize = ImGui::CalcTextSize("MYCRAFT");
+    ImGui::PopFont();
+    
+    // 间距
+    float titleToButtonsSpace = fontSize * 2.0f; 
+
+    // 计算整体垂直居中时，把底部的版本号空间也算进去，防止遮挡
+    float totalButtonsHeight = buttonHeight * 3 + buttonGap * 2;
+    float versionSpace = fontSize * 3.0f; // 预留给底部版本号的间距
+    float totalContentHeight = titleSize.y + titleToButtonsSpace + totalButtonsHeight + versionSpace;
+    
+    float usableHeight = io.DisplaySize.y - safeTop - safeBottom;
+    float blockStartY = safeTop + (usableHeight - totalContentHeight) * 0.5f;
+    
+    if (blockStartY < safeTop + fontSize * 2.0f) blockStartY = safeTop + fontSize * 2.0f;
+
     float startX = (io.DisplaySize.x - menuWidth) * 0.5f;
-    float startY = io.DisplaySize.y * 0.3f;
-
-    ImGui::SetWindowFontScale(3.0f);
-    const char* title = "MYCRAFT";
-    ImVec2 titleSize = ImGui::CalcTextSize(title);
-    ImVec2 titlePos = ImVec2((io.DisplaySize.x - titleSize.x * 3.0f) * 0.5f, startY - 120);
-    DrawTextWithShadow(ImGui::GetWindowDrawList(), titlePos, IM_COL32(200, 200, 200, 255), title);
-    ImGui::SetWindowFontScale(1.0f);
-
+    ImVec2 titlePos = ImVec2((io.DisplaySize.x - titleSize.x) * 0.5f, blockStartY);
+    
+    // 标题
+    ImGui::PushFont(ImGui::GetFont(), fontSize * desiredScale);
+    DrawTextWithShadow(ImGui::GetWindowDrawList(), titlePos, IM_COL32(200, 200, 200, 255), "MYCRAFT");
+    ImGui::PopFont();
+    
+    // 副标题
     const char* splash = "Only in Mycraft!";
-    DrawRotatedText(ImGui::GetWindowDrawList(), ImVec2(startX + menuWidth - 50, startY - 80), splash, -0.3f, IM_COL32(255, 255, 0, 255));
+    float splashAngle = -0.3f;
+    ImVec2 splashCenter(titlePos.x + titleSize.x - fontSize * 2.0f, titlePos.y + titleSize.y - fontSize * 0.5f);
+    DrawRotatedText(ImGui::GetWindowDrawList(), splashCenter, splash, splashAngle, IM_COL32(255, 255, 0, 255));
 
-    ImGui::SetCursorScreenPos(ImVec2(startX, startY));
+    float buttonsStartY = blockStartY + titleSize.y + titleToButtonsSpace;
+
+    ImGui::SetCursorScreenPos(ImVec2(startX, buttonsStartY));
     if (DrawButton("Single Player", ImVec2(menuWidth, buttonHeight))) {
         if (game.StartLocalServer(true, true)) {
             game.EnterGame();
@@ -158,40 +226,43 @@ void ClientUI::DrawMainMenu([[maybe_unused]] Eng::Engine& engine, MyGame& game) 
         }
     }
 
-    ImGui::SetCursorScreenPos(ImVec2(startX, startY + 50));
+    ImGui::SetCursorScreenPos(ImVec2(startX, buttonsStartY + buttonHeight + buttonGap));
     if (DrawButton("Multiplayer", ImVec2(menuWidth, buttonHeight))) {
         game.m_showMultiplayerDialog = true;
     }
 
-    ImGui::SetCursorScreenPos(ImVec2(startX, startY + 110));
+    ImGui::SetCursorScreenPos(ImVec2(startX, buttonsStartY + (buttonHeight + buttonGap) * 2));
     if (DrawButton("Options...", ImVec2(menuWidth * 0.48f, buttonHeight))) {
         game.m_menuOpen = true;
     }
-    ImGui::SetCursorScreenPos(ImVec2(startX + menuWidth * 0.52f, startY + 110));
+    ImGui::SetCursorScreenPos(ImVec2(startX + menuWidth * 0.52f, buttonsStartY + (buttonHeight + buttonGap) * 2));
     if (DrawButton("Quit Game", ImVec2(menuWidth * 0.48f, buttonHeight))) {
         game.m_shouldQuit = true;
     }
 
-    ImGui::GetWindowDrawList()->AddText(ImVec2(10, io.DisplaySize.y - 30), IM_COL32(200, 200, 200, 255), "Mycraft v0.0.1");
-    const char* copyright = "Copyright Mycraft Team. Open Source Project.";
-    ImVec2 copySize = ImGui::CalcTextSize(copyright);
-    ImGui::GetWindowDrawList()->AddText(ImVec2(io.DisplaySize.x - copySize.x - 10, io.DisplaySize.y - 30), IM_COL32(200, 200, 200, 255), copyright);
-
     if (!game.m_statusText.empty()) {
-        ImGui::SetCursorScreenPos(ImVec2(startX, startY + 170));
-        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", game.m_statusText.c_str());
+        ImGui::SetCursorScreenPos(ImVec2(startX, buttonsStartY + (buttonHeight + buttonGap) * 3));
+        ImGui::TextColored(COLOR_ERROR, "%s", game.m_statusText.c_str());
     }
+
+    // 底部版本号
+    float bottomTextY = io.DisplaySize.y - safeBottom - fontSize * 1.5f;
+    const char* versionStr = "Mycraft v" MYCRAFT_VERSION;
+    ImVec2 versionSize = ImGui::CalcTextSize(versionStr);
+    ImGui::GetWindowDrawList()->AddText(ImVec2((io.DisplaySize.x - versionSize.x) * 0.5f, bottomTextY), 
+        IM_COL32(150, 150, 150, 255), versionStr);
+
     ImGui::End();
 
-    // 多人连接弹窗
+    // 多人弹窗
     if (game.m_showMultiplayerDialog) ImGui::OpenPopup("Connect to Server");
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(400, 0), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(fontSize * 25.0f, 0), ImGuiCond_Appearing);
     if (ImGui::BeginPopupModal("Connect to Server", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::InputText("Address", game.m_ipBuffer, sizeof(game.m_ipBuffer));
         ImGui::InputInt("Port", &game.m_portInput);
         ImGui::Spacing();
-        if (ImGui::Button("Connect", ImVec2(120, 40))) {
+        if (ImGui::Button("Connect", ImVec2(fontSize * 6.0f, buttonHeight))) {
             if (game.ConnectToServer(game.m_ipBuffer, (uint16_t)game.m_portInput)) {
                 game.EnterGame();
                 game.m_showMultiplayerDialog = false;
@@ -202,7 +273,7 @@ void ClientUI::DrawMainMenu([[maybe_unused]] Eng::Engine& engine, MyGame& game) 
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 40))) {
+        if (ImGui::Button("Cancel", ImVec2(fontSize * 6.0f, buttonHeight))) {
             game.m_showMultiplayerDialog = false;
             game.m_statusText.clear();
             ImGui::CloseCurrentPopup();
@@ -218,8 +289,8 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.20f, 0.22f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.25f, 0.28f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.15f, 0.17f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(0.20f, 0.80f, 0.80f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.20f, 0.80f, 0.80f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_CheckMark, COLOR_ACCENT);
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, COLOR_ACCENT);
     ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.30f, 0.90f, 0.90f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.20f, 0.80f, 0.80f, 0.20f));
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.20f, 0.80f, 0.80f, 0.30f));
@@ -235,69 +306,136 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
     ImGui::SetNextWindowSize(io.DisplaySize);
     ImGui::Begin("##SettingsRoot", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground);
 
-    ImGui::SetCursorPos(ImVec2(20, 20));
-    ImGui::SetNextItemWidth(300);
+    const float fontSize = ImGui::GetFontSize();
+    const float padding = fontSize * PADDING_RATIO;
+    const float buttonHeight = fontSize * BUTTON_HEIGHT_RATIO;
+    const float leftWidth = fontSize * LEFT_PANEL_WIDTH_RATIO;
+
+    float safeTop = 0.0f, safeBottom = 0.0f, safeSide = 0.0f;
+    if (Eng::tool::IsMobilePlatform()) {
+        safeTop = fontSize * SAFE_TOP_RATIO;
+        safeBottom = fontSize * SAFE_BOTTOM_RATIO;
+        safeSide = fontSize * SAFE_SIDE_RATIO;
+    }
+
+    // =========================================================
+    // 1. 顶部单行工具栏
+    // =========================================================
+    ImGui::SetCursorPos(ImVec2(padding + safeSide, padding + safeTop));
+    
+    const char* leftBtnText = (game.m_state == MyGame::GameState::Playing) ? "Save & Quit to Title" : "Back to Menu";
+    float leftBtnWidth = ImGui::CalcTextSize(leftBtnText).x + fontSize * PADDING_RATIO * 2.0f;
+    if (leftBtnWidth < fontSize * ITEM_WIDTH_RATIO) leftBtnWidth = fontSize * ITEM_WIDTH_RATIO; 
+
+    if (ImGui::Button(leftBtnText, ImVec2(leftBtnWidth, buttonHeight))) {
+        if (game.m_state == MyGame::GameState::Playing) {
+            game.m_returnToMenuPending = true;
+        } else {
+            game.m_menuOpen = false;
+        }
+    }
+
+    ImGui::SameLine();
+    const char* btnApplyText = "Apply";
+    float applyWidth = ImGui::CalcTextSize(btnApplyText).x + fontSize * PADDING_RATIO * 2.0f;
+    if (applyWidth < fontSize * MIN_BTN_WIDTH_RATIO) applyWidth = fontSize * MIN_BTN_WIDTH_RATIO;
+    if (ImGui::Button(btnApplyText, ImVec2(applyWidth, buttonHeight))) {
+        game.m_applyPending = true;
+        game.SaveSettings(engine);
+    }
+
+    ImGui::SameLine();
+    const char* btnDoneText = "Done";
+    float doneWidth = ImGui::CalcTextSize(btnDoneText).x + fontSize * PADDING_RATIO * 2.0f;
+    if (doneWidth < fontSize * MIN_BTN_WIDTH_RATIO) doneWidth = fontSize * MIN_BTN_WIDTH_RATIO;
+    if (ImGui::Button(btnDoneText, ImVec2(doneWidth, buttonHeight))) {
+        game.m_applyPending = true;
+        game.m_menuOpen = false;
+        game.SaveSettings(engine);
+    }
+
+    // 中间搜索框区
+    ImGui::SameLine();
+    float availWidth = ImGui::GetContentRegionAvail().x;
+    
+    float searchWidth = availWidth - safeSide - buttonHeight - (ImGui::GetStyle().ItemSpacing.x * 2.0f);
+    if (searchWidth < fontSize * 10.0f) searchWidth = fontSize * 10.0f;
+
+    float calculatedFramePaddingY = (buttonHeight - fontSize) * 0.5f;
+    if (calculatedFramePaddingY < 0.0f) calculatedFramePaddingY = 0.0f;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, calculatedFramePaddingY));
+    ImGui::SetNextItemWidth(searchWidth);
     static char searchBuf[128] = "";
     ImGui::InputTextWithHint("##Search", "Search options...", searchBuf, sizeof(searchBuf));
+    ImGui::PopStyleVar();
 
-    ImGui::SameLine(io.DisplaySize.x - 50);
-    if (ImGui::Button("X", ImVec2(30, 30))) {
+    // 右侧关闭按钮 (使用 safeSide 对齐)
+    ImGui::SameLine(io.DisplaySize.x - padding - safeSide - buttonHeight);
+    if (ImGui::Button("X", ImVec2(buttonHeight, buttonHeight))) {
         game.m_menuOpen = false;
     }
 
     ImGui::Separator();
     ImGui::Spacing();
 
-    float leftWidth = 250.0f;
-    float contentHeight = io.DisplaySize.y - 140.0f;
+    // =========================================================
+    // 2. 中间面板区（占据所有剩余高度）
+    // =========================================================
+    const float contentStartY = ImGui::GetCursorPosY(); 
+    float contentHeight = io.DisplaySize.y - contentStartY - safeBottom - padding; 
+    if (contentHeight < fontSize * LEFT_PANEL_WIDTH_RATIO) contentHeight = fontSize * LEFT_PANEL_WIDTH_RATIO;
 
     // 左侧导航
+    ImGui::SetCursorPosX(padding + safeSide);
     ImGui::BeginChild("##LeftPanel", ImVec2(leftWidth, contentHeight), true, ImGuiWindowFlags_NoScrollbar);
     {
         ImGui::Spacing();
-        if (game.m_settingsTab == 0) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 0.8f, 0.8f, 1.0f));
-        else ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-        if (ImGui::Selectable("    Video", game.m_settingsTab == 0)) game.m_settingsTab = 0;
-        ImGui::PopStyleColor();
-
-        if (game.m_settingsTab == 1) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 0.8f, 0.8f, 1.0f));
-        else ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-        if (ImGui::Selectable("    Audio", game.m_settingsTab == 1)) game.m_settingsTab = 1;
-        ImGui::PopStyleColor();
-
-        if (game.m_settingsTab == 2) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 0.8f, 0.8f, 1.0f));
-        else ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-        if (ImGui::Selectable("    Controls", game.m_settingsTab == 2)) game.m_settingsTab = 2;
-        ImGui::PopStyleColor();
+        auto DrawTab = [&](const char* label, int tabId) {
+            if (game.m_settingsTab == tabId) ImGui::PushStyleColor(ImGuiCol_Text, COLOR_TEXT_ACTIVE);
+            else ImGui::PushStyleColor(ImGuiCol_Text, COLOR_TEXT_MUTED);
+            if (ImGui::Selectable(label, game.m_settingsTab == tabId)) game.m_settingsTab = tabId;
+            ImGui::PopStyleColor();
+        };
+        DrawTab("    Video", 0);
+        DrawTab("    Audio", 1);
+        DrawTab("    Controls", 2);
+        DrawTab("    About", 3);
     }
     ImGui::EndChild();
     ImGui::SameLine();
 
     // 右侧面板
-    ImGui::BeginChild("##RightPanel", ImVec2(0, contentHeight), true, ImGuiWindowFlags_NoScrollbar);
+    float rightPanelWidth = ImGui::GetContentRegionAvail().x - safeSide;
+    if (rightPanelWidth < 0.0f) rightPanelWidth = 0.0f;
+    
+    ImGui::BeginChild("##RightPanel", ImVec2(rightPanelWidth, contentHeight), true);
     {
         auto& wcfg = game.mainWin->GetConfigs();
         auto& rcfg = engine.GetConfig().render;
         auto& ecfg = engine.GetConfig().window;
+        
+        const float rightPanelLeftPadding = padding + fontSize * PADDING_RATIO;
+        const float itemWidth = fontSize * ITEM_WIDTH_RATIO;
+        const float textWrapWidth = leftWidth + rightPanelLeftPadding + fontSize * TEXT_WRAP_RATIO;
 
         if (game.m_settingsTab == 0) {
             ImGui::Spacing();
-            ImGui::Text("Render Distance"); ImGui::SameLine(leftWidth * 1.2f);
-            ImGui::SetNextItemWidth(150);
+            
+            ImGui::Text("Render Distance"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
+            ImGui::SetNextItemWidth(itemWidth);
             ImGui::SliderInt("##rd", &game.m_renderDistance, 2, 32, "%d chunks");
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
             
-            // 1. LOD 开关
             ImGui::Checkbox("Enable LOD", &game.m_enableLod);
             
-            // 2. LOD 视距输入框（开关关闭时置灰）
             ImGui::BeginDisabled(!game.m_enableLod);
-            ImGui::Text("LOD Render Distance"); ImGui::SameLine(leftWidth * 1.2f);
-            ImGui::SetNextItemWidth(200); 
+            ImGui::Text("LOD Render Distance"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
+            ImGui::SetNextItemWidth(itemWidth); 
             ImGui::InputInt("##lrd", &game.m_lodRenderDistance, 1, 10);
-            // 防止输入非法值
+            
             int minLodDist = game.m_renderDistance;
-            int maxLodDist = game.m_renderDistance * 16; // 最高支持 16 倍视距
+            int maxLodDist = game.m_renderDistance * 16; 
             if (game.m_lodRenderDistance < minLodDist) game.m_lodRenderDistance = minLodDist;
             if (game.m_lodRenderDistance > maxLodDist) game.m_lodRenderDistance = maxLodDist;
             ImGui::SameLine();
@@ -305,55 +443,44 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
             ImGui::EndDisabled();
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-            ImGui::Text("Fullscreen Mode"); ImGui::SameLine(leftWidth * 1.2f);
+            ImGui::Text("Fullscreen Mode"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
             bool fs = wcfg.fullscreen;
             if (ImGui::Checkbox("##fs", &fs)) {
                 wcfg.fullscreen = fs;
                 game.mainWin->SetFullscreen(fs);
                 game.renderer->WaitIdle();
-                game.RecreateFBOs(
-                    game.mainWin->GetConfigs().windowPixelWidth,
-                    game.mainWin->GetConfigs().windowPixelHeight
-                );
+                game.RecreateFBOs(game.mainWin->GetConfigs().windowPixelWidth, game.mainWin->GetConfigs().windowPixelHeight);
             }
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-            ImGui::Text("Vertical Sync"); ImGui::SameLine(leftWidth * 1.2f);
+            ImGui::Text("Vertical Sync"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
             if (ImGui::Checkbox("##vsync", &wcfg.vsync)) {
                 game.m_applyPending = true;
             }
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-            ImGui::Text("Ambient Occlusion"); ImGui::SameLine(leftWidth * 1.2f);
+            ImGui::Text("Ambient Occlusion"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
             bool ao = rcfg.m_aoStrength > 0.5f;
             if (ImGui::Checkbox("##ao", &ao)) {
                 rcfg.m_aoStrength = ao ? 1.0f : 0.0f;
             }
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-            // ★ 新增：Mipmap 设置
-            ImGui::Text("Mipmap Levels"); ImGui::SameLine(leftWidth * 1.2f);
-            ImGui::SetNextItemWidth(150);
-            if (ImGui::SliderInt("##mipmap", &rcfg.mipmapLevels, 0, 4, "%d")) {
-                // 提示需要重启世界
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("0 = OFF\n1~4 = 生成 Mipmap 层级\n(需要重新加载世界生效)");
-            }
+            ImGui::Text("Mipmap Levels"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
+            ImGui::SetNextItemWidth(itemWidth);
+            if (ImGui::SliderInt("##mipmap", &rcfg.mipmapLevels, 0, 4, "%d")) { }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = OFF\n1~4 = 生成 Mipmap 层级\n(需要重新加载世界生效)");
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-            // ★ 新增：各向异性过滤
-            ImGui::Text("Anisotropic Filtering"); ImGui::SameLine(leftWidth * 1.2f);
+            ImGui::Text("Anisotropic Filtering"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
             ImGui::Checkbox("##aniso", &rcfg.enableAnisotropic);
             
-            // 只有当开启各向异性时，才显示倍数选项
             if (rcfg.enableAnisotropic) {
-                ImGui::Text("Aniso Level"); ImGui::SameLine(leftWidth * 1.2f);
-                ImGui::SetNextItemWidth(150);
+                ImGui::Text("Aniso Level"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
+                ImGui::SetNextItemWidth(itemWidth);
                 
-                // 把 float 映射到索引
                 const char* anisoItems[] = { "1x", "2x", "4x", "8x", "16x" };
-                int anisoIndex = 4; // 默认 16x
+                int anisoIndex = 4; 
                 if (rcfg.maxAnisotropy <= 1.0f) anisoIndex = 0;
                 else if (rcfg.maxAnisotropy <= 2.0f) anisoIndex = 1;
                 else if (rcfg.maxAnisotropy <= 4.0f) anisoIndex = 2;
@@ -366,23 +493,22 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
             }
             
             ImGui::Spacing();
-            ImGui::PushTextWrapPos(leftWidth * 1.2f + 300.0f);
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Note: Texture settings require restarting the world to take effect.");
+            ImGui::PushTextWrapPos(textWrapWidth);
+            ImGui::TextColored(COLOR_WARNING, "Note: Texture settings require restarting the world to take effect.");
             ImGui::PopTextWrapPos();
             
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-            ImGui::Text("Field of View"); ImGui::SameLine(leftWidth * 1.2f);
-            ImGui::SetNextItemWidth(150);
+            ImGui::Text("Field of View"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
+            ImGui::SetNextItemWidth(itemWidth);
             ImGui::SliderFloat("##fov", &rcfg.fov, 30.0f, 120.0f, "%.0f");
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-            // 图形 API 设置
             const char* apiDesc = "选择渲染使用的图形API。除非有特殊需求需要更改，否则请维持此设置为默认不变！";
             ImVec4 descColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f); 
             if (ecfg.apitype == Eng::tool::RenderAPItype::VULKAN) {
                 apiDesc = "实验性设置。在部分系统上使用可能会降低性能或导致不稳定。";
-                descColor = ImVec4(1.0f, 0.6f, 0.2f, 1.0f);
+                descColor = COLOR_WARNING;
             }
 
             ImGui::PushTextWrapPos(0.0f);
@@ -390,8 +516,8 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
             ImGui::PopTextWrapPos();
             ImGui::Spacing();
 
-            ImGui::Text("图形 API"); ImGui::SameLine(leftWidth * 1.2f);
-            ImGui::SetNextItemWidth(300.0f);
+            ImGui::Text("图形 API"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
+            ImGui::SetNextItemWidth(itemWidth);
             int currentApi = static_cast<int>(ecfg.apitype);
             const char* apiItems[] = { "默认", "优先使用 OpenGL", "优先使用 Vulkan" };
             if (ImGui::Combo("##api", &currentApi, apiItems, IM_ARRAYSIZE(apiItems))) {
@@ -401,57 +527,53 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
             }
 
             if (game.m_apiChanged) {
-                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "需要重启游戏以应用新的图形 API！");
+                ImGui::TextColored(COLOR_ERROR, "需要重启游戏以应用新的图形 API！");
             }
+            ImGui::Dummy(ImVec2(0, fontSize * 2.0f)); 
         } else if (game.m_settingsTab == 1) {
             ImGui::Spacing();
             ImGui::TextDisabled("Audio settings coming soon...");
         } else if (game.m_settingsTab == 2) {
             ImGui::Spacing();
             ImGui::TextDisabled("Controls settings coming soon...");
+        } else if (game.m_settingsTab == 3) {
+            ImGui::Spacing();
+            ImGui::TextColored(COLOR_ACCENT, "Mycraft Engine v" MYCRAFT_VERSION);
+            ImGui::Separator();
+            ImGui::Spacing();
+            
+            ImGui::Text("GitHub Repository:"); ImGui::SameLine();
+            ImGui::TextLinkOpenURL("yigeputong/mycraft", "https://github.com/yigeputong/mycraft");
+            
+            ImGui::Spacing();
+            ImGui::Text("Special Thanks & Open Source Credits:");
+            ImGui::Spacing();
+
+            auto LinkItem = [](const char* name, const char* repo, const char* url) {
+                ImGui::BulletText("%s", name); ImGui::SameLine(); 
+                ImGui::TextLinkOpenURL(repo, url);
+            };
+
+            LinkItem("SDL3", "libsdl-org/SDL", "https://github.com/libsdl-org/SDL");
+            LinkItem("Dear ImGui", "ocornut/imgui", "https://github.com/ocornut/imgui");
+            LinkItem("glad (GL/GLES Loader)", "Dav1dde/glad", "https://github.com/Dav1dde/glad");
+            LinkItem("glm (OpenGL Mathematics)", "g-truc/glm", "https://github.com/g-truc/glm");
+            LinkItem("Vulkan SDK", "KhronosGroup/Vulkan-SDK", "https://github.com/KhronosGroup/Vulkan-SDK");
+            LinkItem("Volk (Vulkan Meta-loader)", "zeux/volk", "https://github.com/zeux/volk");
+            LinkItem("VulkanMemoryAllocator", "GPUOpen/VulkanMemoryAllocator", "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator");
+            LinkItem("Assimp (3D Model Loader)", "assimp/assimp", "https://github.com/assimp/assimp");
+            LinkItem("nlohmann/json", "nlohmann/json", "https://github.com/nlohmann/json");
+            LinkItem("SDL_image", "libsdl-org/SDL_image", "https://github.com/libsdl-org/SDL_image");
+            LinkItem("SDL_net", "libsdl-org/SDL_net", "https://github.com/libsdl-org/SDL_net");
+            LinkItem("libiconv", "GNU libiconv", "https://savannah.gnu.org/projects/libiconv/");
+            LinkItem("vcpkg (C++ Package Manager)", "microsoft/vcpkg", "https://github.com/microsoft/vcpkg");
+
+            ImGui::Spacing();
+            ImGui::TextColored(COLOR_TEXT_MUTED, "And all the open-source contributors who made this possible!");
+            ImGui::Dummy(ImVec2(0, fontSize * 2.0f)); 
         }
     }
     ImGui::EndChild();
-
-    // 底部按钮
-    float bottomY = io.DisplaySize.y - 60.0f;
-    ImGui::SetCursorPos(ImVec2(20.0f, bottomY));
-    
-    const char* leftBtnText = (game.m_state == MyGame::GameState::Playing) ? "Save & Quit to Title" : "Back to Menu";
-    float leftBtnWidth = ImGui::CalcTextSize(leftBtnText).x + 40.0f;
-    if (leftBtnWidth < 150.0f) leftBtnWidth = 150.0f; 
-
-    if (ImGui::Button(leftBtnText, ImVec2(leftBtnWidth, 40))) {
-        if (game.m_state == MyGame::GameState::Playing) {
-            game.m_returnToMenuPending = true;
-        } else {
-            game.m_menuOpen = false;
-        }
-    }
-
-    const char* btnApplyText = "Apply";
-    const char* btnDoneText = "Done";
-    
-    float applyWidth = ImGui::CalcTextSize(btnApplyText).x + 40.0f;
-    float doneWidth  = ImGui::CalcTextSize(btnDoneText).x + 40.0f;
-    if (applyWidth < 100.0f) applyWidth = 100.0f;
-    if (doneWidth < 100.0f)  doneWidth = 100.0f;
-
-    float btnSpacing = ImGui::GetStyle().ItemSpacing.x;
-    float totalRightWidth = applyWidth + btnSpacing + doneWidth;
-    float rightStartX = io.DisplaySize.x - 20.0f - totalRightWidth;
-    
-    ImGui::SetCursorPos(ImVec2(rightStartX, bottomY));
-    if (ImGui::Button(btnApplyText, ImVec2(applyWidth, 40))) {
-        game.m_applyPending = true;
-        game.SaveSettings(engine);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button(btnDoneText, ImVec2(doneWidth, 40))) {
-        game.m_applyPending = true;
-        game.m_menuOpen = false;
-        game.SaveSettings(engine);
-    }
 
     ImGui::End();
     ImGui::PopStyleVar(5);
@@ -460,11 +582,23 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
 
 void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
     ImGuiIO& io = ImGui::GetIO();
+    float fontSize = ImGui::GetFontSize();
     
+    float safeTop = 0.0f, safeBottom = 0.0f, safeSide = 0.0f;
+    if (Eng::tool::IsMobilePlatform()) {
+        safeTop = fontSize * SAFE_TOP_RATIO;
+        safeBottom = fontSize * SAFE_BOTTOM_RATIO;
+        safeSide = fontSize * SAFE_SIDE_RATIO;
+    }
+
     // ---- 准心 ----
     ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
     ImDrawList* dl = ImGui::GetForegroundDrawList();
-    constexpr float LEN = 8.0f, THICK = 2.0f, GAP = 2.0f;
+    
+    float LEN = fontSize * 0.6f; 
+    float THICK = fontSize * 0.15f; 
+    float GAP = fontSize * 0.15f;
+    
     ImU32 color = IM_COL32(255, 255, 255, 200);
     dl->AddLine(ImVec2(center.x - GAP - LEN, center.y), ImVec2(center.x - GAP, center.y), color, THICK);
     dl->AddLine(ImVec2(center.x + GAP, center.y), ImVec2(center.x + GAP + LEN, center.y), color, THICK);
@@ -476,23 +610,21 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         if (targetId != AIR_ID && targetId != UNKNOWN_ID) {
             const std::string& name = game.m_blockRegistry.Get(targetId).displayName;
             
-            // 在准星下方绘制
             ImVec2 textSize = ImGui::CalcTextSize(name.c_str());
-            ImVec2 textPos = ImVec2(center.x - textSize.x * 0.5f, center.y + 20.0f);
+            ImVec2 textPos = ImVec2(center.x - textSize.x * 0.5f, center.y + GAP + LEN + fontSize * 0.5f);
             
-            // 背景阴影 + 文本
             dl->AddRectFilled(ImVec2(textPos.x - 4, textPos.y - 2), ImVec2(textPos.x + textSize.x + 4, textPos.y + textSize.y + 2), IM_COL32(0,0,0,150));
             dl->AddText(textPos, IM_COL32(255,255,255,255), name.c_str());
         }
     }
 
     // ---- 物品栏 ----
-    constexpr float SLOT = 50.0f, GAP_ITEM = 4.0f;
+    float SLOT = fontSize * 3.5f; 
+    float GAP_ITEM = fontSize * 0.3f;
     float totalW = MyGame::kHotbarSize * SLOT + (MyGame::kHotbarSize - 1) * GAP_ITEM;
     float startX = (io.DisplaySize.x - totalW) * 0.5f;
-    float y = io.DisplaySize.y - SLOT - 20.0f;
+    float y = io.DisplaySize.y - SLOT - safeBottom - fontSize * 1.5f; 
 
-    // 预处理高频用到的方块 ID，提高判断效率
     BlockId dirtId  = game.m_blockRegistry.Get("mycraft:dirt").id;
     BlockId grassId = game.m_blockRegistry.Get("mycraft:grass_block").id;
     BlockId sandId  = game.m_blockRegistry.Get("mycraft:sand").id;
@@ -509,16 +641,15 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         const auto& slot = game.m_hotbar[i];
         if (slot.isEmpty()) continue;
 
-        ImU32 itemColor = IM_COL32(150, 150, 150, 255); // 默认灰色
+        ImU32 itemColor = IM_COL32(150, 150, 150, 255);
         if (slot.type == dirtId)       itemColor = IM_COL32(110, 75, 50, 255);
         else if (slot.type == grassId) itemColor = IM_COL32(88, 160, 70, 255);
         else if (slot.type == sandId)  itemColor = IM_COL32(220, 210, 160, 255);
         else if (slot.type == stoneId) itemColor = IM_COL32(128, 128, 128, 255);
         
-        // 画个内嵌小方块
-        dl->AddRectFilled(ImVec2(p0.x + 8, p0.y + 8), ImVec2(p1.x - 8, p1.y - 8), itemColor);
+        float inset = SLOT * 0.15f;
+        dl->AddRectFilled(ImVec2(p0.x + inset, p0.y + inset), ImVec2(p1.x - inset, p1.y - inset), itemColor);
         
-        // 获取显示名首字母
         const char* name = game.m_blockRegistry.Get(slot.type).displayName.c_str();
         char firstLetter[2] = { name[0], '\0' };
         ImVec2 textSize = ImGui::CalcTextSize(firstLetter);
@@ -528,11 +659,11 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         if (slot.count > 1) {
             char cnt[8];
             std::snprintf(cnt, sizeof(cnt), "%d", slot.count);
-            dl->AddText(ImVec2(x + SLOT - 20, y + 4), IM_COL32(255, 255, 255, 255), cnt);
+            dl->AddText(ImVec2(x + SLOT - textSize.x * 2.0f, y + fontSize * 0.2f), IM_COL32(255, 255, 255, 255), cnt);
         }
     }
 
-// ---- F3 调试面板 ----
+    // ---- F3 调试面板 ----
     if (game.m_showDebug) {
         auto DrawLineBgLeft = [&](float x, float y, ImU32 color, const char* fmt, ...) {
             char buf[512];
@@ -567,20 +698,18 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
             dl->AddText(ImVec2(x, y), color, buf);
         };
 
-        float dbgY = 10.0f;
+        float dbgY = safeTop + fontSize * 0.5f;
         float lineHeight = ImGui::GetTextLineHeight() + 4.0f; 
         ImU32 white = IM_COL32(255, 255, 255, 255);
         ImU32 green = IM_COL32(85, 255, 85, 255);
         ImU32 yellow = IM_COL32(255, 255, 85, 255);
 
-        // 左侧信息
-        float leftX = 14.0f;
-        DrawLineBgLeft(leftX, dbgY, green, "Mycraft v0.0.1"); dbgY += lineHeight;
+        float leftX = safeSide + fontSize * 0.8f;
+        DrawLineBgLeft(leftX, dbgY, green, "Mycraft v" MYCRAFT_VERSION); dbgY += lineHeight;
         DrawLineBgLeft(leftX, dbgY, white, "%.0f fps | Frame: %.2f ms", game.m_fpsDisplay, game.m_frameMsDisplay); dbgY += lineHeight;
         DrawLineBgLeft(leftX, dbgY, white, "Server tick: %.2f ms", game.m_serverTickMs); dbgY += lineHeight;
         dbgY += lineHeight * 0.5f;
 
-        // 坐标与视角
         int bx = (int)std::floor(game.cameraPos.x);
         int by = (int)std::floor(game.cameraPos.y);
         int bz = (int)std::floor(game.cameraPos.z);
@@ -592,7 +721,6 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         DrawLineBgLeft(leftX, dbgY, white, "Yaw / Pitch: %.1f / %.1f", game.yaw, game.pitch); dbgY += lineHeight;
         dbgY += lineHeight * 0.5f;
 
-        // 客户端和服务端区块
         DrawLineBgLeft(leftX, dbgY, white, "Data Chunks: %zu", game.m_world.GetChunks().size()); dbgY += lineHeight;
         DrawLineBgLeft(leftX, dbgY, white, "Mesh Chunks: %zu", game.m_world.GetMeshCount()); dbgY += lineHeight;
         DrawLineBgLeft(leftX, dbgY, white, "Client Pending: %zu", game.m_world.GetPendingSize()); dbgY += lineHeight;
@@ -603,7 +731,6 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         }
         dbgY += lineHeight * 0.5f;
 
-        // 视距与 LOD 信息
         DrawLineBgLeft(leftX, dbgY, white, "Native Distance: %d chunks", game.m_renderDistance); dbgY += lineHeight;
         
         if (game.m_enableLod) {
@@ -621,9 +748,8 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         DrawLineBgLeft(leftX, dbgY, white, "Time: %02d:%02d", hh, mm);
         dbgY += lineHeight;
 
-        // 右侧信息
-        float rightX = io.DisplaySize.x - 14.0f;
-        dbgY = 10.0f;
+        float rightX = io.DisplaySize.x - safeSide - fontSize * 0.8f;
+        dbgY = safeTop + fontSize * 0.5f;
         DrawLineBgRight(rightX, dbgY, white, "Backend: %s", game.m_deviceInfo.backend.c_str()); dbgY += lineHeight;
         DrawLineBgRight(rightX, dbgY, white, "GPU: %s", game.m_deviceInfo.deviceName.c_str()); dbgY += lineHeight;
         DrawLineBgRight(rightX, dbgY, white, "Vendor: %s", game.m_deviceInfo.vendor.c_str()); dbgY += lineHeight;

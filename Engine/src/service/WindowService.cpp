@@ -1,4 +1,5 @@
 #include "Engine/service/WindowService.h"
+#include "Engine/Engine.h"
 #include "Engine/tool/Window.h"
 #include "Engine/tool/Input.h"
 #include "imgui_impl_sdl3.h"
@@ -87,7 +88,6 @@ void WindowService::DispatchEvent(const SDL_Event& event) {
         SDL_Window* sdlWin = SDL_GetWindowFromID(event.window.windowID);
         if (!sdlWin) return;
 
-
         for (auto& [id, window] : m_windows) {
             if (window->GetSDLWindow() == sdlWin) {
                 if (window->onEvent) {
@@ -117,6 +117,20 @@ void WindowService::DispatchEvent(const SDL_Event& event) {
                             window->onFocusChanged(false);
                         }
                         break;
+
+                    // 拦截窗口尺寸变化（横竖屏切换会触发这个）
+                    case SDL_EVENT_WINDOW_RESIZED:
+                    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
+                        int newWidth = event.window.data1;
+                        int newHeight = event.window.data2;
+
+                        // 更新主窗口配置
+                        window->GetConfigs().windowPixelWidth = newWidth;
+                        window->GetConfigs().windowPixelHeight = newHeight;
+                        
+                        break;
+                    }
+                    
                     default:
                         break;
                 }
@@ -129,13 +143,6 @@ void WindowService::DispatchEvent(const SDL_Event& event) {
         if (main && main->onEvent) {
             main->onEvent(event);
         }
-
-        // 广播给所有窗口（可选）
-        // for (auto& [id, window] : m_windows) {
-        //     if (window->onEvent) {
-        //         window->onEvent(event);
-        //     }
-        // }
     }
 }
 

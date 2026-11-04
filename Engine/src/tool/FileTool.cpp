@@ -2,6 +2,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_log.h>
 #include <string>
+#include "Engine/tool/Platform.h"
 
 #ifdef __APPLE__
 #include <TargetConditionals.h>
@@ -65,21 +66,20 @@ namespace Eng::tool {
     }
 
     std::string GetWritablePath(const std::string& filename) {
-        // 判断是否为移动端 (Android 或 iOS)
-#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
-        // 移动端必须写入 App 的内部沙盒路径
-        // SDL_GetPrefPath 在 iOS 上会返回 App 的 Documents 目录，在 Android 上返回 /data/data/包名/files/
-        char* prefPath = SDL_GetPrefPath("mycraft", "mycraft");
-        if (prefPath) {
-            std::string fullPath = std::string(prefPath) + filename;
-            SDL_free(prefPath);
-            return fullPath;
+        if (Eng::tool::IsMobilePlatform()) {
+            // 移动端必须写入 App 的内部沙盒路径
+            // SDL_GetPrefPath 在 iOS 上会返回 App 的 Documents 目录，在 Android 上返回 /data/data/包名/files/
+            char* prefPath = SDL_GetPrefPath("mycraft", "mycraft");
+            if (prefPath) {
+                std::string fullPath = std::string(prefPath) + filename;
+                SDL_free(prefPath);
+                return fullPath;
+            }
+            return filename;
+        } else {
+            // Windows / macOS / Linux 直接在当前工作目录读写
+            return filename;
         }
-        return filename;
-#else
-        // Windows / macOS / Linux 直接在当前工作目录读写
-        return filename;
-#endif
     }
 
 } // namespace Eng::tool

@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <memory>
 
-static int MycraftMain(int argc, char* argv[]) {
+static int MycraftMain([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
     try {
         Eng::EngineConfig engConfig = {
             .mode          = Eng::Mode::SinglePlayer,

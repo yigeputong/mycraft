@@ -6,6 +6,7 @@
 #include "Engine/tool/Log.h"
 #include "Engine/tool/MessageReader.h"
 #include "Engine/tool/MessageWriter.h"
+#include "Engine/tool/Platform.h"
 #include "Engine/tool/Transport.h"
 #include "Engine/tool/MemoryTransport.h"
 #include "Engine/tool/NetworkTransport.h"
@@ -225,6 +226,13 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
         return false;
     }
 
+    // 1. 把 AssetService 的获取提前到最前面，防止空指针调用
+    m_assetManager = engine.GetAssetService();
+    if (!m_assetManager) {
+        logError(logger, "[Game] AssetService is null");
+        return false;
+    }
+
     m_deviceInfo = renderer->GetDeviceInfo();
     m_useVulkan  = (m_deviceInfo.backend == "Vulkan");
 
@@ -234,6 +242,16 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     logInfo(logger, "[RenderAPI] API version: " << m_deviceInfo.apiVersion);
     logInfo(logger, "[RenderAPI] Driver:      " << m_deviceInfo.driverVersion);
     logInfo(logger, "[RenderAPI] Shader lang: " << m_deviceInfo.shadingLanguage);
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    if (Eng::tool::IsMobilePlatform()) {
+        io.ConfigFlags |= ImGuiConfigFlags_IsTouchScreen;
+        io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+    }
 
     if (!renderer->InitImGuiBackend()) {
         logError(logger, "[Game] ImGui backend init failed");
@@ -265,8 +283,12 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     if (dpiScale <= 0.0f) dpiScale = 1.0f;
     m_uiScale = dpiScale;
 
-    style.ScaleAllSizes(m_uiScale);
-    ImGuiIO& io = ImGui::GetIO();
+    // 用 FontScaleMain 替代废弃的 FontGlobalScale
+    // 它会自动影响整个 UI 的字体大小，且保持清晰
+    style.FontScaleMain = dpiScale; 
+
+    // 注意：1.92+ 动态字体系统会自动根据 FontScaleMain 光栅化，
+    // 所以这里不需要再调用 style.ScaleAllSizes(m_uiScale); 了。
 
     static const ImWchar allGlyphs[] = { 0x0020, 0xFFFF, 0 };
 
@@ -275,23 +297,32 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     fontConfig.OversampleV = 1;
     fontConfig.PixelSnapH = true;
 
-    float scaledFontSize = 16.0f * m_uiScale;
+    // 2. 基础字体尺寸设为 16.0f 即可（由 FontScaleMain 负责放大）
+    float baseFontSize = 16.0f;
 
-    ImFont* unifont = io.Fonts->AddFontFromFileTTF(
-        "./assets/fonts/unifont-18.0.01.otf", scaledFontSize, &fontConfig, allGlyphs);
+    ImFont* unifont = nullptr;
+    auto fontData = m_assetManager->ReadFile("assets/fonts/unifont-18.0.01.otf");
+    if (fontData) {
+        size_t fontSize = fontData->size();
+        void* fontMem = IM_ALLOC(fontSize);
+        memcpy(fontMem, fontData->data(), fontSize);
 
+        ImFontConfig memFontConfig = fontConfig;
+        memFontConfig.FontDataOwnedByAtlas = true;
+
+        unifont = io.Fonts->AddFontFromMemoryTTF(
+            fontMem, 
+            static_cast<int>(fontSize), 
+            baseFontSize, // 直接传基础尺寸
+            &memFontConfig, 
+            allGlyphs
+        );
+    }
     if (!unifont) {
         logError(logger, "[Game] Failed to load Unifont, falling back to default font.");
         io.Fonts->AddFontDefault();
     } else {
-        logInfo(logger, "[Game] Loaded Unifont with all BMP glyphs at size " << scaledFontSize);
-    }
-
-    // 从 Engine 拿 AssetService（生命周期归 Engine）
-    m_assetManager = engine.GetAssetService();
-    if (!m_assetManager) {
-        logError(logger, "[Game] AssetService is null");
-        return false;
+        logInfo(logger, "[Game] Loaded Unifont with all BMP glyphs at size " << baseFontSize << " (Scale: " << dpiScale << ")");
     }
 
     // 创建 SceneRenderer（构造会加载 'mesh' shader；失败抛异常）
@@ -303,26 +334,34 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     }
 
     m_playerTexture = m_assetManager->LoadTexture("assets/textures/entity/player.png");
+    if (!m_playerTexture) {
+        logWarning(logger, "[MyGame] Player texture failed to load, using fallback (nullptr)");
+    }
 
     const auto& pixels = client::AtlasPixels();
     int atlasW = client::AtlasCols() * client::ATLAS_TILE;
     int atlasH = client::AtlasRows() * client::ATLAS_TILE;
+    
+    if (pixels.empty()) {
+        logError(logger, "[MyGame] Fatal: Atlas pixels are empty! Aborting texture creation.");
+        return false; 
+    }
+
     Eng::service::rhi::TextureCreateInfo tci;
     tci.pixels = std::as_bytes(std::span(pixels));
     tci.width = atlasW;
     tci.height = atlasH;
     tci.format = Eng::service::rhi::TextureFormat::RGBA8_UNORM;
-    // 给地形图集配置正确的采样器
-    tci.requestedMips = 0; // 让引擎自动生成 Mipmap
-    tci.magFilter = Eng::service::rhi::FilterMode::Nearest;                     // 近处保持方块像素风
-    tci.minFilter = Eng::service::rhi::MinFilterMode::Nearest_Mipmap_Linear;    // 远处平滑过渡防摩尔纹
+    tci.requestedMips = 0; 
+    tci.magFilter = Eng::service::rhi::FilterMode::Nearest;                     
+    tci.minFilter = Eng::service::rhi::MinFilterMode::Nearest_Mipmap_Linear;    
     tci.wrapU = Eng::service::rhi::WrapMode::ClampToEdge;
     tci.wrapV = Eng::service::rhi::WrapMode::ClampToEdge;
-    tci.enableAnisotropy = true; // 倾斜看水面时用各向异性过滤
-    m_atlasTexture = renderer->CreateTexture(tci);
+    tci.enableAnisotropy = true; 
 
+    m_atlasTexture = renderer->CreateTexture(tci);
     if (!m_atlasTexture) {
-        logError(logger, "[MyGame] Failed to create atlas texture");
+        logError(logger, "[MyGame] Failed to create atlas texture on GPU.");
         return false;
     }
     logInfo(logger, "[MyGame] atlas texture created");
@@ -333,7 +372,6 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
         return false;
     }
 
-    // 创建 GlobalState UBO 并一次性绑定到 set 0 / binding 0
     m_globalStateUBO = renderer->CreateBuffer({
         .size  = sizeof(GlobalState),
         .usage = Eng::service::rhi::BufferUsage::Uniform

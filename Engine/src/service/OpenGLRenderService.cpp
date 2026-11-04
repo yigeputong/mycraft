@@ -645,11 +645,6 @@ void OpenGLRenderService::ApplyPipelineState(const rhi::GraphicsPipelineState& s
 bool OpenGLRenderService::InitImGuiBackend() {
     if (m_imguiInitialized) return true;
 
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-
     if (!ImGui_ImplSDL3_InitForOpenGL(m_window->GetSDLWindow(), m_glContext)) {
         return false;
     }
