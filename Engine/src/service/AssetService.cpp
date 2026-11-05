@@ -61,21 +61,17 @@ TexturePtr AssetService::LoadTexture(const std::string& path) {
     auto it = m_textureCache.find(path);
     if (it != m_textureCache.end()) return it->second;
 
-    // 不再直接让 IMG_Load 去碰路径，而是通过 ReadFile 读入内存
     auto fileData = ReadFile(path);
     if (!fileData) {
-        // ReadFile 里面已经打印了 logError，这里直接返回
         return nullptr;
     }
 
-    // 从内存创建 SDL_IOStream
     SDL_IOStream* io = SDL_IOFromConstMem(fileData->data(), fileData->size());
     if (!io) {
         logError(m_logger, "[AssetService] SDL_IOFromConstMem failed: " << SDL_GetError());
         return nullptr;
     }
 
-    // 从 IOStream 加载 Surface（第二个参数 true 表示加载完后自动关闭 io）
     SDL_Surface* loaded = IMG_Load_IO(io, true);
     if (!loaded) {
         logError(m_logger, "[AssetService] IMG_Load_IO failed: " << path << " - " << SDL_GetError());
@@ -95,10 +91,10 @@ TexturePtr AssetService::LoadTexture(const std::string& path) {
         static_cast<const uint8_t*>(surf->pixels), byteCount));
     tci.width         = surf->w;
     tci.height        = surf->h;
-    tci.requestedMips = 0; // 0 代表按引擎全局配置生成 Mipmap
+    tci.arrayLayers   = 1; // 显式指定为 1 层的 Texture Array
+    tci.requestedMips = 0; 
     tci.format        = rhi::TextureFormat::RGBA8_UNORM;
     
-    // 显式配置采样参数
     tci.magFilter = rhi::FilterMode::Nearest; 
     tci.minFilter = rhi::MinFilterMode::Nearest_Mipmap_Linear; 
     tci.wrapU = rhi::WrapMode::ClampToEdge;

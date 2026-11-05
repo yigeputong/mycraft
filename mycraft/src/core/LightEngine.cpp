@@ -10,7 +10,6 @@ namespace game {
 namespace {
     constexpr int Y_STRIDE = CHUNK_SIZE_X * CHUNK_SIZE_Z;
     constexpr int Z_STRIDE = CHUNK_SIZE_X;
-    constexpr int CHUNK_VOL = CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
 
     // 将 x,y,z 压缩为一个 16 位整数 (x:4bit, z:4bit, y:8bit)
     // 足够表示 16*16*256 = 65536 的所有坐标
@@ -42,7 +41,7 @@ namespace {
     }
 }
 
-void LightEngine::InitRegion(const BlockRegistry& reg, Chunk& c, Chunk* nXm, Chunk* nXp, Chunk* nZm, Chunk* nZp) {
+void LightEngine::InitRegion(const BlockRegistry& reg, Chunk& c, Chunk*  /*nXm*/, Chunk*  /*nXp*/, Chunk*  /*nZm*/, Chunk*  /*nZp*/) {
     // 清空当前区块光照
     std::fill(c.sky.begin(), c.sky.end(), 0);
     std::fill(c.block.begin(), c.block.end(), LightRGB{0,0,0});
@@ -128,7 +127,7 @@ void LightEngine::InitRegion(const BlockRegistry& reg, Chunk& c, Chunk* nXm, Chu
     }
 }
 
-bool LightEngine::OnBlockChanged(const BlockRegistry& reg, Chunk& c, int lx, int ly, int lz, BlockId oldB, BlockId newB) {
+bool LightEngine::OnBlockChanged(const BlockRegistry& reg, Chunk& c, int  /*lx*/, int  /*ly*/, int  /*lz*/, BlockId oldB, BlockId newB) {
     if (oldB == newB) return false;
 
     // 粗暴但安全的增量更新：因为我们不跨区块，直接重算当前区块即可。

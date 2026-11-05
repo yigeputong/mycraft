@@ -3,6 +3,7 @@
 layout(location = 0) in vec3 FragPos;
 layout(location = 1) in vec3 Normal;
 layout(location = 2) in vec2 uv;
+layout(location = 3) in float vLayer; // 接收 layer
 layout(location = 4) in float ao;
 layout(location = 5) in vec4 vLight;
 
@@ -21,11 +22,11 @@ layout(std140, binding = 0) uniform GlobalData {
     float _pad2;
 } global;
 
-
+// 修改为 sampler2DArray
 #ifdef USE_OPENGL
-layout(binding = 0) uniform sampler2D uDiffuse;
+layout(binding = 0) uniform sampler2DArray uDiffuse;
 #else
-layout(set = 1, binding = 0) uniform sampler2D uDiffuse;
+layout(set = 1, binding = 0) uniform sampler2DArray uDiffuse;
 #endif
 
 #ifdef USE_OPENGL
@@ -39,7 +40,8 @@ layout(push_constant) uniform PerObject {
 } pc;
 
 void main() {
-    vec4 texColor4 = texture(uDiffuse, uv);
+    // 使用 vec3(uv, layer) 采样
+    vec4 texColor4 = texture(uDiffuse, vec3(uv, vLayer));
     if (texColor4.a < 0.1) discard;
 
     vec3 texColor = texColor4.rgb;

@@ -16,6 +16,7 @@
 #include "game/GameServer.h"
 #include "game/core/Blocks.h"
 #include "game/core/Physics.h"
+#include "game/core/LightEngine.h"
 #include "game/client/TextureArray.h"
 #include "game/client/MeshBuilderUtils.h"
 #include "imgui.h"
@@ -470,7 +471,7 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
         logWarning(logger, "[MyGame] Player texture failed to load, using fallback (nullptr)");
     }
 
-    // ★ 4. 现在像素数据已经有了，直接创建 GPU 纹理数组
+    // 4. 现在像素数据已经有了，直接创建 GPU 纹理数组
     const auto& pixels = client::GetTextureArrayPixels();
     int layerCount = client::GetTextureLayerCount();
     
@@ -1226,7 +1227,30 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             int by = r.Read<int32_t>();
             int bz = r.Read<int32_t>();
             BlockId t = r.Read<uint16_t>(); 
-            m_world.SetBlock(bx, by, bz, t);
+
+            int cx = WorldToChunkX(bx);
+            int cz = WorldToChunkZ(bz);
+            int lx = WorldToLocalX(bx);
+            int ly = by;
+            int lz = WorldToLocalZ(bz);
+
+            auto* pC = m_world.GetChunk(ChunkKey(cx, cz));
+            if (pC && pC->chunk) {
+                Chunk& chunk = *pC->chunk;
+                
+                BlockId oldB = ChunkGet(chunk, lx, ly, lz);
+                ChunkSet(chunk, lx, ly, lz, t);
+
+                // 重算当前区块光照
+                LightEngine::OnBlockChanged(m_blockRegistry, chunk, lx, ly, lz, oldB, t);
+
+                // 标记当前区块及接壤区块为 dirty
+                m_world.MarkDirty(ChunkKey(cx, cz));
+                if (lx == 0)  m_world.MarkDirty(ChunkKey(cx - 1, cz));
+                if (lx == 15) m_world.MarkDirty(ChunkKey(cx + 1, cz));
+                if (lz == 0)  m_world.MarkDirty(ChunkKey(cx, cz - 1));
+                if (lz == 15) m_world.MarkDirty(ChunkKey(cx, cz + 1));
+            }
             break;
         }
 

@@ -2,13 +2,14 @@
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUV;
-// location = 3 是 layer，实体渲染用不到，直接跳过
+layout(location = 3) in float aLayer; // ★ 开启 layer 读取
 layout(location = 4) in float aAO;
 layout(location = 5) in vec4 aLight;
 
 layout(location = 0) out vec3 FragPos;
 layout(location = 1) out vec3 Normal;
 layout(location = 2) out vec2 uv;
+layout(location = 3) out float vLayer; // ★ 输出给 fragment
 layout(location = 4) out float ao;
 layout(location = 5) out vec4 vLight;
 
@@ -40,6 +41,7 @@ void main() {
     FragPos = worldPos.xyz;
     Normal  = normalize(mat3(pc.model) * aNormal);
     uv      = aUV;
+    vLayer  = aLayer;
     ao      = aAO;
     vLight  = aLight;
     gl_Position = global.projection * global.view * worldPos;
