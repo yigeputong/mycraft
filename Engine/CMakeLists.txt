@@ -47,12 +47,12 @@ add_library(engine-client STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Engine.cpp
     
     # Tool
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/tool/Input.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tool/Window.cpp
     
     # Service
     ${CMAKE_CURRENT_SOURCE_DIR}/src/service/WindowService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/service/AssetService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/service/InputService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/service/OpenGLRenderService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/service/VulkanRenderService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/service/VMAImpl.cpp

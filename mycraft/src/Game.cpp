@@ -3,6 +3,7 @@
 #include "Engine/Engine.h"
 #include "Engine/service/AssetService.h"
 #include "Engine/service/IRenderService.h"
+#include "Engine/service/InputService.h"
 #include "Engine/tool/Log.h"
 #include "Engine/tool/MessageReader.h"
 #include "Engine/tool/MessageWriter.h"
@@ -10,7 +11,6 @@
 #include "Engine/tool/Transport.h"
 #include "Engine/tool/MemoryTransport.h"
 #include "Engine/tool/NetworkTransport.h"
-#include "Engine/tool/Input.h"
 #include "Engine/tool/Window.h"
 #include "game/Protocol.h"
 #include "game/GameServer.h"
@@ -77,6 +77,64 @@ namespace {
             indices.push_back(base+2); indices.push_back(base+3); indices.push_back(base+0);
         }
     }
+
+    using Eng::service::ActionDesc;
+    using Eng::service::KeyCode;
+    using Eng::service::operator""_action;
+
+    // 编译期哈希常量（IsActionDown 调用零开销）
+    constexpr auto A_MoveForward      = "MoveForward"_action;
+    constexpr auto A_MoveBack         = "MoveBack"_action;
+    constexpr auto A_MoveLeft         = "MoveLeft"_action;
+    constexpr auto A_MoveRight        = "MoveRight"_action;
+    constexpr auto A_Jump             = "Jump"_action;
+    // constexpr auto A_Sprint           = "Sprint"_action;
+    constexpr auto A_Dig              = "Dig"_action;
+    constexpr auto A_Place            = "Place"_action;
+    constexpr auto A_ToggleFly        = "ToggleFly"_action;
+    constexpr auto A_FlyUp            = "FlyUp"_action;
+    constexpr auto A_FlyDown          = "FlyDown"_action;
+    constexpr auto A_ToggleDebug      = "ToggleDebug"_action;
+    constexpr auto A_ToggleFullscreen = "ToggleFullscreen"_action;
+    constexpr auto A_OpenMenu         = "OpenMenu"_action;
+    // constexpr auto A_OpenBackpack     = "OpenBackpack"_action;
+    constexpr auto A_HotbarSlot0      = "HotbarSlot0"_action;
+    constexpr auto A_HotbarSlot1      = "HotbarSlot1"_action;
+    constexpr auto A_HotbarSlot2      = "HotbarSlot2"_action;
+    constexpr auto A_HotbarSlot3      = "HotbarSlot3"_action;
+    constexpr auto A_HotbarSlot4      = "HotbarSlot4"_action;
+    constexpr auto A_HotbarSlot5      = "HotbarSlot5"_action;
+    constexpr auto A_HotbarSlot6      = "HotbarSlot6"_action;
+    constexpr auto A_HotbarSlot7      = "HotbarSlot7"_action;
+    constexpr auto A_HotbarSlot8      = "HotbarSlot8"_action;
+
+    // 默认绑定表（业务层唯一数据源；新增 action 在此追加一行即可）
+    static constexpr ActionDesc kGameActions[] = {
+        {"MoveForward",      {KeyCode::W},          "向前"},
+        {"MoveBack",         {KeyCode::S},          "向后"},
+        {"MoveLeft",         {KeyCode::A},          "向左"},
+        {"MoveRight",        {KeyCode::D},          "向右"},
+        {"Jump",             {KeyCode::Space},      "跳跃"},
+        {"Sprint",           {KeyCode::LCtrl},      "疾跑"},
+        {"Dig",              {KeyCode::MouseLeft},  "挖掘"},
+        {"Place",            {KeyCode::MouseRight}, "放置"},
+        {"ToggleFly",        {KeyCode::F},          "切换飞行"},
+        {"FlyUp",            {KeyCode::Space},      "上升"},
+        {"FlyDown",          {KeyCode::LShift},     "下降"},
+        {"ToggleDebug",      {KeyCode::F3},         "调试面板"},
+        {"ToggleFullscreen", {KeyCode::F11},        "全屏"},
+        {"OpenMenu",         {KeyCode::Escape},     "菜单"},
+        {"OpenBackpack",     {KeyCode::E},          "背包"},
+        {"HotbarSlot0",      {KeyCode::Num1},       "快捷栏 1"},
+        {"HotbarSlot1",      {KeyCode::Num2},       "快捷栏 2"},
+        {"HotbarSlot2",      {KeyCode::Num3},       "快捷栏 3"},
+        {"HotbarSlot3",      {KeyCode::Num4},       "快捷栏 4"},
+        {"HotbarSlot4",      {KeyCode::Num5},       "快捷栏 5"},
+        {"HotbarSlot5",      {KeyCode::Num6},       "快捷栏 6"},
+        {"HotbarSlot6",      {KeyCode::Num7},       "快捷栏 7"},
+        {"HotbarSlot7",      {KeyCode::Num8},       "快捷栏 8"},
+        {"HotbarSlot8",      {KeyCode::Num9},       "快捷栏 9"},
+    };
 }
 
 // ============================================================
@@ -85,12 +143,12 @@ namespace {
 void MyGame::LoadSettings(Eng::Engine& engine) {
     std::string path = Eng::tool::GetWritablePath(SETTINGS_FILE);
     auto data = Eng::tool::ReadFileToMemory(path);
-    
-    if (data.empty()) return; 
+
+    if (data.empty()) return;
 
     try {
         auto j = json::parse(data.begin(), data.end());
-        
+
         auto& wcfg = engine.GetConfig().window;
         if (j.contains("apitype")) {
             int v = j["apitype"];
@@ -101,8 +159,13 @@ void MyGame::LoadSettings(Eng::Engine& engine) {
 
         auto& rcfg = engine.GetConfig().render;
         if (j.contains("renderDistance")) m_renderDistance = j["renderDistance"];
-        if (j.contains("fov")) rcfg.fov = j["fov"];
-        if (j.contains("aoStrength")) rcfg.m_aoStrength = j["aoStrength"];
+        if (j.contains("fov"))            rcfg.fov         = j["fov"];
+        if (j.contains("aoStrength"))     rcfg.m_aoStrength = j["aoStrength"];
+
+        // ---- 键位绑定（与 settings.json 一同持久化） ----
+        if (j.contains("input") && j["input"].is_object()) {
+            LoadInputBindings(j["input"]);
+        }
     } catch (const std::exception& e) {
         logWarning(logger, "[Game] Failed to parse settings.json: " << e.what());
     }
@@ -114,11 +177,78 @@ void MyGame::SaveSettings(Eng::Engine& engine) {
 
     auto& rcfg = engine.GetConfig().render;
     j["renderDistance"] = m_renderDistance;
-    j["fov"] = rcfg.fov;
-    j["aoStrength"] = rcfg.m_aoStrength;
+    j["fov"]            = rcfg.fov;
+    j["aoStrength"]     = rcfg.m_aoStrength;
+
+    // ---- 键位绑定 ----
+    json jInput;
+    SaveInputBindings(jInput);   // 写入 jInput["version"] + jInput["bindings"]
+    j["input"] = std::move(jInput);
 
     std::string path = Eng::tool::GetWritablePath(SETTINGS_FILE);
     Eng::tool::WriteStringToFile(path, j.dump(4));
+}
+
+// ============================================================
+// 输入绑定：注册 / 加载 / 保存
+// ============================================================
+void MyGame::RegisterGameActions() {
+    if (!m_inputService) return;
+
+    if (!m_inputService->RegisterActions(kGameActions)) {
+        logError(logger, "[Game] RegisterGameActions failed "
+                        "(name empty / conflict / duplicate in batch)");
+        return;
+    }
+
+    // 显式绑定"移动 4 方向"的 action（问 1 = 1-A）
+    m_inputService->SetMoveActions(
+        A_MoveForward, A_MoveBack, A_MoveLeft, A_MoveRight);
+
+    logInfo(logger, "[Game] Registered " << (sizeof(kGameActions) / sizeof(kGameActions[0]))
+                << " input actions");
+}
+
+void MyGame::LoadInputBindings(const nlohmann::json& inputJson) {
+    if (!m_inputService) return;
+    if (!inputJson.contains("bindings") || !inputJson["bindings"].is_object()) return;
+
+    std::vector<Eng::service::InputService::BindingSnapshot> bindings;
+    for (const auto& [actionName, keysArr] : inputJson["bindings"].items()) {
+        if (!keysArr.is_array()) continue;
+
+        Eng::service::InputService::BindingSnapshot snap;
+        snap.name = actionName;
+        for (const auto& k : keysArr) {
+            if (!k.is_string()) continue;
+            auto kcOpt = Eng::service::KeyCodeFromString(k.get<std::string>());
+            if (kcOpt && *kcOpt != Eng::service::KeyCode::None) {
+                snap.keys.push_back(*kcOpt);
+            }
+        }
+        bindings.push_back(std::move(snap));
+    }
+
+    if (!m_inputService->ImportBindings(bindings)) {
+        logWarning(logger, "[Game] Some input bindings in settings.json reference unknown actions "
+                        "(ignored, will use defaults)");
+    }
+}
+
+void MyGame::SaveInputBindings(nlohmann::json& inputJson) {
+    if (!m_inputService) return;
+
+    inputJson["version"] = 1;
+
+    json jBindings = json::object();
+    for (const auto& snap : m_inputService->ExportBindings()) {
+        json keys = json::array();
+        for (auto kc : snap.keys) {
+            keys.push_back(Eng::service::KeyCodeToString(kc));
+        }
+        jBindings[snap.name] = std::move(keys);
+    }
+    inputJson["bindings"] = std::move(jBindings);
 }
 
 // ============================================================
@@ -177,14 +307,14 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
         .windowHeight = 720
     };
 
-    winMgr = engine.GetWindowManager();
-    m_win  = winMgr->CreateWindow(windowConfig);
+    winMgr  = engine.GetWindowManager();
+    m_win   = winMgr->CreateWindow(windowConfig);
     mainWin = winMgr->GetWindow(m_win);
     if (!mainWin) return false;
 
+    // Input 事件由 WindowService 统一转发给 InputService，业务层不再插手
     mainWin->onEvent = [this](const SDL_Event& e) {
-        ImGui_ImplSDL3_ProcessEvent(&e);
-        Eng::tool::Input::Get().ProcessEvent(e);
+        ImGui_ImplSDL3_ProcessEvent(&e);   // ImGui 属 UI 层，归业务层管理
         switch (e.type) {
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 if (renderer) RecreateFBOs(e.window.data1, e.window.data2);
@@ -203,7 +333,9 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
         }
     };
 
-    Eng::tool::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), false);
+    if (m_inputService) {
+        m_inputService->SetRelativeMode(mainWin->GetSDLWindow(), false);
+    }
     m_relativeMode = false;
     return true;
 }
@@ -220,24 +352,21 @@ void MyGame::RecreateFBOs(int w, int h) {
 }
 
 bool MyGame::SetupRenderer(Eng::Engine& engine) {
-    if (!engine.CreateRenderService()) {
-        logError(logger, "[Game] Engine failed to create render service");
-        return false;
-    }
-    renderer = engine.GetRenderService();
+    renderer = engine.CreateRenderService(mainWin);
     if (!renderer) {
-        logError(logger, "[Game] renderer is null");
+        logError(logger, "[Game] Engine failed to create render service: "
+                        << engine.GetLastError());
         return false;
     }
 
-    // 此时 AssetService 刚被创建好
-    m_assetManager = engine.GetAssetService();
+    m_assetManager = engine.CreateAssetService(renderer);
     if (!m_assetManager) {
-        logError(logger, "[Game] AssetService is null");
+        logError(logger, "[Game] Engine failed to create asset service: "
+                        << engine.GetLastError());
         return false;
     }
 
-    // ★ 3. 立刻利用 m_assetManager 生成像素数据
+    // 立刻利用 m_assetManager 生成像素数据
     {
         auto tileTints = m_blockRegistry.CollectTileTints();
         client::BuildBlockTextureArray(m_assetManager, tileTints);
@@ -437,15 +566,27 @@ void MyGame::OnStart(Eng::Engine& engine) {
         return;
     }
 
-    LoadSettings(engine);
+    // 缓存 InputService 观察指针（Engine 持有，此处只为方便访问）
+    m_inputService = engine.GetInputService();
+    if (!m_inputService) {
+        logError(logger, "[Game] InputService is null (Engine::Init failed?)");
+        m_shouldQuit = true;
+        return;
+    }
 
-    // ★ 1. 先加载方块注册表（不依赖任何 RHI 服务）
+    // 先注册 action（引擎侧注册表），再加载用户配置（可能覆盖默认键位）
+    RegisterGameActions();
+
+    LoadSettings(engine);   // 内部会 ImportBindings 覆盖默认值
+
+    // 1. 加载方块注册表（不依赖任何 RHI 服务）
     m_blockRegistry.LoadAll("assets/block");
 
     try {
         if (!SetupWindow(engine)) return;
         if (!mainWin->GetFallbackReason().empty()) {
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "图形 API 降级", mainWin->GetFallbackReason().c_str(), nullptr);
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "图形 API 降级",
+                                     mainWin->GetFallbackReason().c_str(), nullptr);
         }
     } catch (const std::exception& e) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "无法启动渲染器", e.what(), nullptr);
@@ -461,17 +602,11 @@ void MyGame::OnStart(Eng::Engine& engine) {
     m_world.SetRegistry(&m_blockRegistry);
     m_meshManager.Start();
 
-    // 初始化热栏
-    m_hotbar[0] = game::MakeItemStack(m_blockRegistry.Get("mycraft:torch").id,       64);
-    m_hotbar[1] = game::MakeItemStack(m_blockRegistry.Get("mycraft:dirt").id,        64);
-    m_hotbar[2] = game::MakeItemStack(m_blockRegistry.Get("mycraft:grass_block").id, 64);
-    m_hotbar[3] = game::MakeItemStack(m_blockRegistry.Get("mycraft:sand").id,        64);
-
     RefreshWorldList();
     m_state = GameState::MainMenu;
 }
 
-bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
+bool MyGame::OnUpdate(Eng::Engine&  /*engine*/, float deltaTime) {
     if (m_minimized) {
         SDL_Delay(16);
         return false;
@@ -485,7 +620,9 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
 
     const bool wantRelative = (m_state == GameState::Playing) && !m_menuOpen;
     if (wantRelative != m_relativeMode) {
-        Eng::tool::Input::Get().SetRelativeMode(mainWin->GetSDLWindow(), wantRelative);
+        if (m_inputService) {
+            m_inputService->SetRelativeMode(mainWin->GetSDLWindow(), wantRelative);
+        }
         m_relativeMode = wantRelative;
     }
 
@@ -540,7 +677,7 @@ bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     float sunI = glm::clamp(sunH * 2.5f, 0.0f, 0.85f);
     float warm = 1.0f - glm::clamp(sunH * 3.0f, 0.0f, 1.0f);
     glm::vec3 sunColor = glm::mix(glm::vec3(1.0f, 1.0f, 1.0f), glm::vec3(1.0f, 0.5f, 0.2f), warm);
-    glm::vec3 ambient  = glm::mix(glm::vec3(0.1f, 0.12f, 0.2f), glm::vec3(0.35f, 0.4f, 0.45f), 
+    glm::vec3 ambient  = glm::mix(glm::vec3(0.1f, 0.12f, 0.2f), glm::vec3(0.35f, 0.4f, 0.45f),
                                   glm::clamp(sunH * 2.0f, 0.0f, 1.0f));
 
     m_globalState.lightDir       = sunDir;
@@ -865,32 +1002,36 @@ void MyGame::ReturnToMainMenu() {
 // 输入
 // ============================================================
 bool MyGame::GetInput(float dt) {
-    using namespace Eng::tool;
+    if (!m_inputService) return m_shouldQuit;
 
-    if (Input::IsKeyPressed(KeyCode::Escape)) m_menuOpen = !m_menuOpen;
+    // ---- UI 层开关 ----
+    if (m_inputService->IsActionPressed(A_OpenMenu)) m_menuOpen = !m_menuOpen;
     if (m_menuOpen) return m_shouldQuit;
 
-    if (Input::IsKeyPressed(KeyCode::F)) {
+    // ---- 玩家动作 ----
+    if (m_inputService->IsActionPressed(A_ToggleFly)) {
         m_flyMode = !m_flyMode;
-        m_positionError = glm::vec3(0.0f);
+        m_positionError  = glm::vec3(0.0f);
         m_playerVelocity = glm::vec3(0.0f);
     }
 
-    if (Input::IsKeyPressed(KeyCode::F11)) {
+    if (m_inputService->IsActionPressed(A_ToggleFullscreen)) {
         auto& configs = mainWin->GetConfigs();
         configs.fullscreen = !configs.fullscreen;
         mainWin->SetFullscreen(configs.fullscreen);
-        RecreateFBOs(mainWin->GetConfigs().windowPixelWidth, mainWin->GetConfigs().windowPixelHeight);
+        RecreateFBOs(mainWin->GetConfigs().windowPixelWidth,
+                     mainWin->GetConfigs().windowPixelHeight);
     }
 
-    if (Input::IsKeyPressed(KeyCode::F3)) m_showDebug = !m_showDebug;
+    if (m_inputService->IsActionPressed(A_ToggleDebug)) m_showDebug = !m_showDebug;
 
-    glm::vec2 mouseDelta = Input::GetMouseDelta();
+    // ---- 视角（鼠标增量保留在 InputService 底层，不进 action 层） ----
+    glm::vec2 mouseDelta = m_inputService->GetMouseDelta();
     ImGuiIO& io = ImGui::GetIO();
     if (!io.WantCaptureMouse) {
         yaw   += mouseDelta.x * 0.1f;
         pitch -= mouseDelta.y * 0.1f;
-        pitch = glm::clamp(pitch, -89.0f, 89.0f);
+        pitch  = glm::clamp(pitch, -89.0f, 89.0f);
     }
 
     glm::vec3 mousefront;
@@ -899,81 +1040,93 @@ bool MyGame::GetInput(float dt) {
     mousefront.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
     cameraFront = glm::normalize(mousefront);
 
+    // ---- 水平移动：GetMoveDir 返回 (x=右正左负, y=前正后负)，magnitude ≤ 1 ----
+    // 未来虚拟摇杆接进来后，这里不需要任何改动。
+    glm::vec2 moveLocal = m_inputService->GetMoveDir();
+
     glm::vec3 forward = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
     glm::vec3 right   = glm::normalize(glm::cross(forward, glm::vec3(0, 1, 0)));
-    glm::vec3 moveDir = glm::vec3(0.0f);
-    if (Input::IsKeyDown(KeyCode::W)) moveDir += forward;
-    if (Input::IsKeyDown(KeyCode::S)) moveDir -= forward;
-    if (Input::IsKeyDown(KeyCode::D)) moveDir += right;
-    if (Input::IsKeyDown(KeyCode::A)) moveDir -= right;
+    glm::vec3 moveDir = forward * moveLocal.y + right * moveLocal.x;
+
+    // ---- 垂直移动（fly 模式） ----
     if (m_flyMode) {
-        if (Input::IsKeyDown(KeyCode::Space))  moveDir.y += 1.0f;
-        if (Input::IsKeyDown(KeyCode::LShift)) moveDir.y -= 1.0f;
+        if (m_inputService->IsActionDown(A_FlyUp))   moveDir.y += 1.0f;
+        if (m_inputService->IsActionDown(A_FlyDown)) moveDir.y -= 1.0f;
     }
     if (glm::length(moveDir) > 0.001f) moveDir = glm::normalize(moveDir);
 
-    game::net::PlayerInput input;
-    input.moveDir = moveDir;
-    m_lastMoveDir = moveDir;
-    input.look = glm::vec2(glm::radians(yaw), glm::radians(pitch));
+    game::net::PlayerInput netInput;
+    netInput.moveDir = moveDir;
+    m_lastMoveDir    = moveDir;
+    netInput.look    = glm::vec2(glm::radians(yaw), glm::radians(pitch));
 
-    if (Input::IsKeyDown(KeyCode::Space)) m_jumpHoldTimer = 0.2f;
+    // ---- 跳跃（fly 模式下忽略；FlyUp 独立 action 处理垂直） ----
+    if (!m_flyMode && m_inputService->IsActionDown(A_Jump)) {
+        m_jumpHoldTimer = 0.2f;
+    }
     m_jumpHoldTimer = std::max(0.0f, m_jumpHoldTimer - dt);
-    input.jump = (m_jumpHoldTimer > 0.0f);
+    netInput.jump   = (!m_flyMode && m_jumpHoldTimer > 0.0f);
 
     m_placeCooldown = std::max(0.0f, m_placeCooldown - dt);
     m_digCooldown   = std::max(0.0f, m_digCooldown   - dt);
 
-    float scroll = Input::GetScrollDelta();
+    // ---- 滚轮切快捷栏 ----
+    float scroll = m_inputService->GetScrollDelta();
     if (scroll > 0) m_hotbarIndex = (m_hotbarIndex - 1 + kHotbarSize) % kHotbarSize;
     if (scroll < 0) m_hotbarIndex = (m_hotbarIndex + 1) % kHotbarSize;
 
-    if (Input::IsKeyPressed(KeyCode::Num1)) m_hotbarIndex = 0;
-    if (Input::IsKeyPressed(KeyCode::Num2)) m_hotbarIndex = 1;
-    if (Input::IsKeyPressed(KeyCode::Num3)) m_hotbarIndex = 2;
-    if (Input::IsKeyPressed(KeyCode::Num4)) m_hotbarIndex = 3;
-
+    // ---- 数字键快捷栏（0-based 语义：HotbarSlot0 → m_hotbar[0]） ----
+    if (m_inputService->IsActionPressed(A_HotbarSlot0)) m_hotbarIndex = 0;
+    if (m_inputService->IsActionPressed(A_HotbarSlot1)) m_hotbarIndex = 1;
+    if (m_inputService->IsActionPressed(A_HotbarSlot2)) m_hotbarIndex = 2;
+    if (m_inputService->IsActionPressed(A_HotbarSlot3)) m_hotbarIndex = 3;
+    if (m_inputService->IsActionPressed(A_HotbarSlot4)) m_hotbarIndex = 4;
+    if (m_inputService->IsActionPressed(A_HotbarSlot5)) m_hotbarIndex = 5;
+    if (m_inputService->IsActionPressed(A_HotbarSlot6)) m_hotbarIndex = 6;
+    if (m_inputService->IsActionPressed(A_HotbarSlot7)) m_hotbarIndex = 7;
+    if (m_inputService->IsActionPressed(A_HotbarSlot8)) m_hotbarIndex = 8;
     if (m_hotbarIndex < 0 || m_hotbarIndex >= kHotbarSize) m_hotbarIndex = 0;
 
-    bool wantDig   = Input::IsKeyDown(KeyCode::MouseLeft);
-    bool wantPlace = Input::IsKeyDown(KeyCode::MouseRight);
+    // ---- 挖掘 / 放置 ----
+    bool wantDig   = m_inputService->IsActionDown(A_Dig);
+    bool wantPlace = m_inputService->IsActionDown(A_Place);
 
     glm::vec3 eyePos = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
     m_currentRayHit = game::RayCast(
-        m_blockRegistry, 
-        eyePos, 
-        cameraFront, 
-        5.0f, 
+        m_blockRegistry,
+        eyePos,
+        cameraFront,
+        5.0f,
         [this](int wx, int wy, int wz) { return this->GetBlockAt(wx, wy, wz); }
     );
 
-    input.dig   = (wantDig   && m_digCooldown   <= 0.0f);
-    input.place = (wantPlace && m_placeCooldown <= 0.0f);
+    netInput.dig   = (wantDig   && m_digCooldown   <= 0.0f);
+    netInput.place = (wantPlace && m_placeCooldown <= 0.0f);
 
-    if (input.dig)   m_digCooldown   = kDigInterval;
-    if (input.place) m_placeCooldown = kPlaceInterval;
+    if (netInput.dig)   m_digCooldown   = kDigInterval;
+    if (netInput.place) m_placeCooldown = kPlaceInterval;
 
     auto& curSlot = m_hotbar[m_hotbarIndex];
     if (curSlot.isEmpty()) {
-        input.placeBlock = AIR_ID;
+        netInput.placeBlock = AIR_ID;
     } else {
-        input.placeBlock = curSlot.type;
-        if (input.place) {
+        netInput.placeBlock = curSlot.type;
+        if (netInput.place) {
             curSlot.count--;
             if (curSlot.count <= 0) curSlot = game::ItemStack{};
         }
     }
-    input.fly = m_flyMode;
+    netInput.fly = m_flyMode;
 
     Eng::tool::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::PlayerInput));
-    w.WriteVec3(input.moveDir);
-    w.WriteVec2(input.look);
-    w.Write(static_cast<uint8_t>(input.jump  ? 1 : 0));
-    w.Write(static_cast<uint8_t>(input.dig   ? 1 : 0));
-    w.Write(static_cast<uint8_t>(input.place ? 1 : 0));
-    w.Write<uint16_t>(input.placeBlock);
-    w.Write(static_cast<uint8_t>(input.fly ? 1 : 0));
+    w.WriteVec3(netInput.moveDir);
+    w.WriteVec2(netInput.look);
+    w.Write(static_cast<uint8_t>(netInput.jump  ? 1 : 0));
+    w.Write(static_cast<uint8_t>(netInput.dig   ? 1 : 0));
+    w.Write(static_cast<uint8_t>(netInput.place ? 1 : 0));
+    w.Write<uint16_t>(netInput.placeBlock);
+    w.Write(static_cast<uint8_t>(netInput.fly   ? 1 : 0));
     m_client->Send(w.GetBuffer());
 
     if (glm::length(moveDir) > 0.1f && m_playerOnGround) {

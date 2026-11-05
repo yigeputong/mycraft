@@ -1,9 +1,9 @@
 #include "Engine/Engine.h"
 #include "Engine/tool/Log.h"
-#include "Engine/tool/Input.h"
 #include "Engine/tool/Window.h"
 #include "Engine/service/IRenderService.h"
 #include "Engine/service/AssetService.h"
+#include "Engine/service/InputService.h"
 #include "Engine/service/OpenGLRenderService.h"
 #include "Engine/service/VulkanRenderService.h"
 
@@ -49,8 +49,13 @@ bool Engine::Init(const EngineConfig& config, IGame* game) {
         logInfo(m_logger, "[Engine] Networking initialized");
     }
 
+    // 基础能力：Input 由 Engine 显式初始化（不再懒单例）
+    m_inputService = std::make_unique<service::InputService>();
+    logInfo(m_logger, "[Engine] InputService initialized");
+
+    // WindowService 需要 InputService 完成事件转发（依赖显式注入）
     if (NeedsWindow()) {
-        m_windowManager = std::make_unique<service::WindowService>();
+        m_windowManager = std::make_unique<service::WindowService>(m_inputService.get());
     }
 
     const char* modeStr = "?";
@@ -65,20 +70,15 @@ bool Engine::Init(const EngineConfig& config, IGame* game) {
     return true;
 }
 
-bool Engine::CreateRenderService() {
-    if (m_renderService) return true;  // 幂等
+service::IRenderService* Engine::CreateRenderService(tool::Window* mainWindow) {
+    if (m_renderService) return m_renderService.get();
 
-    if (!m_windowManager) {
-        logError(m_logger, "[Engine] CreateRenderService: no WindowService (DedicatedServer?)");
-        return false;
-    }
-    auto* mainWindow = m_windowManager->GetMainWindow();
     if (!mainWindow) {
-        logError(m_logger, "[Engine] CreateRenderService: no main window");
-        return false;
+        m_lastError = "CreateRenderService: mainWindow is null";
+        logError(m_logger, "[Engine] " << m_lastError);
+        return nullptr;
     }
 
-    // Window::CreateWindow 里的 Probe 已经把 AUTO 解析成实际 apitype
     const auto apitype = mainWindow->GetConfigs().apitype;
 
     std::unique_ptr<service::IRenderService> service;
@@ -91,22 +91,37 @@ bool Engine::CreateRenderService() {
                 service = std::make_unique<service::VulkanRenderService>();
                 break;
             default:
-                logError(m_logger, "[Engine] CreateRenderService: unsupported apitype");
-                return false;
+                m_lastError = "CreateRenderService: unsupported apitype";
+                logError(m_logger, "[Engine] " << m_lastError);
+                return nullptr;
         }
         service->Initialize(
             mainWindow->GetConfigs().windowWidth,
             mainWindow->GetConfigs().windowHeight,
             mainWindow);
     } catch (const std::exception& e) {
-        logFatal(m_logger, "[Engine] RenderService init failed: " << e.what());
-        return false;
+        m_lastError = std::string("RenderService init failed: ") + e.what();
+        logFatal(m_logger, "[Engine] " << m_lastError);
+        return nullptr;
     }
 
     m_renderService = std::move(service);
-    m_assetService  = std::make_unique<service::AssetService>(m_renderService.get());
-    logInfo(m_logger, "[Engine] RenderService + AssetService created");
-    return true;
+    logInfo(m_logger, "[Engine] RenderService created");
+    return m_renderService.get();
+}
+
+service::AssetService* Engine::CreateAssetService(service::IRenderService* renderService) {
+    if (m_assetService) return m_assetService.get();
+
+    if (!renderService) {
+        m_lastError = "CreateAssetService: renderService is null";
+        logError(m_logger, "[Engine] " << m_lastError);
+        return nullptr;
+    }
+
+    m_assetService = std::make_unique<service::AssetService>(renderService);
+    logInfo(m_logger, "[Engine] AssetService created");
+    return m_assetService.get();
 }
 
 void Engine::Run() {
@@ -125,7 +140,9 @@ void Engine::Run() {
 
         m_deltaTime = deltaTime;
 
-        tool::Input::Get().Update();
+        if (m_inputService) {
+            m_inputService->Update();
+        }
 
         if (m_windowManager) {
             m_windowManager->PollEvents();
@@ -149,7 +166,7 @@ void Engine::Run() {
     }
 
     if (m_game) {
-        m_game->OnShutdown(*this); // 此时 RenderService / AssetService 均存活
+        m_game->OnShutdown(*this);
     }
 }
 
@@ -158,12 +175,11 @@ void Engine::Stop() {
 }
 
 void Engine::Quit() {
-    // 严格销毁顺序
-    // game → (ImGui backend) → asset → render → window
+    // 严格销毁顺序（与声明逆序一致）
+    // game → ImGui backend → asset → render → window → input
     m_game.reset();
 
     if (m_renderService) {
-        // ImGui backend 必须在 renderService 销毁前关闭（backend 持有 GPU 资源）
         m_renderService->ShutdownImGuiBackend();
     }
     if (m_assetService) {
@@ -177,6 +193,10 @@ void Engine::Quit() {
     if (m_windowManager) {
         m_windowManager.reset();
         logInfo(m_logger, "[Engine] WindowService shutdown");
+    }
+    if (m_inputService) {
+        m_inputService.reset();
+        logInfo(m_logger, "[Engine] InputService shutdown");
     }
 
     if (m_engConfig.enableNetwork) {

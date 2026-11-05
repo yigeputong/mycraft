@@ -1,18 +1,21 @@
 #include "Engine/service/WindowService.h"
-#include "Engine/Engine.h"
 #include "Engine/tool/Window.h"
-#include "Engine/tool/Input.h"
+#include "Engine/service/InputService.h"
 #include "imgui_impl_sdl3.h"
+
+#include <algorithm>
+#include <cstdio>
 
 namespace Eng::service {
 
-WindowService::WindowService() = default;
+WindowService::WindowService(service::InputService* inputService)
+    : m_inputService(inputService) {}
 
 WindowService::~WindowService() {
     try {
         m_windowIds.clear();
         auto windows = std::move(m_windows);
-        windows.clear();  // 此时 m_windows 已为空
+        windows.clear();
     }
     catch (const std::exception& e) {
         std::fprintf(stderr, "[WindowService] Shutdown threw: %s\n", e.what());
@@ -25,7 +28,7 @@ WindowService::~WindowService() {
 uint32_t WindowService::CreateWindow(const tool::WindowConfig& config) {
     auto window = std::make_unique<tool::Window>(config);
     if (!window->IsValid()) {
-        return 0;  // 创建失败
+        return 0;
     }
 
     uint32_t id = m_nextId++;
@@ -35,7 +38,6 @@ uint32_t WindowService::CreateWindow(const tool::WindowConfig& config) {
     if (m_mainWindowId == 0) {
         m_mainWindowId = id;
     }
-
     return id;
 }
 
@@ -48,9 +50,10 @@ void WindowService::DestroyWindow(uint32_t id) {
     }
 
     if (it->second) {
-        it->second->onEvent = nullptr;
-        it->second->onResize = nullptr;
-        it->second->onCloseRequest = nullptr;
+        it->second->onEvent          = nullptr;
+        it->second->onResize         = nullptr;
+        it->second->onCloseRequest   = nullptr;
+        it->second->onFocusChanged   = nullptr;
     }
 
     m_windowIds.erase(std::remove(m_windowIds.begin(), m_windowIds.end(), id), m_windowIds.end());
@@ -83,7 +86,11 @@ bool WindowService::HasAnyWindow() const {
 }
 
 void WindowService::DispatchEvent(const SDL_Event& event) {
-    tool::Input::Get().ProcessEvent(event);
+    // 铁律 3：Input 事件转发是本服务的职责；若未注入 InputService，则跳过（而不是回落到单例）
+    if (m_inputService) {
+        m_inputService->ProcessEvent(event);
+    }
+
     if (event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) {
         SDL_Window* sdlWin = SDL_GetWindowFromID(event.window.windowID);
         if (!sdlWin) return;
@@ -100,6 +107,7 @@ void WindowService::DispatchEvent(const SDL_Event& event) {
                             window2->SetRunning(false);
                         }
                         return;
+
                     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
                         if (window->onCloseRequest) {
                             window->onCloseRequest();
@@ -107,30 +115,22 @@ void WindowService::DispatchEvent(const SDL_Event& event) {
                         break;
 
                     case SDL_EVENT_WINDOW_FOCUS_GAINED:
-                        if (window->onFocusChanged) {
-                            window->onFocusChanged(true);
-                        }
+                        if (window->onFocusChanged) window->onFocusChanged(true);
                         break;
 
                     case SDL_EVENT_WINDOW_FOCUS_LOST:
-                        if (window->onFocusChanged) {
-                            window->onFocusChanged(false);
-                        }
+                        if (window->onFocusChanged) window->onFocusChanged(false);
                         break;
 
-                    // 拦截窗口尺寸变化（横竖屏切换会触发这个）
                     case SDL_EVENT_WINDOW_RESIZED:
                     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
-                        int newWidth = event.window.data1;
+                        int newWidth  = event.window.data1;
                         int newHeight = event.window.data2;
-
-                        // 更新主窗口配置
-                        window->GetConfigs().windowPixelWidth = newWidth;
+                        window->GetConfigs().windowPixelWidth  = newWidth;
                         window->GetConfigs().windowPixelHeight = newHeight;
-                        
                         break;
                     }
-                    
+
                     default:
                         break;
                 }
@@ -138,7 +138,6 @@ void WindowService::DispatchEvent(const SDL_Event& event) {
             }
         }
     } else {
-        //非窗口事件分发给主窗口
         auto* main = GetMainWindow();
         if (main && main->onEvent) {
             main->onEvent(event);
@@ -147,11 +146,7 @@ void WindowService::DispatchEvent(const SDL_Event& event) {
 }
 
 void WindowService::Update() {
-    for (auto& [id, window] : m_windows) {
-        if (window->GetRunning()) {
-            //window->SwapBuffers();
-        }
-    }
+    // 目前无需 swap buffers（由 RenderService 负责）
 }
-    
-} // namespace Eng::client
+
+} // namespace Eng::service

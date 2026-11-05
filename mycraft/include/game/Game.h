@@ -45,20 +45,21 @@ private:
     // ================================================================
     // 1. 引擎注入的底层服务 (由 Engine 注入，MyGame 仅借用，不负责销毁)
     // ================================================================
-    Eng::service::WindowService*   winMgr = nullptr;
-    Eng::tool::Window*             mainWin = nullptr;
-    Eng::service::IRenderService*  renderer = nullptr;
-    Eng::service::AssetService*    m_assetManager = nullptr;   // ★ 归 Engine 所有
-    uint32_t                       m_win = 0;
+    Eng::service::WindowService*   winMgr         = nullptr;
+    Eng::tool::Window*             mainWin        = nullptr;
+    Eng::service::IRenderService*  renderer       = nullptr;
+    Eng::service::AssetService*    m_assetManager = nullptr;
+    Eng::service::InputService*    m_inputService = nullptr;
+    uint32_t                       m_win          = 0;
     Eng::service::DeviceInfo       m_deviceInfo;
-    bool                           m_useVulkan = false;
+    bool                           m_useVulkan    = false;
 
     // ================================================================
     // 2. 游戏状态与全局配置 (驱动主循环的核心变量)
     // ================================================================
     enum class GameState : std::uint8_t {
         MainMenu,
-        WorldSelect, // ★ 新增：世界选择界面
+        WorldSelect,
         Connecting,
         Playing,
     };
@@ -194,7 +195,7 @@ private:
     Eng::client::RenderMesh m_skyboxMesh;
 
     // 物品栏与背包
-    static constexpr int kHotbarSize = 4;
+    static constexpr int kHotbarSize = 9;
     int m_hotbarIndex = 0;
     std::array<game::ItemStack, kHotbarSize> m_hotbar{};
     bool m_inventoryOpen = false;
@@ -246,6 +247,9 @@ private:
     void RefreshWorldList();
     void LoadSettings(Eng::Engine& engine);
     void SaveSettings(Eng::Engine& engine);
+    void RegisterGameActions();
+    void LoadInputBindings(const nlohmann::json& j);
+    void SaveInputBindings(nlohmann::json& j);
     static constexpr const char* SETTINGS_FILE = "settings.json";
 
     // ================================================================
