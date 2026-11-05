@@ -252,6 +252,7 @@ struct TextureCreateInfo {
     std::span<const std::byte> pixels;
     int                        width         = 0;
     int                        height        = 0;
+    int                        arrayLayers   = 1;
     int                        requestedMips = 0;
     TextureFormat              format        = TextureFormat::RGBA8_UNORM;
 
@@ -373,6 +374,7 @@ struct Vertex {
     glm::vec3 position;
     glm::vec3 normal;
     glm::vec2 uv;
+    float     layer = 0.0f;
     float     ao = 1.0f;
     glm::vec4 light;
 };

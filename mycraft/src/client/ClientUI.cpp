@@ -1,13 +1,11 @@
 #include "game/client/ClientUI.h"
 #include "game/Game.h"
 #include "game/server/WorldSave.h"
-#include "game/client/TextureAtlas.h"
 #include "imgui.h"
 #include "Engine/tool/Window.h"
 #include "Engine/tool/Platform.h"
 #include <cmath>
 #include <cstdio>
-#include <tuple>
 #include <cstdarg>
 #include <chrono>
 #include <string>
@@ -146,33 +144,53 @@ void ClientUI::DrawRotatedText(ImDrawList* dl, ImVec2 center, const char* text, 
     }
 }
 
-void ClientUI::DrawIsometricBlock(ImDrawList* dl, ImVec2 center, float size, BlockId id, ImTextureID texId, const BlockRegistry& reg) {
-    if (id == AIR_ID || texId == 0) return;
+void ClientUI::DrawIsometricBlock(ImDrawList* dl, ImVec2 center, float size, BlockId id, ImTextureID  /*texId*/, const BlockRegistry& reg) {
+    if (id == AIR_ID || id == UNKNOWN_ID) return;
+
     const auto& def = reg.Get(id);
-    int topTile   = ResolveTile(def.render.ForTop().tile);
-    int sideTile  = ResolveTile(def.render.ForSide().tile);
-    if (topTile < 0) topTile = 0;
-    if (sideTile < 0) sideTile = 0;
+    std::string name = def.displayName;
 
-    auto getUV = [&](int tile) {
-        float u0, v0, u1, v1;
-        GetTileUV(tile, u0, v0, u1, v1);
-        return std::make_tuple(ImVec2(u0, v0), ImVec2(u1, v0), ImVec2(u1, v1), ImVec2(u0, v1));
-    };
+    // 兼容处理：由于 ImGui 不支持直接采样 Texture Array，暂时用大色块代替
+    ImU32 topColor  = IM_COL32(150, 150, 150, 255);
+    ImU32 sideColor = IM_COL32(100, 100, 100, 255);
 
-    float w = size * 0.5f, h = size * 0.25f, d = size * 0.5f;
-    float cx = center.x, cy = center.y; 
+    if (name.find("grass") != std::string::npos) {
+        topColor  = IM_COL32(88, 160, 70, 255);   // 草绿
+        sideColor = IM_COL32(110, 75, 50, 255);   // 泥土棕
+    } else if (name.find("dirt") != std::string::npos) {
+        topColor  = IM_COL32(110, 75, 50, 255);
+        sideColor = IM_COL32(90, 60, 40, 255);
+    } else if (name.find("sand") != std::string::npos) {
+        topColor  = IM_COL32(220, 210, 160, 255);
+        sideColor = IM_COL32(190, 180, 130, 255);
+    } else if (name.find("stone") != std::string::npos) {
+        topColor  = IM_COL32(128, 128, 128, 255);
+        sideColor = IM_COL32(100, 100, 100, 255);
+    } else if (name.find("torch") != std::string::npos) {
+        topColor  = IM_COL32(255, 200, 50, 255);
+        sideColor = IM_COL32(150, 100, 50, 255);
+    } else if (name.find("water") != std::string::npos) {
+        topColor  = IM_COL32(63, 118, 228, 255);
+        sideColor = IM_COL32(40, 90, 180, 255);
+    }
+
+    float w = size * 0.5f;
+    float h = size * 0.25f;
+    float d = size * 0.5f;
+
+    float cx = center.x;
+    float cy = center.y; 
     float totalHeight = h * 2 + d;
     float topY = cy - (totalHeight * 0.5f);
     float midY = topY + h;
     float botY = midY + h;
 
-    auto [lu0, lu1, lu2, lu3] = getUV(sideTile);
-    dl->AddImageQuad(texId, ImVec2(cx - w, midY), ImVec2(cx, midY - h), ImVec2(cx, midY - h + d), ImVec2(cx - w, midY + d), lu0, lu1, lu2, lu3);
-    auto [ru0, ru1, ru2, ru3] = getUV(sideTile);
-    dl->AddImageQuad(texId, ImVec2(cx, midY - h), ImVec2(cx + w, midY), ImVec2(cx + w, midY + d), ImVec2(cx, midY - h + d), ru0, ru1, ru2, ru3);
-    auto [tu0, tu1, tu2, tu3] = getUV(topTile);
-    dl->AddImageQuad(texId, ImVec2(cx, topY), ImVec2(cx + w, midY), ImVec2(cx, botY), ImVec2(cx - w, midY), tu0, tu1, tu2, tu3);
+    // 左侧面
+    dl->AddQuadFilled(ImVec2(cx - w, midY), ImVec2(cx, midY - h), ImVec2(cx, midY - h + d), ImVec2(cx - w, midY + d), sideColor);
+    // 右侧面
+    dl->AddQuadFilled(ImVec2(cx, midY - h), ImVec2(cx + w, midY), ImVec2(cx + w, midY + d), ImVec2(cx, midY - h + d), IM_COL32(80, 80, 80, 255));
+    // 顶面
+    dl->AddQuadFilled(ImVec2(cx, topY), ImVec2(cx + w, midY), ImVec2(cx, botY), ImVec2(cx - w, midY), topColor);
 }
 
 // 主入口

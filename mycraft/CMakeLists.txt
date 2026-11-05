@@ -25,7 +25,7 @@ set(CLIENT_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Game.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/MeshManager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/TextureAtlas.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/TextureArray.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/ClientWorld.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/ClientUI.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/LODManager.cpp
@@ -73,15 +73,14 @@ endif()
 add_glsl_shader(shader_mesh   mesh)
 add_glsl_shader(shader_sky    sky)
 add_glsl_shader(shader_post   post)
-add_glsl_shader(shader_lod    lod)
 add_glsl_shader(shader_entity entity)
 add_glsl_shader(shader_water  water)
 
 # 如果是安卓，main 依赖 shader；如果是桌面，mycraft 依赖 shader
 if(ANDROID)
-    add_dependencies(main shader_mesh shader_sky shader_post shader_lod shader_entity shader_water)
+    add_dependencies(main shader_mesh shader_sky shader_post shader_entity shader_water)
 else()
-    add_dependencies(mycraft shader_mesh shader_sky shader_post shader_lod shader_entity shader_water)
+    add_dependencies(mycraft shader_mesh shader_sky shader_post shader_entity shader_water)
     
     # assets 位于 mycraft/ 业务层目录，用 PROJECT_SOURCE_DIR 显式定位
     # 桌面端的 assets 同步（Android 不需要，因为 Gradle 会自动打进 apk）

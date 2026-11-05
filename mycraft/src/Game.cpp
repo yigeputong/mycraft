@@ -16,7 +16,7 @@
 #include "game/GameServer.h"
 #include "game/core/Blocks.h"
 #include "game/core/Physics.h"
-#include "game/client/TextureAtlas.h"
+#include "game/client/TextureArray.h"
 #include "game/client/MeshBuilderUtils.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
@@ -230,10 +230,17 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
         return false;
     }
 
+    // 此时 AssetService 刚被创建好
     m_assetManager = engine.GetAssetService();
     if (!m_assetManager) {
         logError(logger, "[Game] AssetService is null");
         return false;
+    }
+
+    // ★ 3. 立刻利用 m_assetManager 生成像素数据
+    {
+        auto tileTints = m_blockRegistry.CollectTileTints();
+        client::BuildBlockTextureArray(m_assetManager, tileTints);
     }
 
     m_deviceInfo = renderer->GetDeviceInfo();
@@ -334,19 +341,20 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
         logWarning(logger, "[MyGame] Player texture failed to load, using fallback (nullptr)");
     }
 
-    const auto& pixels = client::AtlasPixels();
-    int atlasW = client::AtlasCols() * client::ATLAS_TILE;
-    int atlasH = client::AtlasRows() * client::ATLAS_TILE;
+    // ★ 4. 现在像素数据已经有了，直接创建 GPU 纹理数组
+    const auto& pixels = client::GetTextureArrayPixels();
+    int layerCount = client::GetTextureLayerCount();
     
-    if (pixels.empty()) {
-        logError(logger, "[MyGame] Fatal: Atlas pixels are empty! Aborting texture creation.");
+    if (pixels.empty() || layerCount == 0) {
+        logError(logger, "[MyGame] Fatal: Texture Array pixels are empty! Aborting texture creation.");
         return false; 
     }
 
     Eng::service::rhi::TextureCreateInfo tci;
     tci.pixels = std::as_bytes(std::span(pixels));
-    tci.width = atlasW;
-    tci.height = atlasH;
+    tci.width = client::TILE_SIZE;
+    tci.height = client::TILE_SIZE;
+    tci.arrayLayers = layerCount;       // 告诉底层这是一个多层的 Array 纹理
     tci.format = Eng::service::rhi::TextureFormat::RGBA8_UNORM;
     tci.requestedMips = 0; 
     tci.magFilter = Eng::service::rhi::FilterMode::Nearest;                     
@@ -357,10 +365,10 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
 
     m_atlasTexture = renderer->CreateTexture(tci);
     if (!m_atlasTexture) {
-        logError(logger, "[MyGame] Failed to create atlas texture on GPU.");
+        logError(logger, "[MyGame] Failed to create texture array on GPU.");
         return false;
     }
-    logInfo(logger, "[MyGame] atlas texture created");
+    logInfo(logger, "[MyGame] texture array created with " << layerCount << " layers");
 
     RecreateFBOs(mainWin->GetConfigs().windowPixelWidth, mainWin->GetConfigs().windowPixelHeight);
     if (!m_mainFbo) {
@@ -414,111 +422,12 @@ void MyGame::SetupShaders() {
 }
 
 // ============================================================
-// 游戏生命周期
-// ============================================================
-void MyGame::EnterGame() {
-    logInfo(logger, "[Game] Entering game session...");
-
-    m_meshManager.Start();
-
-    cameraPos        = glm::vec3(0.0f, 40.0f, 0.0f);
-    cameraFront      = glm::vec3(0.0f, 0.0f, -1.0f);
-    yaw              = -90.0f;
-    pitch            = 0.0f;
-    m_playerVelocity = glm::vec3(0.0f);
-    m_positionError  = glm::vec3(0.0f);
-    m_lastMoveDir    = glm::vec3(0.0f);
-    m_playerOnGround = false;
-    
-    m_timeOfDay      = 8.0f;
-    m_animTime       = 0.0f;
-    m_walkDist       = 0.0f;
-    m_swingProgress  = 0.0f;
-
-    m_jumpHoldTimer  = 0.0f;
-    m_placeCooldown  = 0.0f;
-    m_digCooldown    = 0.0f;
-
-    m_fpsTimer       = 0.0f;
-    m_fpsFrameCount  = 0;
-    m_fpsAccumMs     = 0.0f;
-    m_fpsPeakMs      = 0.0f;
-    m_fpsDisplay     = 0.0f;
-    m_frameMsDisplay = 0.0f;
-    m_frameMsAvgDisp = 0.0f;
-    m_frameMsPeakDisp= 0.0f;
-    m_serverTickMs   = 0.0f;
-    m_serverTickAvg  = 0.0f;
-    m_serverTickMax  = 0.0f;
-
-    m_hotbarIndex    = 0;
-    m_inventoryOpen  = false;
-
-    m_itemEntities.clear();
-    m_otherPlayers.clear();
-    m_myClientId = 0;
-    
-    if (m_sceneRenderer) {
-        m_sceneRenderer->Clear();
-    }
-    m_knownSceneChunks.clear();
-
-    m_state = GameState::Playing;
-    m_menuOpen = false;
-    m_statusText.clear();
-    
-    logInfo(logger, "[Game] Game session entered successfully.");
-}
-
-void MyGame::ExitGame() {
-    logInfo(logger, "[Game] Exiting game session...");
-
-    if (renderer) renderer->WaitIdle();
-
-    m_lodManager.Stop();
-    m_meshManager.Stop();
-
-    if (m_client) m_client.reset();
-    if (m_server) { m_server->Stop(); m_server.reset(); }
-
-    m_world.Clear();
-    m_lodManager.Clear();
-    m_itemEntities.clear();
-    m_otherPlayers.clear();
-    
-    m_playerMesh = {};
-    m_handMesh = {};
-    m_skyboxMesh = {};
-    m_itemMeshCache.clear();
-
-    if (m_sceneRenderer) {
-        m_sceneRenderer->Clear();
-    }
-    m_knownSceneChunks.clear();
-
-    m_state = GameState::MainMenu;
-    m_selectedWorldId.clear(); // ★ 退出时清空当前选中的世界
-    m_menuOpen = false;
-    m_statusText.clear();
-
-    m_chunkMeshVersions.clear();
-
-    logInfo(logger, "[Game] Game session exited.");
-}
-
-void MyGame::ReturnToMainMenu() {
-    ExitGame();
-    logInfo(logger, "[Game] Returned to main menu");
-}
-
-// ============================================================
 // 核心循环
 // ============================================================
 void MyGame::OnStart(Eng::Engine& engine) {
     if (!logger) logger = std::make_unique<Eng::tool::Log>();
 
     if (engine.IsDedicatedServer()) {
-        // 服务端模式（假设你有固定的目录）
         if (!StartLocalServer(false, false, "world_server")) {
             logError(logger, "[Game] Failed to start dedicated server");
             m_shouldQuit = true;
@@ -530,11 +439,8 @@ void MyGame::OnStart(Eng::Engine& engine) {
 
     LoadSettings(engine);
 
+    // ★ 1. 先加载方块注册表（不依赖任何 RHI 服务）
     m_blockRegistry.LoadAll("assets/block");
-    {
-        auto tileTints = m_blockRegistry.CollectTileTints();
-        client::BuildAtlas(tileTints);
-    }
 
     try {
         if (!SetupWindow(engine)) return;
@@ -561,12 +467,9 @@ void MyGame::OnStart(Eng::Engine& engine) {
     m_hotbar[2] = game::MakeItemStack(m_blockRegistry.Get("mycraft:grass_block").id, 64);
     m_hotbar[3] = game::MakeItemStack(m_blockRegistry.Get("mycraft:sand").id,        64);
 
-    // ★ 初始化时扫描存档列表
     RefreshWorldList();
-
     m_state = GameState::MainMenu;
 }
-
 bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     if (m_minimized) {
         SDL_Delay(16);
@@ -857,6 +760,104 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
     mainWin        = nullptr;
     winMgr         = nullptr;
     m_win          = 0;
+}
+
+// ============================================================
+// 游戏生命周期
+// ============================================================
+void MyGame::EnterGame() {
+    logInfo(logger, "[Game] Entering game session...");
+
+    m_meshManager.Start();
+
+    cameraPos        = glm::vec3(0.0f, 40.0f, 0.0f);
+    cameraFront      = glm::vec3(0.0f, 0.0f, -1.0f);
+    yaw              = -90.0f;
+    pitch            = 0.0f;
+    m_playerVelocity = glm::vec3(0.0f);
+    m_positionError  = glm::vec3(0.0f);
+    m_lastMoveDir    = glm::vec3(0.0f);
+    m_playerOnGround = false;
+    
+    m_timeOfDay      = 8.0f;
+    m_animTime       = 0.0f;
+    m_walkDist       = 0.0f;
+    m_swingProgress  = 0.0f;
+
+    m_jumpHoldTimer  = 0.0f;
+    m_placeCooldown  = 0.0f;
+    m_digCooldown    = 0.0f;
+
+    m_fpsTimer       = 0.0f;
+    m_fpsFrameCount  = 0;
+    m_fpsAccumMs     = 0.0f;
+    m_fpsPeakMs      = 0.0f;
+    m_fpsDisplay     = 0.0f;
+    m_frameMsDisplay = 0.0f;
+    m_frameMsAvgDisp = 0.0f;
+    m_frameMsPeakDisp= 0.0f;
+    m_serverTickMs   = 0.0f;
+    m_serverTickAvg  = 0.0f;
+    m_serverTickMax  = 0.0f;
+
+    m_hotbarIndex    = 0;
+    m_inventoryOpen  = false;
+
+    m_itemEntities.clear();
+    m_otherPlayers.clear();
+    m_myClientId = 0;
+    
+    if (m_sceneRenderer) {
+        m_sceneRenderer->Clear();
+    }
+    m_knownSceneChunks.clear();
+
+    m_state = GameState::Playing;
+    m_menuOpen = false;
+    m_statusText.clear();
+    
+    logInfo(logger, "[Game] Game session entered successfully.");
+}
+
+void MyGame::ExitGame() {
+    logInfo(logger, "[Game] Exiting game session...");
+
+    if (renderer) renderer->WaitIdle();
+
+    m_lodManager.Stop();
+    m_meshManager.Stop();
+
+    if (m_client) m_client.reset();
+    if (m_server) { m_server->Stop(); m_server.reset(); }
+
+    m_world.Clear();
+    m_lodManager.Clear();
+    m_itemEntities.clear();
+    m_otherPlayers.clear();
+    
+    m_playerMesh = {};
+    m_handMesh = {};
+    m_skyboxMesh = {};
+    m_itemMeshCache.clear();
+
+    if (m_sceneRenderer) {
+        m_sceneRenderer->Clear();
+    }
+    m_knownSceneChunks.clear();
+
+    m_state = GameState::MainMenu;
+    m_selectedWorldId.clear(); // ★ 退出时清空当前选中的世界
+    m_menuOpen = false;
+    m_statusText.clear();
+
+    m_chunkMeshVersions.clear();
+
+    logInfo(logger, "[Game] Game session exited.");
+}
+
+void MyGame::ReturnToMainMenu() {
+    ExitGame();
+    logInfo(logger, "[Game] Returned to main menu");
 }
 
 // ============================================================

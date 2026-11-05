@@ -1,5 +1,5 @@
 #include "game/client/LODManager.h"
-#include "game/client/TextureAtlas.h"
+#include "game/client/TextureArray.h"
 #include "Engine/tool/Platform.h"
 #include <algorithm>
 #include <cmath>
@@ -525,12 +525,13 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
             case B::Mountain: tex = "stone"; break;
             default:          tex = "grass_block_top"; break;
         }
-        int t = ResolveTile(tex);
-        return t < 0 ? 0 : t;
+        // ★ 修复：将旧的 ResolveTile 改为最新的 ResolveLayer
+        int layer = ResolveLayer(tex);
+        return layer < 0 ? 0 : layer;
     };
 
     auto cellY = [&](int i, int j) -> float { 
-        if (waterMap[j][i]) return (float)SEA_LEVEL + 0.8f; 
+        if (waterMap[j][i]) return (float)SEA_LEVEL + 0.9f; 
         return (float)heightMap[j][i] + 1.0f; 
     };
 
@@ -540,9 +541,10 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
         return tileForBiome(b, heightMap[j][i], isWater);
     };
     
-    auto pushVertex = [&](const glm::vec3& p, const glm::vec3& n, const glm::vec2& uv, float ao) {
+    auto pushVertex = [&](const glm::vec3& p, const glm::vec3& n, const glm::vec2& uv, float ao, float layer) {
         Eng::service::Vertex v;
         v.position = p; v.normal = n; v.uv = uv; 
+        v.layer = layer; // ★ 赋值 layer
         v.ao = ao; 
         v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
         outV.push_back(v);
@@ -556,8 +558,7 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
             bool selfIsWater;
             int   tile  = cellTile(i, j, selfIsWater);
             
-            float u0, v0, u1, v1;
-            GetTileUV(tile, u0, v0, u1, v1);
+            float layer = static_cast<float>(tile); // ★ 核心：直接存层号
 
             float x0 = static_cast<float>(baseBlockX + i * sampleStep);
             float x1 = static_cast<float>(baseBlockX + (i + 1) * sampleStep);
@@ -574,10 +575,11 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                 ao = std::max(ao, 0.6f);
 
                 uint32_t base = static_cast<uint32_t>(outV.size());
-                pushVertex({x0, ySelf, z0}, {0,1,0}, {u0, v1}, ao);
-                pushVertex({x1, ySelf, z0}, {0,1,0}, {u1, v1}, ao);
-                pushVertex({x1, ySelf, z1}, {0,1,0}, {u1, v0}, ao);
-                pushVertex({x0, ySelf, z1}, {0,1,0}, {u0, v0}, ao);
+                // ★ UV 改成 0~1
+                pushVertex({x0, ySelf, z0}, {0,1,0}, {0.0f, 1.0f}, ao, layer);
+                pushVertex({x1, ySelf, z0}, {0,1,0}, {1.0f, 1.0f}, ao, layer);
+                pushVertex({x1, ySelf, z1}, {0,1,0}, {1.0f, 0.0f}, ao, layer);
+                pushVertex({x0, ySelf, z1}, {0,1,0}, {0.0f, 0.0f}, ao, layer);
                 outI.push_back(base+0); outI.push_back(base+3); outI.push_back(base+2);
                 outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+1);
             }
@@ -588,6 +590,7 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
             const glm::vec3 normals[4] = {{1,0,0}, {-1,0,0}, {0,0,1}, {0,0,-1}};
 
             for (int f = 0; f < 4; ++f) {
+                // ★ 补全：侧面判定逻辑
                 int query_i = std::clamp(ni[f], 0, NP - 1);
                 int query_j = std::clamp(nj[f], 0, NP - 1);
 
@@ -607,44 +610,43 @@ void LodManager::BuildLodUnit(const game::server::TerrainGenerator& terrain,
                 if (needSide) {
                     float sideAO = (yNb > ySelf) ? 0.5f : 0.8f; 
                     
+                    // ★ 补全：高度截断逻辑
                     float yBottom = std::min(yNb, ySelf) - 20.0f;
                     if (yBottom < -10.0f) yBottom = -10.0f;
                     if (selfIsWater && !nbIsWater && yNb > SEA_LEVEL) yBottom = yNb; 
                     if (yBottom > ySelf) yBottom = ySelf - 1.0f;
 
-                    // ★ 修复：使用全局标准 API
-                    float nu0, nv0, nu1, nv1; 
-                    GetTileUV(nt, nu0, nv0, nu1, nv1);
-                    
+                    float nLayer = static_cast<float>(nt); // ★ 侧面层号
                     uint32_t base = static_cast<uint32_t>(outV.size());
                     glm::vec3 n = normals[f];
 
+                    // ★ 侧面 UV 全变成 0~1 的标准映射
                     if (f == 0) {
-                        pushVertex({x1, yBottom, z0}, n, {nu0, nv1}, sideAO);
-                        pushVertex({x1, ySelf,   z0}, n, {nu0, nv0}, sideAO);
-                        pushVertex({x1, ySelf,   z1}, n, {nu1, nv0}, sideAO);
-                        pushVertex({x1, yBottom, z1}, n, {nu1, nv1}, sideAO);
+                        pushVertex({x1, yBottom, z0}, n, {0.0f, 1.0f}, sideAO, nLayer);
+                        pushVertex({x1, ySelf,   z0}, n, {0.0f, 0.0f}, sideAO, nLayer);
+                        pushVertex({x1, ySelf,   z1}, n, {1.0f, 0.0f}, sideAO, nLayer);
+                        pushVertex({x1, yBottom, z1}, n, {1.0f, 1.0f}, sideAO, nLayer);
                         outI.push_back(base+0); outI.push_back(base+1); outI.push_back(base+2);
                         outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+3);
                     } else if (f == 1) {
-                        pushVertex({x0, yBottom, z1}, n, {nu0, nv1}, sideAO);
-                        pushVertex({x0, ySelf,   z1}, n, {nu0, nv0}, sideAO);
-                        pushVertex({x0, ySelf,   z0}, n, {nu1, nv0}, sideAO);
-                        pushVertex({x0, yBottom, z0}, n, {nu1, nv1}, sideAO);
+                        pushVertex({x0, yBottom, z1}, n, {0.0f, 1.0f}, sideAO, nLayer);
+                        pushVertex({x0, ySelf,   z1}, n, {0.0f, 0.0f}, sideAO, nLayer);
+                        pushVertex({x0, ySelf,   z0}, n, {1.0f, 0.0f}, sideAO, nLayer);
+                        pushVertex({x0, yBottom, z0}, n, {1.0f, 1.0f}, sideAO, nLayer);
                         outI.push_back(base+0); outI.push_back(base+1); outI.push_back(base+2);
                         outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+3);
                     } else if (f == 2) {
-                        pushVertex({x0, yBottom, z1}, n, {nu0, nv1}, sideAO);
-                        pushVertex({x0, ySelf,   z1}, n, {nu0, nv0}, sideAO);
-                        pushVertex({x1, ySelf,   z1}, n, {nu1, nv0}, sideAO);
-                        pushVertex({x1, yBottom, z1}, n, {nu1, nv1}, sideAO);
+                        pushVertex({x0, yBottom, z1}, n, {0.0f, 1.0f}, sideAO, nLayer);
+                        pushVertex({x0, ySelf,   z1}, n, {0.0f, 0.0f}, sideAO, nLayer);
+                        pushVertex({x1, ySelf,   z1}, n, {1.0f, 0.0f}, sideAO, nLayer);
+                        pushVertex({x1, yBottom, z1}, n, {1.0f, 1.0f}, sideAO, nLayer);
                         outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+1);
                         outI.push_back(base+0); outI.push_back(base+3); outI.push_back(base+2);
                     } else if (f == 3) {
-                        pushVertex({x1, yBottom, z0}, n, {nu0, nv1}, sideAO);
-                        pushVertex({x1, ySelf,   z0}, n, {nu0, nv0}, sideAO);
-                        pushVertex({x0, ySelf,   z0}, n, {nu1, nv0}, sideAO);
-                        pushVertex({x0, yBottom, z0}, n, {nu1, nv1}, sideAO);
+                        pushVertex({x1, yBottom, z0}, n, {0.0f, 1.0f}, sideAO, nLayer);
+                        pushVertex({x1, ySelf,   z0}, n, {0.0f, 0.0f}, sideAO, nLayer);
+                        pushVertex({x0, ySelf,   z0}, n, {1.0f, 0.0f}, sideAO, nLayer);
+                        pushVertex({x0, yBottom, z0}, n, {1.0f, 1.0f}, sideAO, nLayer);
                         outI.push_back(base+0); outI.push_back(base+1); outI.push_back(base+2);
                         outI.push_back(base+0); outI.push_back(base+2); outI.push_back(base+3);
                     }

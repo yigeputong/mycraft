@@ -78,7 +78,7 @@ bool Engine::CreateRenderService() {
         return false;
     }
 
-    // ★ Window::CreateWindow 里的 Probe 已经把 AUTO 解析成实际 apitype
+    // Window::CreateWindow 里的 Probe 已经把 AUTO 解析成实际 apitype
     const auto apitype = mainWindow->GetConfigs().apitype;
 
     std::unique_ptr<service::IRenderService> service;

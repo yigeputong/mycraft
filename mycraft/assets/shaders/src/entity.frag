@@ -3,8 +3,8 @@
 layout(location = 0) in vec3 FragPos;
 layout(location = 1) in vec3 Normal;
 layout(location = 2) in vec2 uv;
-layout(location = 3) in float ao;
-layout(location = 4) in vec4 vLight;
+layout(location = 4) in float ao;
+layout(location = 5) in vec4 vLight;
 
 layout(location = 0) out vec4 FragColor;
 
@@ -21,7 +21,7 @@ layout(std140, binding = 0) uniform GlobalData {
     float _pad2;
 } global;
 
-// ★ 加上纹理声明
+
 #ifdef USE_OPENGL
 layout(binding = 0) uniform sampler2D uDiffuse;
 #else
@@ -62,9 +62,5 @@ void main() {
     else                        faceShade = 0.92;
 
     vec3 result = finalLight * faceShade;
-    
-    // 如果想用 tintColor，可以乘上去：
-    // FragColor = vec4(result * pc.tintColor.rgb * mix(1.0, ao, global.aoStrength), pc.tintColor.a);
-    
     FragColor = vec4(result * mix(1.0, ao, global.aoStrength), 1.0);
 }

@@ -318,16 +318,21 @@ void VulkanRenderService::createLogicalDevice() {
 
 void VulkanRenderService::createVmaAllocator() {
     VmaAllocatorCreateInfo allocatorInfo{};
-    allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+    allocatorInfo.vulkanApiVersion = vk::makeApiVersion(0, api_major, api_minor, 0);
     allocatorInfo.physicalDevice = *m_physicalDevice;
     allocatorInfo.device = *m_device;
     allocatorInfo.instance = *m_instance;
 
+    // 在动态模式下，VMA 必须通过这两个入口函数来获取其他所有函数
     VmaVulkanFunctions vmaVulkanFunctions{};
-    if (vmaImportVulkanFunctionsFromVolk(&allocatorInfo, &vmaVulkanFunctions) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to import Vulkan functions from volk for VMA");
-    }
+    vmaVulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+    vmaVulkanFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+    
+    // 将配置好的函数指针结构体传给 VMA
     allocatorInfo.pVulkanFunctions = &vmaVulkanFunctions;
+
+    // 注意：vk_mem_alloc.h 中已经定义了 VMA_DYNAMIC_VULKAN_FUNCTIONS 1，
+    // 所以这里只需提供这两个入口函数，VMA 会自动补全剩余的函数指针。
 
     if (vmaCreateAllocator(&allocatorInfo, &m_allocator) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create VMA allocator");
@@ -572,8 +577,9 @@ ShaderHandle VulkanRenderService::CreateShaderInternal(const rhi::ShaderCreateIn
             { 0, 0, vk::Format::eR32G32B32Sfloat,    offsetof(Vertex, position) },
             { 1, 0, vk::Format::eR32G32B32Sfloat,    offsetof(Vertex, normal)   },
             { 2, 0, vk::Format::eR32G32Sfloat,       offsetof(Vertex, uv)       },
-            { 3, 0, vk::Format::eR32Sfloat,          offsetof(Vertex, ao)       },
-            { 4, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(Vertex, light)    }
+            { 3, 0, vk::Format::eR32Sfloat,          offsetof(Vertex, layer)    },
+            { 4, 0, vk::Format::eR32Sfloat,          offsetof(Vertex, ao)       },
+            { 5, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(Vertex, light)    }
         };
     }
     vk::PipelineVertexInputStateCreateInfo vertexInput{};
@@ -681,7 +687,18 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
         return 0;
 
     TextureInternal internal;
-    VkDeviceSize imageSize = static_cast<size_t>(info.width) * info.height * 4;
+    
+    // 根据 info.format 映射 VkFormat 和 bpp (bytes per pixel)
+    vk::Format vkFormat = vk::Format::eR8G8B8A8Unorm;
+    int bpp = 4;
+    switch (info.format) {
+        case rhi::TextureFormat::RGBA8_UNORM:   vkFormat = vk::Format::eR8G8B8A8Unorm; bpp = 4; break;
+        case rhi::TextureFormat::RGBA16_SFLOAT: vkFormat = vk::Format::eR16G16B16A16Sfloat; bpp = 8; break;
+        case rhi::TextureFormat::R8_UNORM:      vkFormat = vk::Format::eR8Unorm; bpp = 1; break;
+        case rhi::TextureFormat::D32_SFLOAT:    vkFormat = vk::Format::eD32Sfloat; bpp = 4; break;
+    }
+
+    VkDeviceSize imageSize = static_cast<size_t>(info.width) * info.height * info.arrayLayers * bpp;
 
     uint32_t maxPossibleMips = static_cast<uint32_t>(std::floor(std::log2(std::max(info.width, info.height)))) + 1;
     uint32_t mipLevels = 1;
@@ -704,13 +721,17 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
     vmaUnmapMemory(m_allocator, stagingAlloc);
 
     vk::ImageCreateInfo imageInfo{
-        .imageType = vk::ImageType::e2D, .format = vk::Format::eR8G8B8A8Unorm,
+        .imageType = vk::ImageType::e2D, .format = vkFormat,
         .extent = { static_cast<uint32_t>(info.width), static_cast<uint32_t>(info.height), 1 },
-        .mipLevels = mipLevels, .arrayLayers = 1, .samples = vk::SampleCountFlagBits::e1,
+        .mipLevels = mipLevels, .arrayLayers = static_cast<uint32_t>(info.arrayLayers), .samples = vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
         .usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eSampled,
         .sharingMode = vk::SharingMode::eExclusive, .initialLayout = vk::ImageLayout::eUndefined
     };
+    
+    if (info.format == rhi::TextureFormat::D32_SFLOAT) {
+        imageInfo.usage |= vk::ImageUsageFlagBits::eDepthStencilAttachment;
+    }
 
     VmaAllocationCreateInfo allocInfo{}; allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
     vmaCreateImage(m_allocator, reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), &allocInfo, &internal.image, &internal.alloc, nullptr);
@@ -721,23 +742,32 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
         .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe, .srcAccessMask = vk::AccessFlagBits2::eNone,
         .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
         .oldLayout = vk::ImageLayout::eUndefined, .newLayout = vk::ImageLayout::eTransferDstOptimal,
-        .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
+        .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, static_cast<uint32_t>(info.arrayLayers) }
     };
+    
+    if (info.format == rhi::TextureFormat::D32_SFLOAT) {
+        initBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+    }
+    
     cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &initBarrier });
 
     vk::BufferImageCopy region{
         .bufferOffset = 0, .bufferRowLength = 0, .bufferImageHeight = 0,
-        .imageSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
+        .imageSubresource = { 
+            (info.format == rhi::TextureFormat::D32_SFLOAT ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor), 
+            0, 0, static_cast<uint32_t>(info.arrayLayers) 
+        },
         .imageOffset = { 0, 0, 0 }, .imageExtent = { static_cast<uint32_t>(info.width), static_cast<uint32_t>(info.height), 1 }
     };
     cmd.copyBufferToImage(stagingBuf, internal.image, vk::ImageLayout::eTransferDstOptimal, region);
 
-    if (mipLevels > 1) {
+    // Mipmap 生成逻辑 (深度图通常不需要 Mipmap)
+    if (mipLevels > 1 && info.format != rhi::TextureFormat::D32_SFLOAT) {
         vk::ImageMemoryBarrier2 barrier0{
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
             .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
             .oldLayout = vk::ImageLayout::eTransferDstOptimal, .newLayout = vk::ImageLayout::eTransferSrcOptimal,
-            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
+            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, static_cast<uint32_t>(info.arrayLayers) }
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier0 });
 
@@ -747,7 +777,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
                 .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eNone,
                 .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
                 .oldLayout = vk::ImageLayout::eUndefined, .newLayout = vk::ImageLayout::eTransferDstOptimal,
-                .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, i, 1, 0, 1 }
+                .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, i, 1, 0, static_cast<uint32_t>(info.arrayLayers) }
             };
             cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &dstBarrier });
 
@@ -755,8 +785,8 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
             std::array<vk::Offset3D, 2> dstOffsets = { vk::Offset3D{0, 0, 0}, vk::Offset3D{mipW > 1 ? mipW / 2 : 1, mipH > 1 ? mipH / 2 : 1, 1} };
 
             vk::ImageBlit blit{
-                .srcSubresource = { vk::ImageAspectFlagBits::eColor, i - 1, 0, 1 }, .srcOffsets = srcOffsets,
-                .dstSubresource = { vk::ImageAspectFlagBits::eColor, i, 0, 1 }, .dstOffsets = dstOffsets
+                .srcSubresource = { vk::ImageAspectFlagBits::eColor, i - 1, 0, static_cast<uint32_t>(info.arrayLayers) }, .srcOffsets = srcOffsets,
+                .dstSubresource = { vk::ImageAspectFlagBits::eColor, i, 0, static_cast<uint32_t>(info.arrayLayers) }, .dstOffsets = dstOffsets
             };
             cmd.blitImage(internal.image, vk::ImageLayout::eTransferSrcOptimal, internal.image, vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
 
@@ -765,7 +795,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
                     .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
                     .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
                     .oldLayout = vk::ImageLayout::eTransferDstOptimal, .newLayout = vk::ImageLayout::eTransferSrcOptimal,
-                    .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, i, 1, 0, 1 }
+                    .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, i, 1, 0, static_cast<uint32_t>(info.arrayLayers) }
                 };
                 cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &srcBarrier });
             }
@@ -777,7 +807,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
             .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
             .oldLayout = vk::ImageLayout::eTransferDstOptimal, .newLayout = vk::ImageLayout::eTransferSrcOptimal,
-            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, mipLevels - 1, 1, 0, 1 }
+            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, mipLevels - 1, 1, 0, static_cast<uint32_t>(info.arrayLayers) }
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &lastBarrier });
 
@@ -785,15 +815,18 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
             .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader, .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
             .oldLayout = vk::ImageLayout::eTransferSrcOptimal, .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1 }
+            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, static_cast<uint32_t>(info.arrayLayers) }
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &finalBarrierAll });
     } else {
+        vk::ImageAspectFlags aspect = (info.format == rhi::TextureFormat::D32_SFLOAT) ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;
+        vk::ImageLayout finalLayout = (info.format == rhi::TextureFormat::D32_SFLOAT) ? vk::ImageLayout::eDepthAttachmentOptimal : vk::ImageLayout::eShaderReadOnlyOptimal;
+        
         vk::ImageMemoryBarrier2 finalBarrier1Layer{
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
             .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader, .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
-            .oldLayout = vk::ImageLayout::eTransferDstOptimal, .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal, .newLayout = finalLayout,
+            .image = internal.image, .subresourceRange = { aspect, 0, 1, 0, static_cast<uint32_t>(info.arrayLayers) }
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &finalBarrier1Layer });
     }
@@ -801,32 +834,29 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
     endSingleTimeCommands(std::move(cmd));
     vmaDestroyBuffer(m_allocator, stagingBuf, stagingAlloc);
 
+    vk::ImageViewType viewType = (info.arrayLayers > 1) ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
+    vk::ImageAspectFlags aspectMask = (info.format == rhi::TextureFormat::D32_SFLOAT) ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;
+
     vk::ImageViewCreateInfo viewInfo{
-        .image = internal.image, .viewType = vk::ImageViewType::e2D, .format = vk::Format::eR8G8B8A8Unorm,
-        .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1 }
+        .image = internal.image, 
+        .viewType = viewType, 
+        .format = vkFormat,
+        .subresourceRange = { aspectMask, 0, mipLevels, 0, static_cast<uint32_t>(info.arrayLayers) }
     };
     internal.view = vk::raii::ImageView(m_device, viewInfo);
 
-    // ★ 核心修改：构建 Sampler
+    // Sampler 配置
     vk::Filter vkMagFilter = (info.magFilter == rhi::FilterMode::Linear) ? vk::Filter::eLinear : vk::Filter::eNearest;
-
     vk::Filter vkMinFilter = vk::Filter::eNearest;
     vk::SamplerMipmapMode vkMipmapMode = vk::SamplerMipmapMode::eNearest;
     switch (info.minFilter) {
-        case rhi::MinFilterMode::Nearest:
-            vkMinFilter = vk::Filter::eNearest; vkMipmapMode = vk::SamplerMipmapMode::eNearest; break;
-        case rhi::MinFilterMode::Linear:
-            vkMinFilter = vk::Filter::eLinear; vkMipmapMode = vk::SamplerMipmapMode::eNearest; break;
-        case rhi::MinFilterMode::Nearest_Mipmap_Nearest:
-            vkMinFilter = vk::Filter::eNearest; vkMipmapMode = vk::SamplerMipmapMode::eNearest; break;
-        case rhi::MinFilterMode::Linear_Mipmap_Nearest:
-            vkMinFilter = vk::Filter::eLinear; vkMipmapMode = vk::SamplerMipmapMode::eNearest; break;
-        case rhi::MinFilterMode::Nearest_Mipmap_Linear:
-            vkMinFilter = vk::Filter::eNearest; vkMipmapMode = vk::SamplerMipmapMode::eLinear; break;
-        case rhi::MinFilterMode::Linear_Mipmap_Linear:
-            vkMinFilter = vk::Filter::eLinear; vkMipmapMode = vk::SamplerMipmapMode::eLinear; break;
+        case rhi::MinFilterMode::Nearest:                vkMinFilter = vk::Filter::eNearest; vkMipmapMode = vk::SamplerMipmapMode::eNearest; break;
+        case rhi::MinFilterMode::Linear:                 vkMinFilter = vk::Filter::eLinear; vkMipmapMode = vk::SamplerMipmapMode::eNearest; break;
+        case rhi::MinFilterMode::Nearest_Mipmap_Nearest: vkMinFilter = vk::Filter::eNearest; vkMipmapMode = vk::SamplerMipmapMode::eNearest; break;
+        case rhi::MinFilterMode::Linear_Mipmap_Nearest:  vkMinFilter = vk::Filter::eLinear; vkMipmapMode = vk::SamplerMipmapMode::eNearest; break;
+        case rhi::MinFilterMode::Nearest_Mipmap_Linear:  vkMinFilter = vk::Filter::eNearest; vkMipmapMode = vk::SamplerMipmapMode::eLinear; break;
+        case rhi::MinFilterMode::Linear_Mipmap_Linear:   vkMinFilter = vk::Filter::eLinear; vkMipmapMode = vk::SamplerMipmapMode::eLinear; break;
     }
-    // 没 Mipmap 时降级
     if (mipLevels <= 1) vkMipmapMode = vk::SamplerMipmapMode::eNearest;
 
     auto mapWrap = [](rhi::WrapMode w) -> vk::SamplerAddressMode {
@@ -836,16 +866,14 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
             default: return vk::SamplerAddressMode::eClampToEdge;
         }
     };
-    vk::SamplerAddressMode vkWrapU = mapWrap(info.wrapU);
-    vk::SamplerAddressMode vkWrapV = mapWrap(info.wrapV);
 
     vk::SamplerCreateInfo samplerInfo{
         .magFilter = vkMagFilter, 
         .minFilter = vkMinFilter, 
         .mipmapMode = vkMipmapMode,
-        .addressModeU = vkWrapU, 
-        .addressModeV = vkWrapV, 
-        .addressModeW = vkWrapU,
+        .addressModeU = mapWrap(info.wrapU), 
+        .addressModeV = mapWrap(info.wrapV), 
+        .addressModeW = mapWrap(info.wrapU),
         .anisotropyEnable = (mipLevels > 1 && info.enableAnisotropy && m_renderConfig.enableAnisotropic) ? vk::True : vk::False,
         .maxAnisotropy = static_cast<float>(m_renderConfig.maxAnisotropy), 
         .maxLod = static_cast<float>(mipLevels)
@@ -855,7 +883,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
     vk::DescriptorSetAllocateInfo allocSetInfo{ .descriptorPool = *m_descriptorPool, .descriptorSetCount = 1, .pSetLayouts = &*m_textureSetLayout };
     internal.set = std::move(m_device.allocateDescriptorSets(allocSetInfo)[0]);
 
-    vk::DescriptorImageInfo imageDesc{ .sampler = *internal.sampler, .imageView = *internal.view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
+    vk::DescriptorImageInfo imageDesc{ .sampler = *internal.sampler, .imageView = *internal.view, .imageLayout = (info.format == rhi::TextureFormat::D32_SFLOAT) ? vk::ImageLayout::eDepthAttachmentOptimal : vk::ImageLayout::eShaderReadOnlyOptimal };
     vk::WriteDescriptorSet write{
         .dstSet = *internal.set, .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageDesc

@@ -1,6 +1,6 @@
 #include "game/client/MeshManager.h"
 #include "game/client/MeshBuilderUtils.h"
-#include "game/client/TextureAtlas.h"
+#include "game/client/TextureArray.h"
 #include "Engine/tool/Platform.h"
 #include "Engine/tool/Log.h"
 namespace game::client {
@@ -235,24 +235,18 @@ void MeshManager::BuildChunkMeshData(const MeshTask& task, MeshResult& result) {
                 for (int f = 0; f < 6; ++f) {
                     if (!visible[f]) continue;
                     
-                    int tile = 0;
-                    if (f == 2) { tile = ResolveTile(def.render.ForTop().tile); }
-                    else if (f == 3) { tile = ResolveTile(def.render.ForBottom().tile); }
-                    else { tile = ResolveTile(def.render.ForSide().tile); }
-                    if (tile < 0) tile = 0;
-
-                    float u0, v0, u1, v1;
-                    GetTileUV(tile, u0, v0, u1, v1);
-                    
-                    float uScale = u1 - u0;
-                    float vScale = v1 - v0;
+                    // 直接获取层索引，不需要复杂的 UV 计算！
+                    int layer = 0;
+                    if (f == 2) { layer = ResolveLayer(def.render.ForTop().tile); }
+                    else if (f == 3) { layer = ResolveLayer(def.render.ForBottom().tile); }
+                    else { layer = ResolveLayer(def.render.ForSide().tile); }
+                    if (layer < 0) layer = 0;
 
                     bool isLiquid = def.render.isLiquid;
                     auto& outV = isLiquid ? result.waterVertices : result.vertices;
                     auto& outI = isLiquid ? result.waterIndices  : result.indices;
 
                     auto baseV = static_cast<uint32_t>(outV.size());
-
                     int Nx = normals[f].x, Ny = normals[f].y, Nz = normals[f].z;
 
                     for (int v = 0; v < 4; ++v) {
@@ -267,7 +261,9 @@ void MeshManager::BuildChunkMeshData(const MeshTask& task, MeshResult& result) {
                         
                         if (isLiquid && vert.position.y > ly + 0.01f) vert.position.y = (float)ly + 0.9f;
                         
-                        vert.uv = { u0 + faceUVs[v][0] * uScale, v0 + (1.0f - faceUVs[v][1]) * vScale };
+                        // UV 直接传 0~1，layer 传层号
+                        vert.uv = { faceUVs[v][0], 1.0f - faceUVs[v][1] };
+                        vert.layer = static_cast<float>(layer);
                         
                         int uA = faceAxes[f][0];
                         int vA = faceAxes[f][1];
@@ -290,7 +286,6 @@ void MeshManager::BuildChunkMeshData(const MeshTask& task, MeshResult& result) {
                         vert.ao = ao;
 
                         vert.light = getLight(lx + normals[f].x, ly + normals[f].y, lz + normals[f].z); 
-                        
                         outV.push_back(vert);
                     }
 

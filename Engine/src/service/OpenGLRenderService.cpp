@@ -106,11 +106,14 @@ void OpenGLRenderService::Initialize(int width, int height, tool::Window* window
     glVertexArrayAttribFormat(m_drawVAO, 2, 2, GL_FLOAT, GL_FALSE, offsetof(Vertex, uv));
     glVertexArrayAttribBinding(m_drawVAO, 2, 0);
     glEnableVertexArrayAttrib(m_drawVAO, 3);
-    glVertexArrayAttribFormat(m_drawVAO, 3, 1, GL_FLOAT, GL_FALSE, offsetof(Vertex, ao));
+    glVertexArrayAttribFormat(m_drawVAO, 3, 1, GL_FLOAT, GL_FALSE, offsetof(Vertex, layer));
     glVertexArrayAttribBinding(m_drawVAO, 3, 0);
     glEnableVertexArrayAttrib(m_drawVAO, 4);
-    glVertexArrayAttribFormat(m_drawVAO, 4, 4, GL_FLOAT, GL_FALSE, offsetof(Vertex, light));
+    glVertexArrayAttribFormat(m_drawVAO, 4, 1, GL_FLOAT, GL_FALSE, offsetof(Vertex, ao));
     glVertexArrayAttribBinding(m_drawVAO, 4, 0);
+    glEnableVertexArrayAttrib(m_drawVAO, 5);
+    glVertexArrayAttribFormat(m_drawVAO, 5, 4, GL_FLOAT, GL_FALSE, offsetof(Vertex, light));
+    glVertexArrayAttribBinding(m_drawVAO, 5, 0);
 
     m_initialized = true;
 }
@@ -415,8 +418,11 @@ TextureHandle OpenGLRenderService::CreateTextureInternal(const rhi::TextureCreat
     if (!info.pixels.data() || info.width <= 0 || info.height <= 0)
         return 0;
 
+    bool isArray = info.arrayLayers > 1;
+    GLenum target = isArray ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
+
     GLuint tex;
-    glCreateTextures(GL_TEXTURE_2D, 1, &tex);
+    glCreateTextures(target, 1, &tex);
 
     int maxPossibleMips = static_cast<int>(std::floor(std::log2(std::max(info.width, info.height)))) + 1;
     int mipLevels = 1;
@@ -428,18 +434,45 @@ TextureHandle OpenGLRenderService::CreateTextureInternal(const rhi::TextureCreat
         mipLevels = std::min(maxPossibleMips, info.requestedMips);
     }
 
-    glTextureStorage2D(tex, mipLevels, GL_RGBA8, info.width, info.height);
-    glTextureSubImage2D(tex, 0, 0, 0, info.width, info.height, GL_RGBA, GL_UNSIGNED_BYTE, info.pixels.data());
+    // 根据 info.format 映射 GL 的 internalFormat, format, type
+    GLenum glInternalFormat = GL_RGBA8;
+    GLenum glFormat = GL_RGBA;
+    GLenum glType = GL_UNSIGNED_BYTE;
+
+    switch (info.format) {
+        case rhi::TextureFormat::RGBA8_UNORM:
+            glInternalFormat = GL_RGBA8; glFormat = GL_RGBA; glType = GL_UNSIGNED_BYTE; break;
+        case rhi::TextureFormat::RGBA16_SFLOAT:
+            glInternalFormat = GL_RGBA16F; glFormat = GL_RGBA; glType = GL_FLOAT; break;
+        case rhi::TextureFormat::R8_UNORM:
+            glInternalFormat = GL_R8; glFormat = GL_RED; glType = GL_UNSIGNED_BYTE; break;
+        case rhi::TextureFormat::D32_SFLOAT:
+            // 深度图一般不通过这里手动上传数据，如果是 D32 则忽略上传，仅分配
+            glInternalFormat = GL_DEPTH_COMPONENT32F; glFormat = GL_DEPTH_COMPONENT; glType = GL_FLOAT; break;
+    }
+
+    // 区分 2D 和 2D_ARRAY
+    if (isArray) {
+        glTextureStorage3D(tex, mipLevels, glInternalFormat, info.width, info.height, info.arrayLayers);
+        if (info.format != rhi::TextureFormat::D32_SFLOAT) {
+            glTextureSubImage3D(tex, 0, 0, 0, 0, info.width, info.height, info.arrayLayers, glFormat, glType, info.pixels.data());
+        }
+    } else {
+        glTextureStorage2D(tex, mipLevels, glInternalFormat, info.width, info.height);
+        if (info.format != rhi::TextureFormat::D32_SFLOAT) {
+            glTextureSubImage2D(tex, 0, 0, 0, info.width, info.height, glFormat, glType, info.pixels.data());
+        }
+    }
     
     if (mipLevels > 1) {
         glGenerateTextureMipmap(tex);
     }
 
-    // 映射 MAG_FILTER
+    // MAG_FILTER
     GLint glMag = (info.magFilter == rhi::FilterMode::Linear) ? GL_LINEAR : GL_NEAREST;
     glTextureParameteri(tex, GL_TEXTURE_MAG_FILTER, glMag);
 
-    // 映射 MIN_FILTER
+    // MIN_FILTER
     GLint glMin = GL_NEAREST;
     switch (info.minFilter) {
         case rhi::MinFilterMode::Nearest:                glMin = GL_NEAREST; break;
@@ -451,14 +484,13 @@ TextureHandle OpenGLRenderService::CreateTextureInternal(const rhi::TextureCreat
         default:                                         glMin = GL_NEAREST; break;
     }
     
-    // 如果没有生成 Mipmap，必须降级，否则采样全黑
     if (mipLevels <= 1) {
         if (glMin == GL_NEAREST_MIPMAP_NEAREST || glMin == GL_NEAREST_MIPMAP_LINEAR) glMin = GL_NEAREST;
         else if (glMin == GL_LINEAR_MIPMAP_NEAREST || glMin == GL_LINEAR_MIPMAP_LINEAR) glMin = GL_LINEAR;
     }
     glTextureParameteri(tex, GL_TEXTURE_MIN_FILTER, glMin);
 
-    // 映射 WRAP_MODE
+    // WRAP_MODE
     GLint glWrapU = (info.wrapU == rhi::WrapMode::Repeat) ? GL_REPEAT : 
                     (info.wrapU == rhi::WrapMode::MirroredRepeat ? GL_MIRRORED_REPEAT : GL_CLAMP_TO_EDGE);
     GLint glWrapV = (info.wrapV == rhi::WrapMode::Repeat) ? GL_REPEAT : 
@@ -475,7 +507,7 @@ TextureHandle OpenGLRenderService::CreateTextureInternal(const rhi::TextureCreat
     }
 
     TextureHandle handle = m_nextTextureHandle++;
-    m_textures[handle] = { tex, info.width, info.height, GL_RGBA };
+    m_textures[handle] = { tex, info.width, info.height, glInternalFormat };
     return handle;
 }
 

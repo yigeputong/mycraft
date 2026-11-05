@@ -139,7 +139,7 @@ if (SANITIZER)
             _DISABLE_VECTOR_ANNOTATION _DISABLE_STRING_ANNOTATION _DISABLE_OPTIONAL_ANNOTATION)
     endif()
 
-    # ★ 这里也统一改用前端变体判断
+    # 统一用前端变体判断
     if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
         if (SANITIZER STREQUAL "address")
             target_compile_options(project_sanitizer INTERFACE -fsanitize=address -g /Oy-)
@@ -175,7 +175,7 @@ endif()
 # =============================================================================
 # 5. Shader 编译逻辑
 # =============================================================================
-find_program(GLSLC_EXECUTABLE glslc HINTS "$ENV{VULKAN_SDK}/Bin")
+find_program(GLSLC_EXECUTABLE glslc HINTS "$ENV{PATH}")
 if(NOT GLSLC_EXECUTABLE)
     message(FATAL_ERROR "glslc not found")
 endif()
