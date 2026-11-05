@@ -62,7 +62,6 @@ add_library(engine-client STATIC
     
     # ImGui
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui_demo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui_draw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/imgui_widgets.cpp

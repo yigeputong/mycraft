@@ -470,6 +470,7 @@ void MyGame::OnStart(Eng::Engine& engine) {
     RefreshWorldList();
     m_state = GameState::MainMenu;
 }
+
 bool MyGame::OnUpdate(Eng::Engine&, float deltaTime) {
     if (m_minimized) {
         SDL_Delay(16);
