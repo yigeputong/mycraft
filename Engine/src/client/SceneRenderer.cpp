@@ -356,19 +356,15 @@ void SceneRenderer::EndScene(const Frustum& frustum,
 
     ProcessPendingRebuild();
 
-    // ==========================================================
-    // 1. 地形 MDI 绘制（使用统一的 frustum 剔除）
-    // ==========================================================
+    // 1. 地形 MDI 绘制
     if (terrainShader && atlasTexture && m_terrainVbo && m_terrainIbo) {
         m_indirectCommands.clear();
         m_indirectCommands.reserve(m_chunkMeshTable.size());
 
         for (const auto& [key, cc] : m_chunkMeshTable) {
             if (cc.indexCount == 0) continue;
-
             auto chunkIt = m_allChunks.find(key);
             if (chunkIt == m_allChunks.end()) continue;
-
             if (!frustum.TestAABB(chunkIt->second.aabbMin, chunkIt->second.aabbMax)) continue;
 
             m_indirectCommands.push_back({
@@ -382,16 +378,13 @@ void SceneRenderer::EndScene(const Frustum& frustum,
 
         if (!m_indirectCommands.empty()) {
             const size_t needBytes = m_indirectCommands.size() * sizeof(service::rhi::DrawIndexedIndirectCommand);
-
             if (!m_indirectBuffer || m_indirectBufferCapacityBytes < needBytes) {
                 m_indirectBuffer = m_rhi->CreateBuffer({ .size = needBytes, .usage = service::rhi::BufferUsage::Indirect });
                 m_indirectBufferCapacityBytes = needBytes;
             }
-
             m_rhi->UpdateBuffer(
                 m_indirectBuffer, 0,
                 std::as_bytes(std::span<const service::rhi::DrawIndexedIndirectCommand>(m_indirectCommands)));
-
             m_rhi->BindShader(terrainShader);
             m_rhi->BindVertexBuffer(m_terrainVbo);
             m_rhi->BindIndexBuffer(m_terrainIbo);
@@ -403,12 +396,21 @@ void SceneRenderer::EndScene(const Frustum& frustum,
         }
     }
 
-    // ==========================================================
-    // 2. 绘制队列（LOD、玩家、掉落物、天空盒、手部）
-    // ==========================================================
+    // 2. 绘制水面（透明队列）
+    if (m_waterShader && atlasTexture) {
+        m_rhi->BindShader(m_waterShader);
+        m_rhi->BindTexture(atlasTexture, 0);
+        for (const auto& [key, wc] : m_waterChunks) {
+            if (!frustum.TestAABB(wc.aabbMin, wc.aabbMax)) continue;
+            m_rhi->BindVertexBuffer(wc.mesh.vbo);
+            if (wc.mesh.indexed) m_rhi->BindIndexBuffer(wc.mesh.ibo);
+            DrawRenderMesh(m_rhi, wc.mesh);
+        }
+    }
+
+    // 3. 绘制队列（实体、天空盒、手部）—— 手部因为无深度测试，必定覆盖水
     for (const auto& cmd : m_drawQueue) {
         if (!cmd.shader || !cmd.mesh.vbo) continue;
-
         m_rhi->BindShader(cmd.shader);
         m_rhi->BindVertexBuffer(cmd.mesh.vbo);
         if (cmd.mesh.indexed) m_rhi->BindIndexBuffer(cmd.mesh.ibo);
@@ -416,28 +418,12 @@ void SceneRenderer::EndScene(const Frustum& frustum,
 
         if (cmd.type == DrawCommand::Type::Mesh) {
             m_rhi->PushConstants(cmd.shader, std::as_bytes(std::span(&cmd.data, 1)));
-            DrawRenderMesh(m_rhi, cmd.mesh); // ★ 调用提取的公共绘制
-        } 
-        else if (cmd.type == DrawCommand::Type::InstancedMesh) {
+            DrawRenderMesh(m_rhi, cmd.mesh);
+        } else if (cmd.type == DrawCommand::Type::InstancedMesh) {
             for (const auto& data : cmd.instances) {
                 m_rhi->PushConstants(cmd.shader, std::as_bytes(std::span(&data, 1)));
-                DrawRenderMesh(m_rhi, cmd.mesh); // ★ 调用提取的公共绘制
+                DrawRenderMesh(m_rhi, cmd.mesh);
             }
-        }
-    }
-
-    // ==========================================================
-    // 3. 绘制水面（透明队列，使用统一的 frustum 剔除）
-    // ==========================================================
-    if (m_waterShader && atlasTexture) {
-        m_rhi->BindShader(m_waterShader);
-        m_rhi->BindTexture(atlasTexture, 0);
-        for (const auto& [key, wc] : m_waterChunks) {
-            if (!frustum.TestAABB(wc.aabbMin, wc.aabbMax)) continue;
-            
-            m_rhi->BindVertexBuffer(wc.mesh.vbo);
-            if (wc.mesh.indexed) m_rhi->BindIndexBuffer(wc.mesh.ibo);
-            DrawRenderMesh(m_rhi, wc.mesh); // ★ 调用提取的公共绘制
         }
     }
 }

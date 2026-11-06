@@ -698,7 +698,9 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
         case rhi::TextureFormat::D32_SFLOAT:    vkFormat = vk::Format::eD32Sfloat; bpp = 4; break;
     }
 
-    VkDeviceSize imageSize = static_cast<size_t>(info.width) * info.height * info.arrayLayers * bpp;
+    // 强制至少 1 层，配合 Shader 中的 sampler2DArray
+    uint32_t arrayLayers = std::max(1u, static_cast<uint32_t>(info.arrayLayers));
+    VkDeviceSize imageSize = static_cast<size_t>(info.width) * info.height * arrayLayers * bpp;
 
     uint32_t maxPossibleMips = static_cast<uint32_t>(std::floor(std::log2(std::max(info.width, info.height)))) + 1;
     uint32_t mipLevels = 1;
@@ -723,7 +725,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
     vk::ImageCreateInfo imageInfo{
         .imageType = vk::ImageType::e2D, .format = vkFormat,
         .extent = { static_cast<uint32_t>(info.width), static_cast<uint32_t>(info.height), 1 },
-        .mipLevels = mipLevels, .arrayLayers = static_cast<uint32_t>(info.arrayLayers), .samples = vk::SampleCountFlagBits::e1,
+        .mipLevels = mipLevels, .arrayLayers = arrayLayers, .samples = vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
         .usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eSampled,
         .sharingMode = vk::SharingMode::eExclusive, .initialLayout = vk::ImageLayout::eUndefined
@@ -742,7 +744,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
         .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe, .srcAccessMask = vk::AccessFlagBits2::eNone,
         .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
         .oldLayout = vk::ImageLayout::eUndefined, .newLayout = vk::ImageLayout::eTransferDstOptimal,
-        .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, static_cast<uint32_t>(info.arrayLayers) }
+        .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, arrayLayers }
     };
     
     if (info.format == rhi::TextureFormat::D32_SFLOAT) {
@@ -755,7 +757,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
         .bufferOffset = 0, .bufferRowLength = 0, .bufferImageHeight = 0,
         .imageSubresource = { 
             (info.format == rhi::TextureFormat::D32_SFLOAT ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor), 
-            0, 0, static_cast<uint32_t>(info.arrayLayers) 
+            0, 0, arrayLayers 
         },
         .imageOffset = { 0, 0, 0 }, .imageExtent = { static_cast<uint32_t>(info.width), static_cast<uint32_t>(info.height), 1 }
     };
@@ -767,7 +769,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
             .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
             .oldLayout = vk::ImageLayout::eTransferDstOptimal, .newLayout = vk::ImageLayout::eTransferSrcOptimal,
-            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, static_cast<uint32_t>(info.arrayLayers) }
+            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, arrayLayers }
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier0 });
 
@@ -777,7 +779,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
                 .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eNone,
                 .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
                 .oldLayout = vk::ImageLayout::eUndefined, .newLayout = vk::ImageLayout::eTransferDstOptimal,
-                .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, i, 1, 0, static_cast<uint32_t>(info.arrayLayers) }
+                .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, i, 1, 0, arrayLayers }
             };
             cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &dstBarrier });
 
@@ -785,8 +787,8 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
             std::array<vk::Offset3D, 2> dstOffsets = { vk::Offset3D{0, 0, 0}, vk::Offset3D{mipW > 1 ? mipW / 2 : 1, mipH > 1 ? mipH / 2 : 1, 1} };
 
             vk::ImageBlit blit{
-                .srcSubresource = { vk::ImageAspectFlagBits::eColor, i - 1, 0, static_cast<uint32_t>(info.arrayLayers) }, .srcOffsets = srcOffsets,
-                .dstSubresource = { vk::ImageAspectFlagBits::eColor, i, 0, static_cast<uint32_t>(info.arrayLayers) }, .dstOffsets = dstOffsets
+                .srcSubresource = { vk::ImageAspectFlagBits::eColor, i - 1, 0, arrayLayers }, .srcOffsets = srcOffsets,
+                .dstSubresource = { vk::ImageAspectFlagBits::eColor, i, 0, arrayLayers }, .dstOffsets = dstOffsets
             };
             cmd.blitImage(internal.image, vk::ImageLayout::eTransferSrcOptimal, internal.image, vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
 
@@ -795,7 +797,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
                     .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
                     .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
                     .oldLayout = vk::ImageLayout::eTransferDstOptimal, .newLayout = vk::ImageLayout::eTransferSrcOptimal,
-                    .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, i, 1, 0, static_cast<uint32_t>(info.arrayLayers) }
+                    .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, i, 1, 0, arrayLayers }
                 };
                 cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &srcBarrier });
             }
@@ -807,7 +809,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
             .dstStageMask = vk::PipelineStageFlagBits2::eTransfer, .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
             .oldLayout = vk::ImageLayout::eTransferDstOptimal, .newLayout = vk::ImageLayout::eTransferSrcOptimal,
-            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, mipLevels - 1, 1, 0, static_cast<uint32_t>(info.arrayLayers) }
+            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, mipLevels - 1, 1, 0, arrayLayers }
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &lastBarrier });
 
@@ -815,7 +817,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
             .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader, .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
             .oldLayout = vk::ImageLayout::eTransferSrcOptimal, .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, static_cast<uint32_t>(info.arrayLayers) }
+            .image = internal.image, .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, arrayLayers }
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &finalBarrierAll });
     } else {
@@ -826,7 +828,7 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
             .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader, .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
             .oldLayout = vk::ImageLayout::eTransferDstOptimal, .newLayout = finalLayout,
-            .image = internal.image, .subresourceRange = { aspect, 0, 1, 0, static_cast<uint32_t>(info.arrayLayers) }
+            .image = internal.image, .subresourceRange = { aspect, 0, 1, 0, arrayLayers }
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &finalBarrier1Layer });
     }
@@ -834,14 +836,15 @@ TextureHandle VulkanRenderService::CreateTextureInternal(const rhi::TextureCreat
     endSingleTimeCommands(std::move(cmd));
     vmaDestroyBuffer(m_allocator, stagingBuf, stagingAlloc);
 
-    vk::ImageViewType viewType = (info.arrayLayers > 1) ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
+    // ★ 强制使用 e2DArray，配合 Shader 中的 sampler2DArray
+    vk::ImageViewType viewType = vk::ImageViewType::e2DArray; 
     vk::ImageAspectFlags aspectMask = (info.format == rhi::TextureFormat::D32_SFLOAT) ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;
 
     vk::ImageViewCreateInfo viewInfo{
         .image = internal.image, 
         .viewType = viewType, 
         .format = vkFormat,
-        .subresourceRange = { aspectMask, 0, mipLevels, 0, static_cast<uint32_t>(info.arrayLayers) }
+        .subresourceRange = { aspectMask, 0, mipLevels, 0, arrayLayers }
     };
     internal.view = vk::raii::ImageView(m_device, viewInfo);
 

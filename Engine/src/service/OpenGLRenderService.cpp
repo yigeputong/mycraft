@@ -418,8 +418,9 @@ TextureHandle OpenGLRenderService::CreateTextureInternal(const rhi::TextureCreat
     if (!info.pixels.data() || info.width <= 0 || info.height <= 0)
         return 0;
 
-    bool isArray = info.arrayLayers > 1;
-    GLenum target = isArray ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
+    // 强制所有纹理都以 Array 形式创建，以匹配 Shader 中的 sampler2DArray
+    int arrayLayers = std::max(1, info.arrayLayers);
+    GLenum target = GL_TEXTURE_2D_ARRAY;
 
     GLuint tex;
     glCreateTextures(target, 1, &tex);
@@ -447,21 +448,13 @@ TextureHandle OpenGLRenderService::CreateTextureInternal(const rhi::TextureCreat
         case rhi::TextureFormat::R8_UNORM:
             glInternalFormat = GL_R8; glFormat = GL_RED; glType = GL_UNSIGNED_BYTE; break;
         case rhi::TextureFormat::D32_SFLOAT:
-            // 深度图一般不通过这里手动上传数据，如果是 D32 则忽略上传，仅分配
             glInternalFormat = GL_DEPTH_COMPONENT32F; glFormat = GL_DEPTH_COMPONENT; glType = GL_FLOAT; break;
     }
 
-    // 区分 2D 和 2D_ARRAY
-    if (isArray) {
-        glTextureStorage3D(tex, mipLevels, glInternalFormat, info.width, info.height, info.arrayLayers);
-        if (info.format != rhi::TextureFormat::D32_SFLOAT) {
-            glTextureSubImage3D(tex, 0, 0, 0, 0, info.width, info.height, info.arrayLayers, glFormat, glType, info.pixels.data());
-        }
-    } else {
-        glTextureStorage2D(tex, mipLevels, glInternalFormat, info.width, info.height);
-        if (info.format != rhi::TextureFormat::D32_SFLOAT) {
-            glTextureSubImage2D(tex, 0, 0, 0, info.width, info.height, glFormat, glType, info.pixels.data());
-        }
+    // 统一走 3D Storage 和 3D SubImage 接口
+    glTextureStorage3D(tex, mipLevels, glInternalFormat, info.width, info.height, arrayLayers);
+    if (info.format != rhi::TextureFormat::D32_SFLOAT) {
+        glTextureSubImage3D(tex, 0, 0, 0, 0, info.width, info.height, arrayLayers, glFormat, glType, info.pixels.data());
     }
     
     if (mipLevels > 1) {

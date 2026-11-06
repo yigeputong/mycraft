@@ -121,9 +121,10 @@ void LodManager::Update(const glm::vec3& cameraPos, [[maybe_unused]] const Clien
                     int minCz = unitZ * chunkWidth;
                     int maxCz = minCz + chunkWidth;
 
-                    // 1. 跳过完全在原生区块内部的 LOD
-                    if (minCx >= nativeMinX && maxCx <= nativeMaxX &&
-                        minCz >= nativeMinZ && maxCz <= nativeMaxZ) {
+                    // 1. 跳过任何与原生区块有交集的 LOD（彻底防止重叠）
+                    bool intersectX = (minCx <= nativeMaxX) && (maxCx > nativeMinX);
+                    bool intersectZ = (minCz <= nativeMaxZ) && (maxCz > nativeMinZ);
+                    if (intersectX && intersectZ) {
                         continue;
                     }
 
