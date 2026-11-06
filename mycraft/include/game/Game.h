@@ -225,11 +225,12 @@ private:
     Eng::client::RenderMesh m_skyboxMesh;
 
     // 物品栏与背包
-    static constexpr int kHotbarSize = 9;
-    int m_hotbarIndex = 0;
-    std::array<game::ItemStack, kHotbarSize> m_hotbar{};
+    static constexpr int kHotbarSize = 9;    // 快捷栏固定 9 格
+    uint8_t m_hotbarIndex = 0;                   // 当前选中的快捷栏索引 (0~8)
+    std::array<ItemStack, 36> m_inventory{};
+    int32_t m_inventoryStateId = 0;
+    ItemStack m_heldItemStack{}; // 鼠标当前拿着的物品
     bool m_inventoryOpen = false;
-    std::array<ItemStack, 27> m_inventory{};
 
     // ================================================================
     // 8. UI 与调试统计面板
@@ -304,6 +305,7 @@ private:
     BlockId GetBlockAt(int wx, int wy, int wz) const;
     bool IsSolidAt(int wx, int wy, int wz) const;
     bool AABBCollides(const glm::vec3& pos) const;
+    void SendClickContainer(int16_t slot, uint8_t button, uint8_t mode);
 
     // 允许 ClientUI 访问 MyGame 的私有状态，用于绘制 HUD 与触控界面
     friend class client::ClientUI;

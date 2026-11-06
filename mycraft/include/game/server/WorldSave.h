@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <glm/glm.hpp>
+#include "game/core/Blocks.h"
 
 namespace game::server {
 
@@ -41,8 +42,8 @@ public:
     void SaveChanges(const std::vector<BlockChange>& changes);
 
     // players/<name>.json
-    bool LoadPlayer(const std::string& name, glm::vec3& pos, float& yaw, float& pitch);
-    void SavePlayer(const std::string& name, const glm::vec3& pos, float yaw, float pitch);
+    bool LoadPlayer(const std::string& name, glm::vec3& pos, float& yaw, float& pitch, std::array<ItemStack, 36>& inventory);
+    void SavePlayer(const std::string& name, const glm::vec3& pos, float yaw, float pitch, const std::array<ItemStack, 36>& inventory);
 
     // 心跳刷新锁（内部节流，1 秒最多写一次）
     void RefreshLock();

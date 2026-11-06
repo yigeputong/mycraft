@@ -1,25 +1,28 @@
 #pragma once
-#include "Engine/tool/Transport.h"
-#include "Engine/tool/MemoryTransport.h"
-#include "Engine/tool/Log.h"
-#include "Engine/tool/RAIIThread.h"
-#include "Engine/tool/UniqueFunction.h"
-#include "game/core/World.h"
-#include "game/server/WorldGenerator.h"
-#include "game/Protocol.h"
-#include "game/core/Physics.h"
-#include "game/core/BlockRegistry.h"
-#include "game/server/WorldSave.h"
-
-#include <memory>
 #include <atomic>
-#include <glm/glm.hpp>
-#include <queue>
-#include <unordered_map>
 #include <condition_variable>
+#include <glm/glm.hpp>
+#include <memory>
+#include <queue>
 #include <shared_mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+#include "Engine/tool/Log.h"
+#include "Engine/tool/MemoryTransport.h"
+#include "Engine/tool/MessageReader.h"
+#include "Engine/tool/RAIIThread.h"
+#include "Engine/tool/Transport.h"
+#include "Engine/tool/UniqueFunction.h"
+
+#include "game/Protocol.h"
+#include "game/core/BlockRegistry.h"
+#include "game/core/Physics.h"
+#include "game/core/World.h"
+#include "game/server/WorldGenerator.h"
+#include "game/server/WorldSave.h"
+
 
 namespace game::server {
 
@@ -29,7 +32,7 @@ public:
     void Stop();
     bool IsRunning() const { return m_running.load(); }
     std::shared_ptr<Eng::tool::MemoryPipe> GetMemoryPipe() const;
-    size_t GetChunkCount() const { return m_chunks.size(); } 
+    size_t GetChunkCount() const { return m_chunks.size(); }
 
     // 提供给 UI 绘制“小太阳”的进度查询接口
     GenPhase GetChunkProgress(int cx, int cz) const;
@@ -37,45 +40,51 @@ public:
 private:
     // ==================== 生命周期 ====================
     static constexpr float TPS = 20.0f;
-    std::thread        m_thread; 
-    std::atomic<bool>  m_running{false};
+    std::thread m_thread;
+    std::atomic<bool> m_running{false};
 
     // ==================== 网络与注册表 ====================
     std::unique_ptr<Eng::tool::IServerTransport> m_server;
-    std::unique_ptr<Eng::tool::Log>              m_logger = std::make_unique<Eng::tool::Log>();
-    game::BlockRegistry                          m_registry; 
+    std::unique_ptr<Eng::tool::Log> m_logger = std::make_unique<Eng::tool::Log>();
+    game::BlockRegistry m_registry;
 
     // ==================== 玩家 ====================
     struct ServerPlayer {
-        uint32_t    id = 0;
+        uint32_t id = 0;
         std::string name;
-        glm::vec3   position{0.0f, 256.0f, 0.0f};
-        glm::vec3   velocity{0.0f};
-        bool        onGround = false;
-        bool        jump     = false;
-        float       yaw   = 0.0f;
-        float       pitch = 0.0f;
-        glm::vec3   moveDir{0.0f};
-        bool        flyMode = false;
+        glm::vec3 position{0.0f, 256.0f, 0.0f};
+        glm::vec3 velocity{0.0f};
+        bool onGround = false;
+        bool jump = false;
+        float yaw = 0.0f;
+        float pitch = 0.0f;
+        glm::vec3 moveDir{0.0f};
+        bool flyMode = false;
+        std::array<ItemStack, 36> inventory{};  // 0-8 快捷栏，9-35 背包
+        int32_t inventoryStateId = 0;
+        ItemStack heldItem{};
     };
     std::vector<ServerPlayer> m_players;
-    mutable std::mutex        m_playersMutex;
+    mutable std::mutex m_playersMutex;
     static constexpr float REACH_DISTANCE = 5.0f;
 
     // ==================== 世界数据 ====================
-    std::unique_ptr<TerrainGenerator>   m_terrain;
+    std::unique_ptr<TerrainGenerator> m_terrain;
     std::unordered_map<uint64_t, Chunk> m_chunks;
     uint32_t m_worldSeed = 0;
     glm::vec3 m_spawnPos{0.0f, 256.0f, 0.0f};
 
-    struct PendingChunkRequest { int clientId; int cx, cz; };
+    struct PendingChunkRequest {
+        int clientId;
+        int cx, cz;
+    };
     std::queue<PendingChunkRequest> m_chunkQueue;
 
     // ==================== 存档 ====================
     std::unique_ptr<WorldSave> m_save;
     std::unordered_map<uint64_t, std::vector<BlockChange>> m_pendingChanges;
-    bool  m_dirty      = false;
-    float m_saveAccum  = 0.0f;
+    bool m_dirty = false;
+    float m_saveAccum = 0.0f;
     static constexpr float kSaveIntervalSec = 10.0f;
 
     // ==================== 跨平台流水线 ====================
@@ -85,26 +94,26 @@ private:
         std::atomic<GenPhase> phase{GenPhase::Empty};
     };
 
-    static constexpr size_t MAX_CONCURRENT_GENERATING = 64; 
+    static constexpr size_t MAX_CONCURRENT_GENERATING = 64;
 
     mutable std::shared_mutex m_genMutex;
     std::unordered_map<uint64_t, std::shared_ptr<InFlightChunk>> m_generatingChunks;
 
     std::vector<std::unique_ptr<Eng::tool::RAIIThread>> m_workers;
-    
-    std::mutex                                          m_taskMutex;
-    std::condition_variable                             m_taskCv;
-    std::queue<Eng::tool::UniqueFunction>               m_taskQueue;
-    std::atomic<bool>                                   m_workersStop{false};
 
-    struct ChunkResult { 
-        uint64_t key; 
-        std::unique_ptr<Chunk> chunk; 
+    std::mutex m_taskMutex;
+    std::condition_variable m_taskCv;
+    std::queue<Eng::tool::UniqueFunction> m_taskQueue;
+    std::atomic<bool> m_workersStop{false};
+
+    struct ChunkResult {
+        uint64_t key;
+        std::unique_ptr<Chunk> chunk;
     };
-    std::mutex                                          m_resultMutex;
-    std::queue<ChunkResult>                             m_resultQueue;
+    std::mutex m_resultMutex;
+    std::queue<ChunkResult> m_resultQueue;
 
-    std::unordered_map<uint64_t, std::vector<int>>      m_waitingClients;
+    std::unordered_map<uint64_t, std::vector<int>> m_waitingClients;
 
     void StartWorkers(uint32_t seed);
     void StopWorkers();
@@ -114,10 +123,10 @@ private:
 
     // ==================== 实体 ====================
     struct ItemEntity : game::PointEntity {
-        uint32_t  id          = 0;
-        float     pickupDelay = 0.5f;
-        float     age         = 0.0f;
-        BlockId   itemType    = AIR_ID;
+        uint32_t id = 0;
+        float pickupDelay = 0.5f;
+        float age = 0.0f;
+        BlockId itemType = AIR_ID;
     };
     std::unordered_map<uint32_t, ItemEntity> m_entities;
     uint32_t m_nextEntityId = 1;
@@ -145,14 +154,17 @@ private:
     void TickWorld(float dt);
 
     // ==================== 世界查询/修改 ====================
-    Chunk*  GetCachedChunk(int cx, int cz);
+    Chunk* GetCachedChunk(int cx, int cz);
     BlockId GetBlockAt(int wx, int wy, int wz) const;
-    void    SetBlockAt(int wx, int wy, int wz, BlockId id);
-    bool    IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz);
+    void SetBlockAt(int wx, int wy, int wz, BlockId id);
+    bool IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz);
+    void SendInventoryUpdate(int clientId);
+    void HandleClickContainer(int clientId, Eng::tool::MessageReader& r);
 
     // ==================== 交互 ====================
     void HandleDig(ServerPlayer& p);
     void HandlePlace(ServerPlayer& p, BlockId id);
+    void AddToInventory(ServerPlayer& p, BlockId id, int count);
 
     // ==================== 广播 ====================
     void BroadcastWorldState();
@@ -163,4 +175,4 @@ private:
     bool AABBCollides(const glm::vec3& pos) const;
 };
 
-} // namespace game::server
+}  // namespace game::server

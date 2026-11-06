@@ -1,49 +1,94 @@
 ---
-# 基本检查范围：只启用我们关心的家族
+# ==============================================================================
+# 检查家族配置：只抓核心痛点
+# ==============================================================================
 Checks:
-  - '-*'
-  - bugprone-*
-  - performance-*
-  - portability-*
-  - modernize-*
-  - misc-*
-  - clang-analyzer-*
+  - '-*' # 先清空所有默认规则，保持纯净
+  - bugprone-*          # 致命 Bug 捕手
+  - performance-*       # 性能杀手克星（引擎绝不能容忍低效）
+  - portability-*       # 跨平台兼容（移动端/桌面端 必须稳住）
+  - modernize-*         # 现代 C++ 推进器
+  - misc-*              # 杂项检查
+  - clang-analyzer-*    # 静态代码深度分析（极度好用）
 
+  # --------------------------------------------------------------------------
   # 1. 禁用强迫改命名的检查
+  # --------------------------------------------------------------------------
+  # 引擎里有大量同类型的参数（如 x, y, z 或 width, height），强行搞强类型包装极其恶心
   - -bugprone-easily-swappable-parameters
+  # 图形学和引擎底层全是 float, uint16_t, uint32_t 互转，强制全写 static_cast 会写到手抽筋
   - -bugprone-narrowing-conversions
+  # 很多底层宏定义或日志宏为了极简，不包括号，强求会引发大量无意义的修改
   - -bugprone-macro-parentheses
+  # 引擎底层经常用 _xxx 或 __xxx 做内部实现，这是历史传统
   - -bugprone-reserved-identifier
+  # 容忍老式枚举或位掩码默认不初始化，没必要为了它大改底层
   - -bugprone-invalid-enum-default-initialization
 
-  # 2. 禁用强迫改写法的检查
+  # --------------------------------------------------------------------------
+  # 2. 禁用强迫改写法的检查（拒绝花里胡哨，保持可读性）
+  # --------------------------------------------------------------------------
+  # 强制 `auto main() -> int` 尾置返回类型？反人类，打破阅读习惯
   - -modernize-use-trailing-return-type
+  # RHI 底层极度依赖 C 数组，改成 std::array 反而没法直接传参
   - -modernize-avoid-c-arrays
+  # 不要求函数必须加 [[nodiscard]]，全加上会导致警告爆炸
   - -modernize-use-nodiscard
+  # C++20 的指定初始化虽然好，但有些老编译器或特殊结构体不支持，保守一点
   - -modernize-use-designated-initializers
+  # 图形学/数学库类型多，用 auto 根本分不清 mat4 还是 mat3，显式类型更安全
   - -modernize-use-auto
+  # NDK 的 <ranges> 编译极慢且报错如天书，古法工程师坚决抵制
   - -modernize-use-ranges
+  # 宏不一定要转枚举（有些涉及预编译条件），容忍宏的存在
   - -modernize-macro-to-enum
+  # 显式写类型更直观，不强迫用 `return {};` 这种让类型满天飞的语法
   - -modernize-return-braced-init-list
+  # 传值优化是个陷阱，有时会引发隐式深拷贝，还是老老实实 const& 或 std::move 更清楚
   - -modernize-pass-by-value
+  # 底层可能涉及特殊的 pthread 或锁机制，不盲目强制 std::scoped_lock
   - -modernize-use-scoped-lock
 
+  # --------------------------------------------------------------------------
   # 3. 容忍引擎编程特性
+  # --------------------------------------------------------------------------
+  # 引擎内的 C 风格兼容，或者 header 里的 static inline，不需要强迫用匿名 namespace
   - -misc-use-anonymous-namespace
+  # 渲染树、四叉树、场景图遍历不用递归怎么写？强行禁递归简直是找不痛快
   - -misc-no-recursion
+  # 引擎里的 struct（如 Vertex, Mat4）就是纯数据，强行套 getter/setter 是脱裤子放屁
   - -misc-non-private-member-variables-in-classes
+  # 同上，容忍旧式 C 风格声明
   - -misc-use-internal-linkage
 
-  # 4. 保留有用的进阶检查
+  # --------------------------------------------------------------------------
+  # 4. 保留有用的进阶检查（核心骄傲）
+  # --------------------------------------------------------------------------
+  # 强推 C++23 的 std::print，告别 cout
   - modernize-use-std-print
 
+# ==============================================================================
+# 核武级配置：底线不容践踏
+# ==============================================================================
+# 只要 AI 或猪队友敢写出性能问题（performance）或致命 Bug（bugprone），直接当错误处理，编译不通过！
 WarningsAsErrors: 'performance-*,bugprone-*'
+# 强制联动咱们刚刚配好的 .clang-format 风格，统一审美
 FormatStyle: file
+# 绝对不去检查系统头文件（避免一大堆底层库的警告）
 SystemHeaders: false
 
+# ==============================================================================
+# 检查白名单与黑名单（精准制导）
+# ==============================================================================
+# 只检查咱们自己写的代码（引擎核心和游戏业务层）
 HeaderFilterRegex: '.*(Engine|mycraft)[\/](include|src)[\/].*'
+# 放过那些第三方库、图形底层库（Vulkan 和 ImGui 等如果被检查，会把终端刷爆）
 ExcludeHeaderFilterRegex: '.*vcpkg_installed.*|.*imgui.*|.*glm.*|.*SDL.*|.*volk.*|.*vulkan.*|.*assimp.*|.*nlohmann.*|.*stb.*|.*glad.*|.*vma.*|.*vulkan_raii.*|.*ImGui.*'
 
+# ==============================================================================
+# 特殊选项
+# ==============================================================================
 CheckOptions:
+  # 允许所有类型的“传值参数”检查生效（配合 WarningsAsErrors，只要你敢传大对象值，直接红牌）
   - key: performance-unnecessary-value-param.AllowedTypes
     value: ''

@@ -246,7 +246,7 @@ void WorldSave::SaveChanges(const std::vector<BlockChange>& changes) {
     Eng::tool::WriteStringToFile(path, j.dump());
 }
 
-bool WorldSave::LoadPlayer(const std::string& name, glm::vec3& pos, float& yaw, float& pitch) {
+bool WorldSave::LoadPlayer(const std::string& name, glm::vec3& pos, float& yaw, float& pitch, std::array<ItemStack, 36>& inventory) {
     std::string path = Eng::tool::GetWritablePath(PlayerPath(SanitizeName(name)));
     auto data = Eng::tool::ReadFileToMemory(path);
     if (data.empty()) return false;
@@ -256,17 +256,35 @@ bool WorldSave::LoadPlayer(const std::string& name, glm::vec3& pos, float& yaw, 
         pos   = glm::vec3(j.value("x", 0.0f), j.value("y", 256.0f), j.value("z", 0.0f));
         yaw   = j.value("yaw", 0.0f);
         pitch = j.value("pitch", 0.0f);
+
+        inventory.fill({});
+        if (j.contains("inventory") && j["inventory"].is_array()) {
+            for (size_t i = 0; i < std::min<size_t>(36, j["inventory"].size()); ++i) {
+                const auto& item = j["inventory"][i];
+                if (!item.is_null()) {
+                    inventory[i].type = item.value("id", 0);
+                    inventory[i].count = item.value("count", 0);
+                }
+            }
+        }
         return true;
     } catch (...) { return false; }
 }
 
-void WorldSave::SavePlayer(const std::string& name, const glm::vec3& pos, float yaw, float pitch) {
+void WorldSave::SavePlayer(const std::string& name, const glm::vec3& pos, float yaw, float pitch, const std::array<ItemStack, 36>& inventory) {
     std::string playersDir = Eng::tool::GetWritablePath(m_dir + "/" + PLAYERS_DIR);
     SDL_CreateDirectory(playersDir.c_str());
     
     json j;
     j["x"] = pos.x; j["y"] = pos.y; j["z"] = pos.z;
     j["yaw"] = yaw; j["pitch"] = pitch;
+
+    json jInv = json::array();
+    for (const auto& item : inventory) {
+        if (item.isEmpty()) jInv.push_back(nullptr);
+        else jInv.push_back({{"id", item.type}, {"count", item.count}});
+    }
+    j["inventory"] = jInv;
     
     std::string path = Eng::tool::GetWritablePath(PlayerPath(SanitizeName(name)));
     Eng::tool::WriteStringToFile(path, j.dump(2));

@@ -42,4 +42,12 @@ inline ItemStack MakeItemStack(BlockId type, int count = 1) {
     return s;
 }
 
+// C -> S: 点击格子请求
+struct ClickContainerPacket {
+    int32_t stateId;  // 同步状态
+    int16_t slot;     // 0-8 快捷栏, 9-35 主背包, -1 表示丢弃鼠标物品
+    uint8_t button;   // 0=左键, 1=右键
+    uint8_t mode;     // 0=普通点击, 4=丢弃 (Q)
+};
+
 } // namespace game

@@ -20,6 +20,8 @@ private:
     void DrawWorldSelectMenu(Eng::Engine& engine, MyGame& game);
     void DrawSettingsMenu(Eng::Engine& engine, MyGame& game);
     void DrawHUD(Eng::Engine& engine, MyGame& game);
+
+    void DrawInventory(Eng::Engine& engine, MyGame& game);
     
     // 触控输入处理与 UI 绘制
     void ProcessTouchInputAndDrawOverlay(Eng::Engine& engine, MyGame& game);
