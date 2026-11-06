@@ -95,6 +95,7 @@ void GameServer::DrainChunkResults() {
             m_resultQueue.pop();
         }
 
+        // 1. 应用存档中的方块改变
         auto cit = m_pendingChanges.find(r.key);
         if (cit != m_pendingChanges.end()) {
             for (const auto& c : cit->second) {
@@ -102,17 +103,31 @@ void GameServer::DrainChunkResults() {
                 int lz = c.z & 15;
                 ChunkSet(*r.chunk, lx, c.y, lz, c.block);
             }
+            
+            // 应用完方块改变后，立刻重算该区块的光照
+            // 获取周围的区块以进行正确的跨区块光照传播
+            int cx = r.chunk->chunk_x;
+            int cz = r.chunk->chunk_z;
+            auto* cXm = GetCachedChunk(cx - 1, cz);
+            auto* cXp = GetCachedChunk(cx + 1, cz);
+            auto* cZm = GetCachedChunk(cx, cz - 1);
+            auto* cZp = GetCachedChunk(cx, cz + 1);
+            // 直接传入 Chunk 指针和邻居指针
+            LightEngine::InitRegion(m_registry, *r.chunk, cXm, cXp, cZm, cZp);
         }
 
+        // 2. 存入缓存
         if (r.chunk) {
             m_chunks.emplace(r.key, *r.chunk);
         }
 
+        // 3. 移除生成队列
         {
             std::unique_lock lock(m_genMutex);
             m_generatingChunks.erase(r.key);
         }
 
+        // 4. 发送给等待的客户端
         auto it = m_waitingClients.find(r.key);
         if (it != m_waitingClients.end()) {
             const Chunk& c = m_chunks.at(r.key);
