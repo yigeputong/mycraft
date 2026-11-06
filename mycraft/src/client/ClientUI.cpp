@@ -2,6 +2,7 @@
 #include "game/Game.h"
 #include "game/server/WorldSave.h"
 #include "imgui.h"
+#include "Engine/service/InputService.h"
 #include "Engine/tool/Window.h"
 #include "Engine/tool/Platform.h"
 #include <cmath>
@@ -22,7 +23,6 @@ namespace {
     constexpr float ITEM_WIDTH_RATIO        = 10.0f;
     constexpr float BUTTON_HEIGHT_RATIO     = 1.75f;
     constexpr float MIN_BTN_WIDTH_RATIO     = 6.0f;
-    constexpr float TEXT_WRAP_RATIO         = 15.0f;
 
     // 移动端安全区比例
     constexpr float SAFE_TOP_RATIO          = 1.5f;
@@ -197,6 +197,29 @@ void ClientUI::DrawIsometricBlock(ImDrawList* dl, ImVec2 center, float size, Blo
 void ClientUI::Draw(Eng::Engine& engine, MyGame& game) {
     game.renderer->ImGuiNewFrame();
 
+    //   每帧必清注入状态（唯一可信的清零点）
+    //   原先放在 ProcessTouchInputAndDrawOverlay 里，但那个函数在
+    //   m_activeInputMode != Touch 时会提前 return，导致 injected 残留。
+    if (game.m_inputService) {
+        game.m_inputService->ResetInjectedStates();
+    }
+
+    // 用透明全屏窗口包裹编辑模式，让 InvisibleButton 正常工作
+    if (game.m_isEditingLayout) {
+        ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize, IM_COL32(40, 40, 40, 255));
+        
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::Begin("##EditLayoutRoot", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground);
+        
+        ProcessTouchInputAndDrawOverlay(engine, game);
+        
+        ImGui::End();
+        ImGui::PopStyleVar();
+        return; 
+    }
+
     if (game.m_menuOpen || game.m_state == MyGame::GameState::MainMenu || game.m_state == MyGame::GameState::WorldSelect) {
         ImDrawList* bgDrawList = ImGui::GetBackgroundDrawList();
         bgDrawList->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize, IM_COL32(10, 10, 10, 160));
@@ -209,6 +232,7 @@ void ClientUI::Draw(Eng::Engine& engine, MyGame& game) {
             DrawWorldSelectMenu(engine, game);
         } else if (game.m_state == MyGame::GameState::Playing) {
             DrawHUD(engine, game);
+            ProcessTouchInputAndDrawOverlay(engine, game); // 在 HUD 之上处理触控
         }
     }
 
@@ -622,6 +646,7 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
     const float padding = fontSize * PADDING_RATIO;
     const float buttonHeight = fontSize * BUTTON_HEIGHT_RATIO;
     const float leftWidth = fontSize * LEFT_PANEL_WIDTH_RATIO;
+    
     float safeTop = 0.0f, safeBottom = 0.0f, safeSide = 0.0f;
     if (Eng::tool::IsMobilePlatform()) {
         safeTop = fontSize * SAFE_TOP_RATIO;
@@ -629,59 +654,83 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
         safeSide = fontSize * SAFE_SIDE_RATIO;
     }
 
-    ImGui::SetCursorPos(ImVec2(padding + safeSide, padding + safeTop));
-    const char* leftBtnText = (game.m_state == MyGame::GameState::Playing) ? "Save & Quit to Title" : "Back to Menu";
-    float leftBtnWidth = ImGui::CalcTextSize(leftBtnText).x + fontSize * PADDING_RATIO * 2.0f;
-    if (leftBtnWidth < fontSize * ITEM_WIDTH_RATIO) leftBtnWidth = fontSize * ITEM_WIDTH_RATIO; 
+    // 统一四周边距
+    const float marginX = padding + safeSide;
+    const float marginY = padding + safeTop;
 
+    // ==========================================
+    // 1. 顶部工具栏 (占满整行，两端严格对齐 marginX)
+    // ==========================================
+    ImGui::SetCursorPos(ImVec2(marginX, marginY));
+    
+    const char* leftBtnText = (game.m_state == MyGame::GameState::Playing) ? "Save & Quit to Title" : "Back to Menu";
+    float leftBtnWidth = ImGui::CalcTextSize(leftBtnText).x + padding * 2.0f;
+    if (leftBtnWidth < fontSize * ITEM_WIDTH_RATIO) leftBtnWidth = fontSize * ITEM_WIDTH_RATIO; 
     if (ImGui::Button(leftBtnText, ImVec2(leftBtnWidth, buttonHeight))) {
         if (game.m_state == MyGame::GameState::Playing) game.m_returnToMenuPending = true;
         else game.m_menuOpen = false;
     }
 
     ImGui::SameLine();
-    const char* btnApplyText = "Apply";
-    float applyWidth = ImGui::CalcTextSize(btnApplyText).x + fontSize * PADDING_RATIO * 2.0f;
+    float applyWidth = ImGui::CalcTextSize("Apply").x + padding * 2.0f;
     if (applyWidth < fontSize * MIN_BTN_WIDTH_RATIO) applyWidth = fontSize * MIN_BTN_WIDTH_RATIO;
-    if (ImGui::Button(btnApplyText, ImVec2(applyWidth, buttonHeight))) {
+    if (ImGui::Button("Apply", ImVec2(applyWidth, buttonHeight))) {
         game.m_applyPending = true;
         game.SaveSettings(engine);
     }
 
     ImGui::SameLine();
-    const char* btnDoneText = "Done";
-    float doneWidth = ImGui::CalcTextSize(btnDoneText).x + fontSize * PADDING_RATIO * 2.0f;
+    float doneWidth = ImGui::CalcTextSize("Done").x + padding * 2.0f;
     if (doneWidth < fontSize * MIN_BTN_WIDTH_RATIO) doneWidth = fontSize * MIN_BTN_WIDTH_RATIO;
-    if (ImGui::Button(btnDoneText, ImVec2(doneWidth, buttonHeight))) {
+    if (ImGui::Button("Done", ImVec2(doneWidth, buttonHeight))) {
         game.m_applyPending = true;
         game.m_menuOpen = false;
         game.SaveSettings(engine);
     }
 
+    // 搜索框和 X 按钮
     ImGui::SameLine();
-    float availWidth = ImGui::GetContentRegionAvail().x;
-    float searchWidth = availWidth - safeSide - buttonHeight - (ImGui::GetStyle().ItemSpacing.x * 2.0f);
-    if (searchWidth < fontSize * 10.0f) searchWidth = fontSize * 10.0f;
-    float calculatedFramePaddingY = (buttonHeight - fontSize) * 0.5f;
-    if (calculatedFramePaddingY < 0.0f) calculatedFramePaddingY = 0.0f;
+    float currentX = ImGui::GetCursorPosX();
+    float xBtnWidth = buttonHeight;
+    float rightEdgeX = io.DisplaySize.x - marginX - xBtnWidth; // X按钮左边界
+    float searchWidth = rightEdgeX - ImGui::GetStyle().ItemSpacing.x - currentX;
+    
+    if (searchWidth > fontSize * 5.0f) {
+        float calculatedFramePaddingY = (buttonHeight - fontSize) * 0.5f;
+        if (calculatedFramePaddingY < 0.0f) calculatedFramePaddingY = 0.0f;
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, calculatedFramePaddingY));
+        ImGui::SetNextItemWidth(searchWidth);
+        static char searchBuf[128] = "";
+        ImGui::InputTextWithHint("##Search", "Search options...", searchBuf, sizeof(searchBuf));
+        ImGui::PopStyleVar();
+        ImGui::SameLine();
+    } else {
+        ImGui::SetCursorPosX(rightEdgeX);
+    }
 
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, calculatedFramePaddingY));
-    ImGui::SetNextItemWidth(searchWidth);
-    static char searchBuf[128] = "";
-    ImGui::InputTextWithHint("##Search", "Search options...", searchBuf, sizeof(searchBuf));
-    ImGui::PopStyleVar();
-
-    ImGui::SameLine(io.DisplaySize.x - padding - safeSide - buttonHeight);
-    if (ImGui::Button("X", ImVec2(buttonHeight, buttonHeight))) game.m_menuOpen = false;
+    if (ImGui::Button("X", ImVec2(xBtnWidth, buttonHeight))) game.m_menuOpen = false;
 
     ImGui::Separator();
     ImGui::Spacing();
 
+    // ==========================================
+    // 2. 主体内容区 (搬用 WorldSelectMenu 的等宽绝对定位方案)
+    // ==========================================
     const float contentStartY = ImGui::GetCursorPosY(); 
-    float contentHeight = io.DisplaySize.y - contentStartY - safeBottom - padding; 
+    // 留出底部安全区及边距 (使用 marginY 或 marginX 保持一致)
+    float contentHeight = io.DisplaySize.y - contentStartY - (padding + safeBottom); 
     if (contentHeight < fontSize * LEFT_PANEL_WIDTH_RATIO) contentHeight = fontSize * LEFT_PANEL_WIDTH_RATIO;
 
-    ImGui::SetCursorPosX(padding + safeSide);
+    float spacing = ImGui::GetStyle().ItemSpacing.x;
+    // 右侧面板严格等宽计算：屏幕宽度 - (左边距 * 2) - 左侧面板宽度 - 中间间距
+    float rightPanelWidth = io.DisplaySize.x - (marginX * 2.0f) - leftWidth - spacing;
+    if (rightPanelWidth < 0.0f) rightPanelWidth = 0.0f;
+
+    // 给子窗口加上统一的内边距，避免内部文字/滚动条贴边框
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(padding, padding));
+
+    // 左侧面板
+    ImGui::SetCursorPos(ImVec2(marginX, contentStartY));
     ImGui::BeginChild("##LeftPanel", ImVec2(leftWidth, contentHeight), true, ImGuiWindowFlags_NoScrollbar);
     {
         ImGui::Spacing();
@@ -697,41 +746,43 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
         DrawTab("    About", 3);
     }
     ImGui::EndChild();
-    ImGui::SameLine();
-
-    float rightPanelWidth = ImGui::GetContentRegionAvail().x - safeSide;
-    if (rightPanelWidth < 0.0f) rightPanelWidth = 0.0f;
     
+    // 右侧面板
+    ImGui::SetCursorPos(ImVec2(marginX + leftWidth + spacing, contentStartY));
     ImGui::BeginChild("##RightPanel", ImVec2(rightPanelWidth, contentHeight), true);
     {
         auto& wcfg = game.mainWin->GetConfigs();
         auto& rcfg = engine.GetConfig().render;
         auto& ecfg = engine.GetConfig().window;
         
-        const float rightPanelLeftPadding = padding + fontSize * PADDING_RATIO;
-        const float itemWidth = fontSize * ITEM_WIDTH_RATIO;
-        const float textWrapWidth = leftWidth + rightPanelLeftPadding + fontSize * TEXT_WRAP_RATIO;
+        // 获取内部可用宽度（剔除滚动条和 Padding）
+        float innerAvailWidth = ImGui::GetContentRegionAvail().x;
+        
+        // 比例分配：标签占 40%，控件占剩余空间（扣除间距），实现右侧严格对齐
+        const float textOffset = innerAvailWidth * 0.40f; 
+        const float controlWidth = innerAvailWidth - textOffset - ImGui::GetStyle().ItemSpacing.x;
+        const float textWrapWidth = innerAvailWidth;
 
         if (game.m_settingsTab == 0) {
             ImGui::Spacing();
-            ImGui::Text("Render Distance"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
-            ImGui::SetNextItemWidth(itemWidth);
+            ImGui::Text("Render Distance"); ImGui::SameLine(textOffset);
+            ImGui::SetNextItemWidth(controlWidth);
             ImGui::SliderInt("##rd", &game.m_renderDistance, 2, 32, "%d chunks");
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+            
             ImGui::Checkbox("Enable LOD", &game.m_enableLod);
             ImGui::BeginDisabled(!game.m_enableLod);
-            ImGui::Text("LOD Render Distance"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
-            ImGui::SetNextItemWidth(itemWidth); 
+            ImGui::Text("LOD Render Distance"); ImGui::SameLine(textOffset);
+            ImGui::SetNextItemWidth(controlWidth); 
             ImGui::InputInt("##lrd", &game.m_lodRenderDistance, 1, 10);
             int minLodDist = game.m_renderDistance;
             int maxLodDist = game.m_renderDistance * 16; 
             if (game.m_lodRenderDistance < minLodDist) game.m_lodRenderDistance = minLodDist;
             if (game.m_lodRenderDistance > maxLodDist) game.m_lodRenderDistance = maxLodDist;
-            ImGui::SameLine(); ImGui::Text("chunks");
             ImGui::EndDisabled();
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-            ImGui::Text("Fullscreen Mode"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
+            ImGui::Text("Fullscreen Mode"); ImGui::SameLine(textOffset);
             bool fs = wcfg.fullscreen;
             if (ImGui::Checkbox("##fs", &fs)) {
                 wcfg.fullscreen = fs;
@@ -741,26 +792,26 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
             }
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-            ImGui::Text("Vertical Sync"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
+            ImGui::Text("Vertical Sync"); ImGui::SameLine(textOffset);
             if (ImGui::Checkbox("##vsync", &wcfg.vsync)) game.m_applyPending = true;
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-            ImGui::Text("Ambient Occlusion"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
+            ImGui::Text("Ambient Occlusion"); ImGui::SameLine(textOffset);
             bool ao = rcfg.m_aoStrength > 0.5f;
             if (ImGui::Checkbox("##ao", &ao)) rcfg.m_aoStrength = ao ? 1.0f : 0.0f;
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-            ImGui::Text("Mipmap Levels"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
-            ImGui::SetNextItemWidth(itemWidth);
+            ImGui::Text("Mipmap Levels"); ImGui::SameLine(textOffset);
+            ImGui::SetNextItemWidth(controlWidth);
             if (ImGui::SliderInt("##mipmap", &rcfg.mipmapLevels, 0, 4, "%d")) { }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = OFF\n1~4 = 生成 Mipmap 层级\n(需要重新加载世界生效)");
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-            ImGui::Text("Anisotropic Filtering"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
+            ImGui::Text("Anisotropic Filtering"); ImGui::SameLine(textOffset);
             ImGui::Checkbox("##aniso", &rcfg.enableAnisotropic);
             if (rcfg.enableAnisotropic) {
-                ImGui::Text("Aniso Level"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
-                ImGui::SetNextItemWidth(itemWidth);
+                ImGui::Text("Aniso Level"); ImGui::SameLine(textOffset);
+                ImGui::SetNextItemWidth(controlWidth);
                 const char* anisoItems[] = { "1x", "2x", "4x", "8x", "16x" };
                 int anisoIndex = 4; 
                 if (rcfg.maxAnisotropy <= 1.0f) anisoIndex = 0;
@@ -779,8 +830,8 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
             ImGui::PopTextWrapPos();
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-            ImGui::Text("Field of View"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
-            ImGui::SetNextItemWidth(itemWidth);
+            ImGui::Text("Field of View"); ImGui::SameLine(textOffset);
+            ImGui::SetNextItemWidth(controlWidth);
             ImGui::SliderFloat("##fov", &rcfg.fov, 30.0f, 120.0f, "%.0f");
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
@@ -790,13 +841,13 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
                 apiDesc = "实验性设置。在部分系统上使用可能会降低性能或导致不稳定。";
                 descColor = COLOR_WARNING;
             }
-            ImGui::PushTextWrapPos(0.0f);
+            ImGui::PushTextWrapPos(textWrapWidth);
             ImGui::TextColored(descColor, "%s", apiDesc);
             ImGui::PopTextWrapPos();
             ImGui::Spacing();
 
-            ImGui::Text("图形 API"); ImGui::SameLine(leftWidth + rightPanelLeftPadding);
-            ImGui::SetNextItemWidth(itemWidth);
+            ImGui::Text("图形 API"); ImGui::SameLine(textOffset);
+            ImGui::SetNextItemWidth(controlWidth);
             int currentApi = static_cast<int>(ecfg.apitype);
             const char* apiItems[] = { "默认", "优先使用 OpenGL", "优先使用 Vulkan" };
             if (ImGui::Combo("##api", &currentApi, apiItems, IM_ARRAYSIZE(apiItems))) {
@@ -809,12 +860,55 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
         } else if (game.m_settingsTab == 1) {
             ImGui::Spacing(); ImGui::TextDisabled("Audio settings coming soon...");
         } else if (game.m_settingsTab == 2) {
-            ImGui::Spacing(); ImGui::TextDisabled("Controls settings coming soon...");
+            ImGui::Spacing();
+            
+            std::string autoLabel = "Auto";
+            if (game.m_activeInputMode == MyGame::InputMode::Touch) {
+                autoLabel += " (Touch)";
+            } else {
+                autoLabel += " (Keyboard & Mouse)";
+            }
+            
+            const char* modes[] = { autoLabel.c_str(), "Keyboard & Mouse", "Touch" };
+            int currentMode = static_cast<int>(game.m_inputMode);
+            ImGui::Text("Input Preference"); ImGui::SameLine(textOffset);
+            ImGui::SetNextItemWidth(controlWidth); 
+            if (ImGui::Combo("##inputmode", &currentMode, modes, IM_ARRAYSIZE(modes))) {
+                game.m_inputMode = static_cast<MyGame::InputMode>(currentMode);
+                if (game.m_inputMode != MyGame::InputMode::Auto) {
+                    game.m_activeInputMode = game.m_inputMode;
+                }
+            }
+            
+            ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+            
+            bool showTouchSettings = (game.m_inputMode == MyGame::InputMode::Touch) || 
+                                     (game.m_inputMode == MyGame::InputMode::Auto && game.m_activeInputMode == MyGame::InputMode::Touch);
+            if (showTouchSettings) {
+                ImGui::Text("Touch Sensitivity"); ImGui::SameLine(textOffset);
+                ImGui::SetNextItemWidth(controlWidth);
+                ImGui::SliderFloat("##touchsens", &game.m_touchSensitivity, 0.05f, 0.50f, "%.2f");
+
+                ImGui::Spacing();
+                ImGui::Text("Touch Deadzone"); ImGui::SameLine(textOffset);
+                ImGui::SetNextItemWidth(controlWidth);
+                ImGui::SliderFloat("##touchdeadzone", &game.m_touchDeadzone, 0.0f, 20.0f, "%.0f px");
+                
+                ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+                
+                if (ImGui::Button("Edit Touch Layout", ImVec2(controlWidth, buttonHeight))) {
+                    game.m_isEditingLayout = true;
+                    game.m_menuOpen = false; 
+                }
+            } else {
+                ImGui::TextDisabled("Touch settings are hidden in Keyboard & Mouse mode.");
+            }
+            ImGui::Dummy(ImVec2(0, fontSize * 2.0f));
         } else if (game.m_settingsTab == 3) {
             ImGui::Spacing();
             ImGui::TextColored(COLOR_ACCENT, "Mycraft Engine v" MYCRAFT_VERSION);
             ImGui::Separator(); ImGui::Spacing();
-            ImGui::Text("GitHub Repository:"); ImGui::SameLine();
+            ImGui::Text("GitHub Repository:"); ImGui::SameLine(); 
             ImGui::TextLinkOpenURL("yigeputong/mycraft", "https://github.com/yigeputong/mycraft");
             ImGui::Spacing(); ImGui::Text("Special Thanks & Open Source Credits:"); ImGui::Spacing();
 
@@ -841,6 +935,7 @@ void ClientUI::DrawSettingsMenu(Eng::Engine& engine, MyGame& game) {
         }
     }
     ImGui::EndChild();
+    ImGui::PopStyleVar(); // 恢复 WindowPadding
 
     ImGui::End();
     ImGui::PopStyleVar(5);
@@ -888,9 +983,44 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
     BlockId sandId  = game.m_blockRegistry.Get("mycraft:sand").id;
     BlockId stoneId = game.m_blockRegistry.Get("mycraft:stone").id;
 
+    // DrawHUD 没有 ImGui::Begin 包裹，
+    // 不能调用 InvisibleButton 等需要窗口上下文的 API。
+    // 这里改为直接通过鼠标坐标和触摸点手动判定点击，彻底消除 FallbackWindow。
+    ImVec2 mousePos = ImGui::GetIO().MousePos;
+    bool isMouseClicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().WantCaptureMouse;
+    
+    // 查找是否有新的触摸点落在了物品栏区域（针对移动端）
+    ImVec2 touchClickPos(-1.0f, -1.0f);
+    if (game.m_activeInputMode == MyGame::InputMode::Touch) {
+        for (const auto& t : game.m_inputService->GetAllTouches()) {
+            if (t.active && !t.prevActive) {
+                touchClickPos = ImVec2(t.pos.x * io.DisplaySize.x, t.pos.y * io.DisplaySize.y);
+                break;
+            }
+        }
+    }
+
     for (int i = 0; i < MyGame::kHotbarSize; ++i) {
         float x = startX + i * (SLOT + GAP_ITEM);
         ImVec2 p0(x, y), p1(x + SLOT, y + SLOT);
+
+        // 手动点击命中判定
+        bool clicked = false;
+        if (isMouseClicked) {
+            if (mousePos.x >= p0.x && mousePos.x <= p1.x && mousePos.y >= p0.y && mousePos.y <= p1.y) {
+                clicked = true;
+            }
+        }
+        if (touchClickPos.x >= 0.0f) {
+            if (touchClickPos.x >= p0.x && touchClickPos.x <= p1.x && touchClickPos.y >= p0.y && touchClickPos.y <= p1.y) {
+                clicked = true;
+            }
+        }
+        
+        if (clicked) {
+            game.m_hotbarIndex = i;
+        }
+
         ImU32 bg = (i == game.m_hotbarIndex) ? IM_COL32(255, 255, 255, 200) : IM_COL32(0, 0, 0, 120);
         dl->AddRectFilled(p0, p1, bg);
         dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 255), 0, 0, 2.0f);
@@ -983,6 +1113,203 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         DrawLineBgRight(rightX, dbgY, white, "API: %s", game.m_deviceInfo.apiVersion.c_str()); dbgY += lineHeight;
         DrawLineBgRight(rightX, dbgY, white, "Driver: %s", game.m_deviceInfo.driverVersion.c_str()); dbgY += lineHeight;
         DrawLineBgRight(rightX, dbgY, white, "Shader: %s", game.m_deviceInfo.shadingLanguage.c_str());
+    }
+}
+
+void ClientUI::ProcessTouchInputAndDrawOverlay(Eng::Engine& engine, MyGame& game) {
+    if (game.m_activeInputMode != MyGame::InputMode::Touch && !game.m_isEditingLayout) return;
+    
+    ImGuiIO& io = ImGui::GetIO();
+    ImVec2 sz = io.DisplaySize;
+    ImDrawList* fgDraw = ImGui::GetForegroundDrawList();
+    
+    // 记录哪些触摸点已经被虚拟按键消耗
+    std::unordered_set<int64_t> consumedTouches;
+
+    // 1. 绘制并处理虚拟按键
+    for (size_t i = 0; i < game.m_virtualButtons.size(); ++i) {
+        auto& btn = game.m_virtualButtons[i];
+        ImVec2 center(btn.pos.x * sz.x, btn.pos.y * sz.y);
+        float rad = btn.radius * sz.x;
+        bool isHovered = false;
+        bool isActive = false;
+
+        // 视觉层的动态标签
+        std::string labelToShow = btn.label;
+        if (btn.actionName == "Jump" && game.m_flyMode) labelToShow = "升";
+
+        if (game.m_isEditingLayout) {
+            ImGui::SetCursorScreenPos(ImVec2(center.x - rad, center.y - rad));
+            ImGui::InvisibleButton(("##vbtn" + std::to_string(i)).c_str(), ImVec2(rad * 2.0f, rad * 2.0f));
+            isHovered = ImGui::IsItemHovered();
+            isActive = ImGui::IsItemActive();
+
+            if (isActive) {
+                ImVec2 delta = io.MouseDelta;
+                btn.pos.x += delta.x / sz.x;
+                btn.pos.y += delta.y / sz.y;
+                btn.pos.x = glm::clamp(btn.pos.x, 0.05f, 0.95f);
+                btn.pos.y = glm::clamp(btn.pos.y, 0.05f, 0.95f);
+            }
+        } else {
+            // 正常模式：仅遍历 Touch 点
+            for (const auto& t : game.m_inputService->GetAllTouches()) {
+                if (!t.active) continue;
+                ImVec2 touchPos(t.pos.x * sz.x, t.pos.y * sz.y);
+                float dx = touchPos.x - center.x;
+                float dy = touchPos.y - center.y;
+                if (dx * dx + dy * dy < rad * rad) {
+                    consumedTouches.insert(t.fingerId);
+                    isActive = true;
+                    
+                    // 针对 OpenMenu 特殊处理。
+                    // 原因是注入发生在 Render 阶段，IsActionPressed 会被下一帧的 Update 吞掉边沿。
+                    if (btn.actionName == "OpenMenu") {
+                        game.m_menuOpen = true;
+                    } else {
+                        game.m_inputService->InjectActionState(Eng::service::HashActionName(btn.actionName), true);
+                    }
+                    break;
+                }
+            }
+        }
+
+        // 绘制按键视觉
+        ImU32 color = game.m_isEditingLayout ? IM_COL32(255, 100, 100, 120) : IM_COL32(0, 0, 0, 60);
+        if (isActive) color = IM_COL32(255, 255, 255, 80);
+        else if (isHovered) color = IM_COL32(255, 255, 255, 50);
+
+        fgDraw->AddCircleFilled(center, rad, color);
+        fgDraw->AddCircle(center, rad, IM_COL32(255, 255, 255, 150), 32, 2.0f);
+        
+        ImVec2 textSize = ImGui::CalcTextSize(labelToShow.c_str());
+        fgDraw->AddText(ImVec2(center.x - textSize.x * 0.5f, center.y - textSize.y * 0.5f),
+                        IM_COL32_WHITE, labelToShow.c_str());
+    }
+
+    // 2. 处理摇杆和视角
+    float baseRadius = sz.x * 0.12f;
+    float stickRadius = sz.x * 0.05f;
+
+    if (!game.m_isEditingLayout) {
+        // ================= 正常游玩模式 =================
+        game.m_leftTouchId = -1; 
+        
+        for (const auto& t : game.m_inputService->GetAllTouches()) {
+            if (!t.active || consumedTouches.contains(t.fingerId)) continue;
+            
+            ImVec2 touchPos(t.pos.x * sz.x, t.pos.y * sz.y);
+            float pxDeltaX = t.delta.x * sz.x;
+            float pxDeltaY = t.delta.y * sz.y;
+
+            if (t.pos.x < 0.5f) {
+                // 左屏虚拟摇杆
+                if (game.m_leftTouchId == -1) {
+                    game.m_leftTouchId = static_cast<int>(t.fingerId);
+                    if (!t.prevActive) {
+                        game.m_joystickOriginPx = {touchPos.x, touchPos.y};
+                    }
+                }
+                if (game.m_leftTouchId == t.fingerId) {
+                    game.m_joystickCurrentPx = {touchPos.x, touchPos.y};
+                    float diffX = touchPos.x - game.m_joystickOriginPx.x;
+                    float diffY = touchPos.y - game.m_joystickOriginPx.y;
+                    float maxRadius = baseRadius;
+                    
+                    float lenSqr = diffX * diffX + diffY * diffY;
+                    if (lenSqr > maxRadius * maxRadius) {
+                        float len = std::sqrt(lenSqr);
+                        diffX = (diffX / len) * maxRadius;
+                        diffY = (diffY / len) * maxRadius;
+                    }
+                    game.m_inputService->InjectMoveDir(glm::vec2(diffX / maxRadius, -diffY / maxRadius));
+                }
+            } else {
+                // 右屏视角滑动
+                float lenSqr = pxDeltaX * pxDeltaX + pxDeltaY * pxDeltaY;
+                if (lenSqr > game.m_touchDeadzone * game.m_touchDeadzone) {
+                    game.yaw += pxDeltaX * game.m_touchSensitivity;
+                    game.pitch -= pxDeltaY * game.m_touchSensitivity;
+                    game.pitch = glm::clamp(game.pitch, -89.0f, 89.0f);
+                }
+            }
+        }
+        
+        // 绘制摇杆
+        if (game.m_leftTouchId == -1) {
+            // 没触摸时：画在固定位置
+            ImVec2 defaultCenter(game.m_joystickBasePos.x * sz.x, game.m_joystickBasePos.y * sz.y); 
+            fgDraw->AddCircleFilled(defaultCenter, baseRadius, IM_COL32(255, 255, 255, 20));
+            fgDraw->AddCircle(defaultCenter, baseRadius, IM_COL32(255, 255, 255, 60), 32, 2.0f);
+            fgDraw->AddCircleFilled(defaultCenter, stickRadius, IM_COL32(255, 255, 255, 60));
+        } else {
+            // 有触摸时：画在手指按下的动态位置
+            fgDraw->AddCircleFilled(ImVec2(game.m_joystickOriginPx.x, game.m_joystickOriginPx.y), baseRadius, IM_COL32(255, 255, 255, 40));
+            fgDraw->AddCircle(ImVec2(game.m_joystickOriginPx.x, game.m_joystickOriginPx.y), baseRadius, IM_COL32(255, 255, 255, 100), 32, 2.0f);
+            fgDraw->AddCircleFilled(ImVec2(game.m_joystickCurrentPx.x, game.m_joystickCurrentPx.y), stickRadius, IM_COL32(255, 255, 255, 150));
+        }
+    } else {
+        // ================= 编辑布局模式 =================
+        // 允许拖拽摇杆的默认位置
+        ImVec2 center(game.m_joystickBasePos.x * sz.x, game.m_joystickBasePos.y * sz.y);
+        
+        ImGui::SetCursorScreenPos(ImVec2(center.x - baseRadius, center.y - baseRadius));
+        ImGui::InvisibleButton("##joystick_base", ImVec2(baseRadius * 2.0f, baseRadius * 2.0f));
+        
+        bool isHovered = ImGui::IsItemHovered();
+        bool isActive = ImGui::IsItemActive();
+        
+        if (isActive) {
+            game.m_joystickBasePos.x += io.MouseDelta.x / sz.x;
+            game.m_joystickBasePos.y += io.MouseDelta.y / sz.y;
+            // 限制在左半屏内，防止拖到右边影响按钮
+            game.m_joystickBasePos.x = glm::clamp(game.m_joystickBasePos.x, 0.05f, 0.45f);
+            game.m_joystickBasePos.y = glm::clamp(game.m_joystickBasePos.y, 0.05f, 0.95f);
+            center = ImVec2(game.m_joystickBasePos.x * sz.x, game.m_joystickBasePos.y * sz.y);
+        }
+        
+        ImU32 color = IM_COL32(255, 100, 100, 120);
+        if (isActive) color = IM_COL32(255, 255, 255, 80);
+        else if (isHovered) color = IM_COL32(255, 255, 255, 50);
+        
+        fgDraw->AddCircleFilled(center, baseRadius, color);
+        fgDraw->AddCircle(center, baseRadius, IM_COL32(255, 255, 255, 150), 32, 2.0f);
+        fgDraw->AddCircleFilled(center, stickRadius, IM_COL32(255, 255, 255, 150));
+    }
+    
+    // 3. 编辑模式 UI 提示（嵌入 ##EditLayoutRoot 内部，中央面板）
+    //   原实现创建独立的 "##edit_controls" 窗口，但拖拽虚拟按钮时 InvisibleButton
+    //   会 FocusWindow(##EditLayoutRoot) 把全屏 Root 拉到顶层，覆盖掉独立面板 →
+    //   Done & Save 点不动。现在改为在当前窗口（##EditLayoutRoot）内部用
+    //   SetCursorScreenPos + Button 绘制，天然在同一层，无焦点抢占问题。
+    if (game.m_isEditingLayout) {
+        constexpr float kEditPanelWidth  = 240.0f;
+        constexpr float kEditPanelHeight = 100.0f;
+        ImVec2 panelPos(sz.x * 0.5f - kEditPanelWidth * 0.5f,
+                        sz.y * 0.5f - kEditPanelHeight * 0.5f);
+        
+        // 背景（直接画到当前窗口 DrawList，即 ##EditLayoutRoot 的 DrawList）
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            panelPos,
+            ImVec2(panelPos.x + kEditPanelWidth, panelPos.y + kEditPanelHeight),
+            IM_COL32(20, 20, 20, 220), 4.0f);
+        ImGui::GetWindowDrawList()->AddRect(
+            panelPos,
+            ImVec2(panelPos.x + kEditPanelWidth, panelPos.y + kEditPanelHeight),
+            IM_COL32(255, 255, 255, 150), 4.0f, 0, 2.0f);
+        
+        ImGui::SetCursorScreenPos(ImVec2(panelPos.x + 10.0f, panelPos.y + 8.0f));
+        ImGui::TextColored(COLOR_WARNING, "Touch Layout Edit Mode");
+        
+        ImGui::SetCursorScreenPos(ImVec2(panelPos.x + 10.0f, panelPos.y + 30.0f));
+        ImGui::TextUnformatted("Drag buttons to reposition.");
+        
+        ImGui::SetCursorScreenPos(ImVec2(panelPos.x + 10.0f, panelPos.y + 55.0f));
+        if (ImGui::Button("Done & Save", ImVec2(kEditPanelWidth - 20.0f, 35.0f))) {
+            game.m_isEditingLayout = false;
+            game.m_menuOpen = true; // 退出编辑模式后，重新打开设置菜单
+            game.SaveSettings(engine);
+        }
     }
 }
 

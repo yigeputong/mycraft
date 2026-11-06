@@ -1,5 +1,4 @@
-
-# Mycraft 引擎开发 — AI 上下文恢复与架构规范 (V2)
+# Mycraft 引擎开发 — AI 上下文恢复与架构规范 (V3)
 
 > **本文档是 AI 开发协作的上下文恢复入口。**
 > 每次开始新对话时，AI 必须完整阅读本文档以恢复项目状态。
@@ -9,13 +8,13 @@
 ## 一、 项目概况与技术基线
 
 **Mycraft**：Minecraft 风格体素游戏 + 自制体素专用引擎。
-**技术栈**：C++23 + CMake + Ninja + vcpkg。桌面端为 `clang-cl`，移动端为 `NDK Clang`。
+**技术栈**：C++23 + CMake + Ninja + vcpkg。桌面端为 `clang-cl`，移动端为 `NDK Clang` (NDK 30.0.16248370)。
 
 ### 🎯 平台与 API 基线
 
 * **桌面端**：Windows 10+，Vulkan 1.3（主力，Dynamic Rendering, Synchronization2），OpenGL 4.6（兼容兜底）。
 * **移动端**：Android 8 (API 26)+，Vulkan 1.3，OpenGL ES 3.1（未来兜底）。
-* **UI 框架**：Dear ImGui `v1.93.0`（已升级至最新动态字体系统与 DrawList 重构版）。
+* **UI 框架**：Dear ImGui `v1.93.0`（已适配动态字体、新 DrawList、以及去除了默认 +0.5f 偏移）。
 
 ---
 
@@ -23,60 +22,71 @@
 
 1. **平台绝对隔离**：业务层和引擎层严禁出现 `#ifdef __ANDROID__` / `_WIN32`。所有差异必须下沉到 `Platform` 或 `FileTool`。
 2. **RHI 纯粹去脑化**：`IRenderService` 只做无状态指令下发，严禁懂 Mesh/Material 等业务概念。
-3. **依赖显式注入 (DI)**：引擎不再充当“霸道总裁”全量初始化服务，业务层需要什么，就显式调 `engine.CreateXXXService()`。业务层只通过 `engine.GetXXX()` 拿实例。
-4. **彻底 RAII**：严禁裸 `new/delete` 和裸 `std::thread`。资源生命周期绑定到 `std::shared_ptr`，底层利用 `DeferredDeleter` 延迟销毁。
+3. **依赖显式注入 (DI)**：业务层需要什么，就显式调 `engine.CreateXXXService()`。
+4. **彻底 RAII**：严禁裸 `new/delete` 和裸 `std::thread`。资源生命周期绑定到 `std::shared_ptr`。
 5. **拒绝魔法数字**：尺寸、阈值全用 `constexpr` 具名常量。
 
 ---
 
 ## 三、 ✅ 近期重大里程碑（已完成）
 
-### 1. 渲染架构史诗级蜕变：Texture Array
-
-* **彻底废弃 Texture Atlas**：删除了所有恶心的 `GetTileUV` 和 `ATLAS_PADDING` 内缩逻辑。
-* **RHI 全量支持 Array**：`IRenderService` 引入 `arrayLayers` 和 `Vertex::layer`。OpenGL 与 Vulkan 后端已完美支持 `GL_TEXTURE_2D_ARRAY` / `VK_IMAGE_VIEW_TYPE_2D_ARRAY`。
-* **根除远景诅咒**：远景水面变暗、雪地黑色细网格线、Mipmap 渗色问题被彻底物理消灭。
-
-### 2. 多线程与内存安全
-
-* **网格防覆盖**：引入 `MeshTask.version` 与 `m_chunkMeshVersions` 机制，彻底解决多线程异步构建覆盖导致的黑洞。
-* **显存自动清理**：重写了 `SceneRenderer` 的垃圾回收阈值（>50万或10%即触发），修复了 `m_deferredAppends` 溢出现象，杜绝显存泄漏。
-* **VMA 修复**：修复了 Debug 模式下手动导入函数指针导致的栈溢出，改用动态加载入口。
-
-### 3. 服务端与出生点稳固
-
-* **出生点抢救**：实装 512 格同心圆寻陆算法，如果全海则强制生成 5x5 草方块平台。
-* **光照修复**：出生点预生成 3x3 区块并注入完整的 `LightEngine::InitRegion` 计算。
+1. **渲染架构蜕变**：Texture Array 彻底替代 Atlas。支持 `arrayLayers`，根除远景渗色。
+2. **输入系统重构 (`InputService`)**：
+   * 废除单例，改为 `Engine` 持有，通过构造注入 `WindowService`。
+   * 引入 Action 注册表（`ActionHash`），支持多键绑定与映射。
+   * 支持 `InjectActionState` 和 `InjectMoveDir` 接口，用于虚拟触控。
+3. **移动端构建踩坑记录（血泪史）**：
+   * `vcpkg` 交叉编译 Android 依赖时极易因 GitHub 网络被墙导致 `curl 56` 错误或死锁。
+   * **对策**：若卡在某个包下载失败，使用 `curl.exe -L -o "C:\Dev\vcpkg\downloads\<文件名>.tar.gz" "<代理链接>"` 手动下载并放入缓存目录。
+4. **移动端虚拟 UI 基础**：
+   * 实现了数据驱动的拖拽布局（`m_virtualButtons` + `m_joystickBasePos`）。
+   * 通过 `ImGui::InvisibleButton` 接管拖拽。
 
 ---
 
-## 四、 🚧 当前正在处理：引擎输入系统重构
+## 四、 🚧 当前正在处理：移动端真机触控 Bug 修复
 
-**痛点**：目前 `Input` 是全局静态单例，无法依赖注入，且无法优雅支持多窗口与移动端多点触控。
+在真机（Android）上测试时，遇到了两个核心 Bug，需优先排查：
 
-**重构方案蓝图**：
+### 🐛 Bug 1：全屏乱触发“挖掘”动画
 
-1. **废除单例**：将 `Input` 改为 `Engine` 持有的实例（`std::unique_ptr<tool::Input> m_input;`）。
-2. **事件分发改造**：`WindowService` 捕获的 SDL 事件，通过 `Engine` 转发给 `m_input->ProcessEvent(event)`。
-3. **业务层适配**：`Game.cpp` 中的 36 处 `Input::` 调用全部改为通过 `engine.GetInput().` 调用。
-4. **触控预埋**：在 `Input.h` 中新增 `TouchPoint` 结构（`fingerId`, `position`, `delta`, `active`），拦截 SDL3 的 `SDL_EVENT_FINGER_DOWN/MOTION/UP`。
+* **现象**：无论点击屏幕的哪里（包括摇杆区域、空白区域），手部都会出现挖掘（Dig）动作，但实际未必挖到了方块。
+* **可能原因**：
+    1. 虚拟按键 `m_virtualButtons` 中“挖”的判定范围异常（半径过大）。
+    2. `ProcessTouchInputAndDrawOverlay` 里判断 `consumedTouches` 有误，导致手指没落在按钮上时，误触发了 `InjectActionState(Dig, true)`。
+    3. 触摸点坐标计算（从归一化转像素）存在偏差。
+
+### 🐛 Bug 2：飞行模式下无法下降
+
+* **现象**：手机端似乎没有“下降”的按钮（FlyDown），或者绑定失效。人物在飞行模式下无法下降。
+* **可能原因**：
+    1. 移动端 UI 布局中没有给 `FlyDown` 配置虚拟按键。
+    2. `m_flyMode` 下 `IsActionDown(A_FlyDown)` 逻辑未触发。
 
 ---
 
-## 五、 📋 未来计划：移动端触控体验
+## 五、 📋 未来计划
 
-1. **虚拟摇杆**：动态原点（按在屏幕左半区何处，摇杆中心就在哪），计算归一化向量传给 `moveDir`。
-2. **右屏视角滑动**：读取 `TouchPoint.delta`，转化为 `yaw/pitch` 增量，需与 ImGui 的 `WantCaptureMouse` 拦截配合。
-3. **动作虚拟按键**：屏幕右下角加入跳跃、挖掘（长按）、放置（点击）的大热区按钮。
+* **v0.4.0：轻量级 ECS 架构**
+  * 放弃传统的“上帝类”，引入 Sparse Set 架构。
+  * 组件设计：`Transform`, `Velocity`, `AABB`, `Health`, `PigAI`, `Renderable`。
+  * **测试目标**：在世界上生成几头“猪”，拥有漫游 AI、受重力掉落、腿部摆动动画（Minecraft 风格的拆解 Mesh 拼装）。
+* **v0.5.0：国际化 (i18n)**
+  * 配置 `lang/en_us.json`、`zh_cn.json`。
+  * 所有的 UI 文本、虚拟按键标签全部转为 `i18n::Get("key")`。
+* **v0.6.0：深度架构重构**
+  * 构建系统解耦：写一个纯 CMake 脚本直接编译 Android `.so`，剥离 Gradle 的 `externalNativeBuild` 监控。
+  * RHI 去多态化探索（模板/宏替换纯虚函数）。
+  * 光追与 PBR 管线准备（全面转向 Compute Shader 驱动光照）。
 
 ---
 
 ## 六、 ⚠️ 排坑指南（血泪史补充）
 
-* **ImGui 1.93.0 升级警告**：新版移除了 `AddLine` 内部默认的 `+0.5f` 偏移，去掉了 Slider/Input 的实时编辑（LiveEdit）。手绘 UI 需注意检查边框和准星是否模糊。
+* **ImGui 1.93.0 升级警告**：新版移除了 `AddLine` 内部默认的 `+0.5f` 偏移。手绘 UI 需注意检查边框和准星是否模糊。
 * **Android 资源剥离**：`AssetService::ReadFile` 中需利用 `IsMobilePlatform()` 剥离 `assets/` 前缀。
 * **Vulkan 验证层**：Android 端无 Validation Layer，编译期需用 `#if !defined(__ANDROID__)` 屏蔽。
-* **纹理数组的 UI 限制**：ImGui 后端不支持 `sampler2DArray`，目前 HUD 的方块图标暂时用纯色等距方块渲染（若需高清贴图，需单独建 2D 纹理供 UI 用）。
+* **纹理数组的 UI 限制**：ImGui 后端不支持 `sampler2DArray`，目前 HUD 的方块图标暂时用纯色等距方块渲染。
 * **VMA 配置**：`VMA_DYNAMIC_VULKAN_FUNCTIONS=1`，初始化时只需传 `vkGetInstanceProcAddr` 和 `vkGetDeviceProcAddr`。
 
 ---

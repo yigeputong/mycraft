@@ -12,12 +12,14 @@
 #include "game/client/MeshManager.h"
 #include "game/client/ClientUI.h"
 #include "game/client/LODManager.h"
+
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <array>
 #include <string>
+#include <nlohmann/json.hpp>
 
 namespace game {
 
@@ -65,24 +67,23 @@ private:
     };
     GameState m_state = GameState::MainMenu;
 
-    bool m_shouldQuit = false;
-    bool m_menuOpen   = false;
-    bool m_minimized  = false;
-    bool m_applyPending = false;
-    bool m_returnToMenuPending = false;
-    bool m_apiChanged = false;
-    int  m_settingsTab = 0;
+    bool m_shouldQuit         = false;
+    bool m_menuOpen           = false;
+    bool m_minimized          = false;
+    bool m_applyPending       = false;
+    bool m_returnToMenuPending= false;
+    bool m_apiChanged         = false;
+    int  m_settingsTab        = 0;
     std::string m_statusText;
 
     // ================================================================
     // 3. 全局静态资源 (生命周期与 Engine 同寿，在 OnStart / OnShutdown 处理)
     // ================================================================
-    // 注册表与全局配置
     game::BlockRegistry m_blockRegistry;
     game::GameContext   m_ctx{ m_blockRegistry };
-    int                 m_renderDistance = 32;
+    int                 m_renderDistance    = 32;
     int                 m_lodRenderDistance = m_renderDistance * 4;
-    bool                m_enableLod = true;
+    bool                m_enableLod         = true;
 
     // 核心渲染资产 (地形、天空、实体、手部 Shader 及贴图)
     Eng::service::ShaderPtr      m_cubeShader;
@@ -117,7 +118,6 @@ private:
     std::unique_ptr<Eng::client::SceneRenderer>  m_sceneRenderer;
 
     // --- 4.4 存档与界面交互状态 ---
-    // 世界选择界面参数
     std::vector<game::server::WorldMetadata> m_savedWorlds;
     std::string m_selectedWorldId;
     char m_searchBuffer[128] = "";
@@ -151,19 +151,49 @@ private:
     glm::vec3 m_playerVelocity{0.0f};
     bool      m_playerOnGround = false;
     glm::vec3 m_lastMoveDir{0.0f};
-
-    // 当前准星指着的方块（本地预测，仅用于渲染）
-    game::RayHit m_currentRayHit;
+    game::RayHit m_currentRayHit; // 当前准星指着的方块
     
     // 输入状态与冷却
-    bool  m_flyMode = true;
-    bool  m_relativeMode = true;
-    bool  m_showDebug = true;
+    bool  m_flyMode       = true;
+    bool  m_relativeMode  = true;
+    bool  m_showDebug     = true;
     float m_jumpHoldTimer = 0.0f;
     float m_placeCooldown = 0.0f;
     float m_digCooldown   = 0.0f;
     static constexpr float kPlaceInterval = 0.2f;
     static constexpr float kDigInterval   = 0.2f;
+
+    // ================================================================
+    // 6. 输入模式与触控 UI 状态 (数据驱动)
+    // ================================================================
+    enum class InputMode : std::uint8_t {
+        Auto = 0,
+        KeyboardMouse = 1,
+        Touch = 2
+    };
+    
+    InputMode m_inputMode = InputMode::Auto;
+    InputMode m_activeInputMode = InputMode::KeyboardMouse;
+
+    // 触控参数
+    float m_touchSensitivity = 0.15f;
+    float m_touchDeadzone    = 5.0f; // 像素
+
+    // 摇杆状态
+    int m_leftTouchId = -1;
+    glm::vec2 m_joystickBasePos   = {0.18f, 0.70f}; 
+    glm::vec2 m_joystickOriginPx  = {0.0f, 0.0f};
+    glm::vec2 m_joystickCurrentPx = {0.0f, 0.0f};
+
+    // 数据驱动虚拟按键
+    struct VirtualButtonConfig {
+        std::string actionName;
+        glm::vec2 pos = {0.5f, 0.5f}; // 归一化坐标
+        float radius = 0.05f;         // 归一化半径
+        std::string label;
+    };
+    std::vector<VirtualButtonConfig> m_virtualButtons;
+    bool m_isEditingLayout = false;   // 是否处于拖拽编辑模式
 
     // 时间与动画
     float m_timeOfDay = 8.0f;
@@ -173,7 +203,7 @@ private:
     float m_walkDist = 0.0f;
 
     // ================================================================
-    // 6. 实体、物品与背包
+    // 7. 实体、物品与背包
     // ================================================================
     struct ClientItemEntity : game::PointEntity {
         uint32_t  id          = 0;
@@ -202,13 +232,13 @@ private:
     std::array<ItemStack, 27> m_inventory{};
 
     // ================================================================
-    // 7. UI 与调试统计面板
+    // 8. UI 与调试统计面板
     // ================================================================
     GlobalState m_globalState;
     float m_uiScale = 1.0f;
 
     // FPS 与耗时统计
-    float m_lastFrameMs = 0.0f;
+    float m_lastFrameMs   = 0.0f;
     float m_fpsTimer      = 0.0f;
     int   m_fpsFrameCount = 0;
     float m_fpsAccumMs    = 0.0f;
@@ -227,7 +257,7 @@ private:
     client::ClientUI m_ui;
 
     // ================================================================
-    // 8. 生命周期与初始化辅助函数
+    // 9. 生命周期与初始化辅助函数
     // ================================================================
     void EnterGame();
     void ExitGame();
@@ -240,7 +270,7 @@ private:
     Eng::service::ShaderPtr CreateShaderByName(const std::string& name, bool isSky);
 
     // ================================================================
-    // 9. 网络与设置辅助函数
+    // 10. 网络与设置辅助函数
     // ================================================================
     bool StartLocalServer(bool useMemory, bool createClient, const std::string& worldId);
     bool ConnectToServer(const std::string& host, uint16_t port);
@@ -253,7 +283,7 @@ private:
     static constexpr const char* SETTINGS_FILE = "settings.json";
 
     // ================================================================
-    // 10. 渲染与 Mesh 构建辅助函数
+    // 11. 渲染与 Mesh 构建辅助函数
     // ================================================================
     Eng::client::RenderMesh BuildPlayerMesh();
     Eng::client::RenderMesh BuildHandMesh();
@@ -264,15 +294,18 @@ private:
     void DrainMeshResults(size_t maxCount = 16);
 
     // ================================================================
-    // 11. 游戏逻辑与世界查询辅助函数
+    // 12. 游戏逻辑与世界查询辅助函数
     // ================================================================
     void HandleServerMessage(const std::vector<uint8_t>& data);
     bool GetInput(float dt);
+    void UpdateActiveInputMode();
+    void ProcessTouchInput();
     void AddToInventory(BlockId id, int count);
     BlockId GetBlockAt(int wx, int wy, int wz) const;
     bool IsSolidAt(int wx, int wy, int wz) const;
     bool AABBCollides(const glm::vec3& pos) const;
 
+    // 允许 ClientUI 访问 MyGame 的私有状态，用于绘制 HUD 与触控界面
     friend class client::ClientUI;
 };
 

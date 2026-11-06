@@ -70,6 +70,7 @@ namespace {
                 float u = uvRect.x + fuv[k][0] * uvRect.z;
                 float v_coord = uvRect.y + fuv[k][1] * uvRect.w;
                 v.uv = toUV(u, v_coord);
+                v.layer = 0.0f;
                 v.ao = 1.0f;
                 v.light = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
                 vertices.push_back(v);
@@ -83,22 +84,19 @@ namespace {
     using Eng::service::KeyCode;
     using Eng::service::operator""_action;
 
-    // 编译期哈希常量（IsActionDown 调用零开销）
+    // 编译期哈希常量
     constexpr auto A_MoveForward      = "MoveForward"_action;
     constexpr auto A_MoveBack         = "MoveBack"_action;
     constexpr auto A_MoveLeft         = "MoveLeft"_action;
     constexpr auto A_MoveRight        = "MoveRight"_action;
-    constexpr auto A_Jump             = "Jump"_action;
-    // constexpr auto A_Sprint           = "Sprint"_action;
+    constexpr auto A_Jump             = "Jump"_action;       // 跳跃 / 上升（双语义）
+    constexpr auto A_Sneak            = "Sneak"_action;      // 下蹲 / 下降（双语义）
     constexpr auto A_Dig              = "Dig"_action;
     constexpr auto A_Place            = "Place"_action;
     constexpr auto A_ToggleFly        = "ToggleFly"_action;
-    constexpr auto A_FlyUp            = "FlyUp"_action;
-    constexpr auto A_FlyDown          = "FlyDown"_action;
     constexpr auto A_ToggleDebug      = "ToggleDebug"_action;
     constexpr auto A_ToggleFullscreen = "ToggleFullscreen"_action;
     constexpr auto A_OpenMenu         = "OpenMenu"_action;
-    // constexpr auto A_OpenBackpack     = "OpenBackpack"_action;
     constexpr auto A_HotbarSlot0      = "HotbarSlot0"_action;
     constexpr auto A_HotbarSlot1      = "HotbarSlot1"_action;
     constexpr auto A_HotbarSlot2      = "HotbarSlot2"_action;
@@ -109,19 +107,17 @@ namespace {
     constexpr auto A_HotbarSlot7      = "HotbarSlot7"_action;
     constexpr auto A_HotbarSlot8      = "HotbarSlot8"_action;
 
-    // 默认绑定表（业务层唯一数据源；新增 action 在此追加一行即可）
     static constexpr ActionDesc kGameActions[] = {
         {"MoveForward",      {KeyCode::W},          "向前"},
         {"MoveBack",         {KeyCode::S},          "向后"},
         {"MoveLeft",         {KeyCode::A},          "向左"},
         {"MoveRight",        {KeyCode::D},          "向右"},
-        {"Jump",             {KeyCode::Space},      "跳跃"},
+        {"Jump",             {KeyCode::Space},      "跳跃/上升"},
+        {"Sneak",            {KeyCode::LShift},     "下蹲/下降"},
         {"Sprint",           {KeyCode::LCtrl},      "疾跑"},
         {"Dig",              {KeyCode::MouseLeft},  "挖掘"},
         {"Place",            {KeyCode::MouseRight}, "放置"},
         {"ToggleFly",        {KeyCode::F},          "切换飞行"},
-        {"FlyUp",            {KeyCode::Space},      "上升"},
-        {"FlyDown",          {KeyCode::LShift},     "下降"},
         {"ToggleDebug",      {KeyCode::F3},         "调试面板"},
         {"ToggleFullscreen", {KeyCode::F11},        "全屏"},
         {"OpenMenu",         {KeyCode::Escape},     "菜单"},
@@ -142,9 +138,18 @@ namespace {
 // 设置持久化
 // ============================================================
 void MyGame::LoadSettings(Eng::Engine& engine) {
+    //   先填默认值（首次运行 + 旧 settings.json 缺新按钮时的双重兜底）
+    //   Jump / Sneak 各自承担"地面/飞行"两种语义，由 GetInput 按 m_flyMode 分流
+    m_virtualButtons = {
+        {"OpenMenu", {0.08f, 0.08f}, 0.05f, "⬅️"},
+        {"Jump",  {0.88f, 0.85f}, 0.05f, "⬆️"},
+        {"Dig",   {0.75f, 0.88f}, 0.05f, "挖"},
+        {"Place", {0.62f, 0.85f}, 0.05f, "放"},
+        {"Sneak", {0.50f, 0.85f}, 0.05f, "⬇️"},
+    };
+
     std::string path = Eng::tool::GetWritablePath(SETTINGS_FILE);
     auto data = Eng::tool::ReadFileToMemory(path);
-
     if (data.empty()) return;
 
     try {
@@ -163,12 +168,56 @@ void MyGame::LoadSettings(Eng::Engine& engine) {
         if (j.contains("fov"))            rcfg.fov         = j["fov"];
         if (j.contains("aoStrength"))     rcfg.m_aoStrength = j["aoStrength"];
 
-        // ---- 键位绑定（与 settings.json 一同持久化） ----
         if (j.contains("input") && j["input"].is_object()) {
             LoadInputBindings(j["input"]);
         }
+        if (j.contains("inputMode")) m_inputMode = static_cast<InputMode>(j["inputMode"].get<int>());
+        if (j.contains("touchSensitivity")) m_touchSensitivity = j["touchSensitivity"];
+        if (j.contains("touchDeadzone")) m_touchDeadzone = j["touchDeadzone"];
+        
+        if (j.contains("joystickBaseX")) m_joystickBasePos.x = j["joystickBaseX"];
+        if (j.contains("joystickBaseY")) m_joystickBasePos.y = j["joystickBaseY"];
+
+        if (j.contains("virtualButtons") && j["virtualButtons"].is_array()) {
+            m_virtualButtons.clear();
+            for (const auto& btn : j["virtualButtons"]) {
+                if (!btn.is_object()) continue;
+                VirtualButtonConfig cfg;
+                cfg.actionName = btn.value("action", "");
+
+                // 过滤已废弃的旧 action（FlyUp→Jump、FlyDown→Sneak 已在 Action 表合并）
+                if (cfg.actionName == "FlyUp" || cfg.actionName == "FlyDown") {
+                    logInfo(logger, "[Game] Dropping legacy virtual button: " << cfg.actionName);
+                    continue;
+                }
+
+                // 钳制异常旧数据，防止 radius 被写成 0.5+ 导致全屏触发
+                cfg.pos.x = glm::clamp(btn.value("x", 0.5f), 0.02f, 0.98f);
+                cfg.pos.y = glm::clamp(btn.value("y", 0.5f), 0.02f, 0.98f);
+                cfg.radius = glm::clamp(btn.value("radius", 0.05f), 0.02f, 0.12f);
+                cfg.label = btn.value("label", "");
+                if (!cfg.actionName.empty()) {
+                    m_virtualButtons.push_back(cfg);
+                }
+            }
+        }
+
+        // ★ 兜底：确保 Jump 与 Sneak 至少各有一个（旧 settings.json 不含它们）
+        auto hasAction = [this](const std::string& name) {
+            return std::any_of(m_virtualButtons.begin(), m_virtualButtons.end(),
+                [&](const VirtualButtonConfig& b) { return b.actionName == name; });
+        };
+        if (!hasAction("OpenMenu")) {
+            m_virtualButtons.push_back({"OpenMenu", {0.08f, 0.08f}, 0.05f, "||"});
+        }
+        if (!hasAction("Jump")) {
+            m_virtualButtons.push_back({"Jump",  {0.88f, 0.85f}, 0.06f, "跳"});
+        }
+        if (!hasAction("Sneak")) {
+            m_virtualButtons.push_back({"Sneak", {0.50f, 0.85f}, 0.05f, "降"});
+        }
     } catch (const std::exception& e) {
-        logWarning(logger, "[Game] Failed to parse settings.json: " << e.what());
+        logError(logger, "[Game] Failed to parse settings.json: " << e.what());
     }
 }
 
@@ -181,10 +230,26 @@ void MyGame::SaveSettings(Eng::Engine& engine) {
     j["fov"]            = rcfg.fov;
     j["aoStrength"]     = rcfg.m_aoStrength;
 
-    // ---- 键位绑定 ----
     json jInput;
-    SaveInputBindings(jInput);   // 写入 jInput["version"] + jInput["bindings"]
+    SaveInputBindings(jInput);
     j["input"] = std::move(jInput);
+    j["inputMode"] = static_cast<int>(m_inputMode);
+    j["touchSensitivity"] = m_touchSensitivity;
+    j["touchDeadzone"] = m_touchDeadzone;
+
+    j["joystickBaseX"] = m_joystickBasePos.x;
+    j["joystickBaseY"] = m_joystickBasePos.y;
+    
+    json jBtns = json::array();
+    for (const auto& b : m_virtualButtons) {
+        jBtns.push_back({
+            {"action", b.actionName},
+            {"x", b.pos.x}, {"y", b.pos.y},
+            {"radius", b.radius},
+            {"label", b.label}
+        });
+    }
+    j["virtualButtons"] = jBtns;
 
     std::string path = Eng::tool::GetWritablePath(SETTINGS_FILE);
     Eng::tool::WriteStringToFile(path, j.dump(4));
@@ -197,42 +262,61 @@ void MyGame::RegisterGameActions() {
     if (!m_inputService) return;
 
     if (!m_inputService->RegisterActions(kGameActions)) {
-        logError(logger, "[Game] RegisterGameActions failed "
-                        "(name empty / conflict / duplicate in batch)");
+        logError(logger, "[Game] RegisterGameActions failed (name empty / conflict / duplicate in batch)");
         return;
     }
 
-    // 显式绑定"移动 4 方向"的 action（问 1 = 1-A）
-    m_inputService->SetMoveActions(
-        A_MoveForward, A_MoveBack, A_MoveLeft, A_MoveRight);
-
-    logInfo(logger, "[Game] Registered " << (sizeof(kGameActions) / sizeof(kGameActions[0]))
-                << " input actions");
+    m_inputService->SetMoveActions(A_MoveForward, A_MoveBack, A_MoveLeft, A_MoveRight);
+    logInfo(logger, "[Game] Registered " << (sizeof(kGameActions) / sizeof(kGameActions[0])) << " input actions");
 }
 
 void MyGame::LoadInputBindings(const nlohmann::json& inputJson) {
     if (!m_inputService) return;
     if (!inputJson.contains("bindings") || !inputJson["bindings"].is_object()) return;
 
-    std::vector<Eng::service::InputService::BindingSnapshot> bindings;
-    for (const auto& [actionName, keysArr] : inputJson["bindings"].items()) {
+    // 迁移映射：旧 action → 新 action（FlyUp/FlyDown 已合并进 Jump/Sneak）
+    static const std::unordered_map<std::string, std::string> kLegacyActionMap = {
+        {"FlyUp",   "Jump"},
+        {"FlyDown", "Sneak"},
+    };
+
+    // 按目标 action 去重合并 keys（旧存档可能同时存在 Jump 与 FlyUp 绑 Space）
+    std::unordered_map<std::string, std::vector<Eng::service::KeyCode>> mergedKeys;
+
+    for (const auto& [rawActionName, keysArr] : inputJson["bindings"].items()) {
         if (!keysArr.is_array()) continue;
 
-        Eng::service::InputService::BindingSnapshot snap;
-        snap.name = actionName;
+        std::string actionName = rawActionName;
+        auto legacy = kLegacyActionMap.find(actionName);
+        if (legacy != kLegacyActionMap.end()) {
+            logInfo(logger, "[Game] Migrating legacy binding: "
+                    << rawActionName << " -> " << legacy->second);
+            actionName = legacy->second;
+        }
+
+        auto& target = mergedKeys[actionName];
         for (const auto& k : keysArr) {
             if (!k.is_string()) continue;
             auto kcOpt = Eng::service::KeyCodeFromString(k.get<std::string>());
             if (kcOpt && *kcOpt != Eng::service::KeyCode::None) {
-                snap.keys.push_back(*kcOpt);
+                if (std::find(target.begin(), target.end(), *kcOpt) == target.end()) {
+                    target.push_back(*kcOpt);
+                }
             }
         }
+    }
+
+    std::vector<Eng::service::InputService::BindingSnapshot> bindings;
+    bindings.reserve(mergedKeys.size());
+    for (auto& [name, keys] : mergedKeys) {
+        Eng::service::InputService::BindingSnapshot snap;
+        snap.name = name;
+        snap.keys = std::move(keys);
         bindings.push_back(std::move(snap));
     }
 
     if (!m_inputService->ImportBindings(bindings)) {
-        logWarning(logger, "[Game] Some input bindings in settings.json reference unknown actions "
-                        "(ignored, will use defaults)");
+        logWarning(logger, "[Game] Some input bindings reference unknown actions (ignored)");
     }
 }
 
@@ -264,7 +348,6 @@ bool MyGame::StartLocalServer(bool useMemory, bool createClient, const std::stri
     if (m_server) return true;
 
     auto server = std::make_unique<game::server::GameServer>();
-    // ★ 传入 worldId，底层自动处理硬锁和加载逻辑
     if (!server->Start(25565, worldId, useMemory)) {
         logError(logger, "[Game] Failed to start local server for world: " << worldId);
         m_statusText = "Failed to start: World is locked or corrupted.";
@@ -275,7 +358,6 @@ bool MyGame::StartLocalServer(bool useMemory, bool createClient, const std::stri
         if (useMemory) {
             m_client = std::make_unique<Eng::tool::MemoryClientTransport>(server->GetMemoryPipe());
             m_client->Connect("", 0);
-            logInfo(logger, "[Game] Started memory transport for single player");
         } else {
             m_client = std::make_unique<Eng::tool::NetworkClientTransport>();
             m_client->Connect("127.0.0.1", 25565);
@@ -308,14 +390,34 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
         .windowHeight = 720
     };
 
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+
     winMgr  = engine.GetWindowManager();
     m_win   = winMgr->CreateWindow(windowConfig);
     mainWin = winMgr->GetWindow(m_win);
     if (!mainWin) return false;
 
-    // Input 事件由 WindowService 统一转发给 InputService，业务层不再插手
     mainWin->onEvent = [this](const SDL_Event& e) {
-        ImGui_ImplSDL3_ProcessEvent(&e);   // ImGui 属 UI 层，归业务层管理
+        ImGuiIO& io = ImGui::GetIO();
+
+        // 手动把触摸事件精准映射为 ImGui 的鼠标事件，彻底绕开 SDL3 在安卓上的坐标计算 Bug
+        if (Eng::tool::IsMobilePlatform()) {
+            if (e.type == SDL_EVENT_FINGER_DOWN) {
+                io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+                io.AddMousePosEvent(e.tfinger.x * io.DisplaySize.x, e.tfinger.y * io.DisplaySize.y);
+                io.AddMouseButtonEvent(0, true);
+            } else if (e.type == SDL_EVENT_FINGER_MOTION) {
+                io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+                io.AddMousePosEvent(e.tfinger.x * io.DisplaySize.x, e.tfinger.y * io.DisplaySize.y);
+            } else if (e.type == SDL_EVENT_FINGER_UP || e.type == SDL_EVENT_FINGER_CANCELED) {
+                io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+                io.AddMousePosEvent(e.tfinger.x * io.DisplaySize.x, e.tfinger.y * io.DisplaySize.y);
+                io.AddMouseButtonEvent(0, false);
+            }
+        }
+
+        ImGui_ImplSDL3_ProcessEvent(&e);
+
         switch (e.type) {
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 if (renderer) RecreateFBOs(e.window.data1, e.window.data2);
@@ -353,21 +455,20 @@ void MyGame::RecreateFBOs(int w, int h) {
 }
 
 bool MyGame::SetupRenderer(Eng::Engine& engine) {
+    // 关闭 SDL3 默认的触摸转鼠标，我们将手动在 onEvent 中转换，防止坐标错乱
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     renderer = engine.CreateRenderService(mainWin);
     if (!renderer) {
-        logError(logger, "[Game] Engine failed to create render service: "
-                        << engine.GetLastError());
+        logError(logger, "[Game] Engine failed to create render service: " << engine.GetLastError());
         return false;
     }
 
     m_assetManager = engine.CreateAssetService(renderer);
     if (!m_assetManager) {
-        logError(logger, "[Game] Engine failed to create asset service: "
-                        << engine.GetLastError());
+        logError(logger, "[Game] Engine failed to create asset service: " << engine.GetLastError());
         return false;
     }
 
-    // 立刻利用 m_assetManager 生成像素数据
     {
         auto tileTints = m_blockRegistry.CollectTileTints();
         client::BuildBlockTextureArray(m_assetManager, tileTints);
@@ -422,7 +523,6 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     float dpiScale = SDL_GetWindowDisplayScale(mainWin->GetSDLWindow());
     if (dpiScale <= 0.0f) dpiScale = 1.0f;
     m_uiScale = dpiScale;
-
     style.FontScaleMain = dpiScale; 
 
     static const ImWchar allGlyphs[] = { 0x0020, 0xFFFF, 0 };
@@ -431,7 +531,6 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     fontConfig.OversampleH = 1;
     fontConfig.OversampleV = 1;
     fontConfig.PixelSnapH = true;
-
     float baseFontSize = 16.0f;
 
     ImFont* unifont = nullptr;
@@ -444,19 +543,13 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
         ImFontConfig memFontConfig = fontConfig;
         memFontConfig.FontDataOwnedByAtlas = true;
 
-        unifont = io.Fonts->AddFontFromMemoryTTF(
-            fontMem, 
-            static_cast<int>(fontSize), 
-            baseFontSize,
-            &memFontConfig, 
-            allGlyphs
-        );
+        unifont = io.Fonts->AddFontFromMemoryTTF(fontMem, static_cast<int>(fontSize), baseFontSize, &memFontConfig, allGlyphs);
     }
     if (!unifont) {
         logError(logger, "[Game] Failed to load Unifont, falling back to default font.");
         io.Fonts->AddFontDefault();
     } else {
-        logInfo(logger, "[Game] Loaded Unifont with all BMP glyphs at size " << baseFontSize << " (Scale: " << dpiScale << ")");
+        logInfo(logger, "[Game] Loaded Unifont at size " << baseFontSize << " (Scale: " << dpiScale << ")");
     }
 
     try {
@@ -467,16 +560,13 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     }
 
     m_playerTexture = m_assetManager->LoadTexture("assets/textures/entity/player.png");
-    if (!m_playerTexture) {
-        logWarning(logger, "[MyGame] Player texture failed to load, using fallback (nullptr)");
-    }
+    if (!m_playerTexture) logWarning(logger, "[MyGame] Player texture failed to load.");
 
-    // 4. 现在像素数据已经有了，直接创建 GPU 纹理数组
     const auto& pixels = client::GetTextureArrayPixels();
     int layerCount = client::GetTextureLayerCount();
     
     if (pixels.empty() || layerCount == 0) {
-        logError(logger, "[MyGame] Fatal: Texture Array pixels are empty! Aborting texture creation.");
+        logError(logger, "[MyGame] Fatal: Texture Array pixels are empty!");
         return false; 
     }
 
@@ -484,7 +574,7 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     tci.pixels = std::as_bytes(std::span(pixels));
     tci.width = client::TILE_SIZE;
     tci.height = client::TILE_SIZE;
-    tci.arrayLayers = layerCount;       // 告诉底层这是一个多层的 Array 纹理
+    tci.arrayLayers = layerCount;
     tci.format = Eng::service::rhi::TextureFormat::RGBA8_UNORM;
     tci.requestedMips = 0; 
     tci.magFilter = Eng::service::rhi::FilterMode::Nearest;                     
@@ -495,10 +585,10 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
 
     m_atlasTexture = renderer->CreateTexture(tci);
     if (!m_atlasTexture) {
-        logError(logger, "[MyGame] Failed to create texture array on GPU.");
+        logError(logger, "[MyGame] Failed to create texture array.");
         return false;
     }
-    logInfo(logger, "[MyGame] texture array created with " << layerCount << " layers");
+    logInfo(logger, "[MyGame] Texture array created with " << layerCount << " layers");
 
     RecreateFBOs(mainWin->GetConfigs().windowPixelWidth, mainWin->GetConfigs().windowPixelHeight);
     if (!m_mainFbo) {
@@ -506,10 +596,7 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
         return false;
     }
 
-    m_globalStateUBO = renderer->CreateBuffer({
-        .size  = sizeof(GlobalState),
-        .usage = Eng::service::rhi::BufferUsage::Uniform
-    });
+    m_globalStateUBO = renderer->CreateBuffer({ .size = sizeof(GlobalState), .usage = Eng::service::rhi::BufferUsage::Uniform });
     if (!m_globalStateUBO) {
         logError(logger, "[Game] Failed to create GlobalState UBO");
         return false;
@@ -520,74 +607,53 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
 }
 
 void MyGame::SetupShaders() {
-    m_cubeShader = m_assetManager->LoadShader(
-        m_assetManager->MakeShaderCreateInfo("mesh"));
-
-    m_lodShader = m_assetManager->LoadShader(
-        m_assetManager->MakeShaderCreateInfo("lod"));
-
-    m_skyShader = m_assetManager->LoadShader(
-        m_assetManager->MakeShaderCreateInfo("sky",
-            Eng::service::rhi::GraphicsPipelineState::PresetSkybox(),
-            Eng::service::rhi::VertexLayout::Skybox));
-
-    m_entityShader = m_assetManager->LoadShader(
-        m_assetManager->MakeShaderCreateInfo("entity",
-            Eng::service::rhi::GraphicsPipelineState::PresetOpaque(),
-            Eng::service::rhi::VertexLayout::Standard,
-            sizeof(Eng::service::rhi::PerObjectData)));
-
-    m_handShader = m_assetManager->LoadShader(
-        m_assetManager->MakeShaderCreateInfo("entity",
-            Eng::service::rhi::GraphicsPipelineState::PresetHand(),
-            Eng::service::rhi::VertexLayout::Standard,
-            sizeof(Eng::service::rhi::PerObjectData)));
+    m_cubeShader   = m_assetManager->LoadShader(m_assetManager->MakeShaderCreateInfo("mesh"));
+    m_lodShader    = m_assetManager->LoadShader(m_assetManager->MakeShaderCreateInfo("lod"));
+    m_skyShader    = m_assetManager->LoadShader(m_assetManager->MakeShaderCreateInfo("sky", Eng::service::rhi::GraphicsPipelineState::PresetSkybox(), Eng::service::rhi::VertexLayout::Skybox));
+    m_entityShader = m_assetManager->LoadShader(m_assetManager->MakeShaderCreateInfo("entity", Eng::service::rhi::GraphicsPipelineState::PresetOpaque(), Eng::service::rhi::VertexLayout::Standard, sizeof(Eng::service::rhi::PerObjectData)));
+    m_handShader   = m_assetManager->LoadShader(m_assetManager->MakeShaderCreateInfo("entity", Eng::service::rhi::GraphicsPipelineState::PresetHand(), Eng::service::rhi::VertexLayout::Standard, sizeof(Eng::service::rhi::PerObjectData)));
 
     if (!m_cubeShader || !m_skyShader || !m_lodShader || !m_entityShader || !m_handShader) {
-        std::string err = "核心着色器加载失败！请检查 assets/shaders/build/ 目录下是否存在对应的 SPIR-V (.spv) 文件。";
+        std::string err = "核心着色器加载失败！请检查 assets/shaders/build/ 目录。";
         logFatal(logger, "[MyGame] " << err);
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Shader Load Error", err.c_str(), nullptr);
         throw std::runtime_error(err);
     }
 }
 
-// ============================================================
 // 核心循环
-// ============================================================
 void MyGame::OnStart(Eng::Engine& engine) {
     if (!logger) logger = std::make_unique<Eng::tool::Log>();
 
     if (engine.IsDedicatedServer()) {
         if (!StartLocalServer(false, false, "world_server")) {
-            logError(logger, "[Game] Failed to start dedicated server");
             m_shouldQuit = true;
             return;
         }
-        logInfo(logger, "[Game] Running as dedicated server");
         return;
     }
 
-    // 缓存 InputService 观察指针（Engine 持有，此处只为方便访问）
     m_inputService = engine.GetInputService();
     if (!m_inputService) {
-        logError(logger, "[Game] InputService is null (Engine::Init failed?)");
         m_shouldQuit = true;
         return;
     }
 
-    // 先注册 action（引擎侧注册表），再加载用户配置（可能覆盖默认键位）
     RegisterGameActions();
+    LoadSettings(engine);   
 
-    LoadSettings(engine);   // 内部会 ImportBindings 覆盖默认值
+    if (m_inputMode == InputMode::Auto) {
+        m_activeInputMode = Eng::tool::IsMobilePlatform() ? InputMode::Touch : InputMode::KeyboardMouse;
+    } else {
+        m_activeInputMode = m_inputMode;
+    }
 
-    // 1. 加载方块注册表（不依赖任何 RHI 服务）
     m_blockRegistry.LoadAll("assets/block");
 
     try {
         if (!SetupWindow(engine)) return;
         if (!mainWin->GetFallbackReason().empty()) {
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "图形 API 降级",
-                                     mainWin->GetFallbackReason().c_str(), nullptr);
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "图形 API 降级", mainWin->GetFallbackReason().c_str(), nullptr);
         }
     } catch (const std::exception& e) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "无法启动渲染器", e.what(), nullptr);
@@ -607,7 +673,7 @@ void MyGame::OnStart(Eng::Engine& engine) {
     m_state = GameState::MainMenu;
 }
 
-bool MyGame::OnUpdate(Eng::Engine&  /*engine*/, float deltaTime) {
+bool MyGame::OnUpdate(Eng::Engine& /*engine*/, float deltaTime) {
     if (m_minimized) {
         SDL_Delay(16);
         return false;
@@ -621,7 +687,9 @@ bool MyGame::OnUpdate(Eng::Engine&  /*engine*/, float deltaTime) {
 
     const bool wantRelative = (m_state == GameState::Playing) && !m_menuOpen;
     if (wantRelative != m_relativeMode) {
-        if (m_inputService) {
+        // 移动端禁止开启 SetRelativeMode（会导致触摸坐标异常）。
+        // 外接鼠标在移动端直接用绝对坐标工作即可。
+        if (m_inputService && m_activeInputMode == InputMode::KeyboardMouse && !Eng::tool::IsMobilePlatform()) {
             m_inputService->SetRelativeMode(mainWin->GetSDLWindow(), wantRelative);
         }
         m_relativeMode = wantRelative;
@@ -648,7 +716,6 @@ bool MyGame::OnUpdate(Eng::Engine&  /*engine*/, float deltaTime) {
         return m_shouldQuit;
     }
 
-    // —— 物理步进 ——
     game::PlayerMotion m;
     m.position = cameraPos;
     m.velocity = m_playerVelocity;
@@ -667,7 +734,6 @@ bool MyGame::OnUpdate(Eng::Engine&  /*engine*/, float deltaTime) {
     cameraPos      += m_positionError * t;
     m_positionError *= (1.0f - t);
 
-    // —— 时间 & 光照 ——
     float hoursPerSec = 24.0f / kDayLengthSec;
     m_timeOfDay = std::fmod(m_timeOfDay + hoursPerSec * deltaTime, 24.0f);
 
@@ -678,8 +744,7 @@ bool MyGame::OnUpdate(Eng::Engine&  /*engine*/, float deltaTime) {
     float sunI = glm::clamp(sunH * 2.5f, 0.0f, 0.85f);
     float warm = 1.0f - glm::clamp(sunH * 3.0f, 0.0f, 1.0f);
     glm::vec3 sunColor = glm::mix(glm::vec3(1.0f, 1.0f, 1.0f), glm::vec3(1.0f, 0.5f, 0.2f), warm);
-    glm::vec3 ambient  = glm::mix(glm::vec3(0.1f, 0.12f, 0.2f), glm::vec3(0.35f, 0.4f, 0.45f),
-                                  glm::clamp(sunH * 2.0f, 0.0f, 1.0f));
+    glm::vec3 ambient  = glm::mix(glm::vec3(0.1f, 0.12f, 0.2f), glm::vec3(0.35f, 0.4f, 0.45f), glm::clamp(sunH * 2.0f, 0.0f, 1.0f));
 
     m_globalState.lightDir       = sunDir;
     m_globalState.lightColor     = sunColor;
@@ -687,16 +752,13 @@ bool MyGame::OnUpdate(Eng::Engine&  /*engine*/, float deltaTime) {
     m_globalState.lightAmbient   = ambient;
     m_globalState.timeOfDay      = m_timeOfDay;
 
-    // —— 输入 ——
     if (GetInput(deltaTime)) return true;
 
-    // —— 网络收包 ——
     std::vector<uint8_t> data;
     while (m_client->Receive(data)) {
         HandleServerMessage(data);
     }
 
-    // —— 掉落物插值 / 拾取动画 ——
     constexpr float PICKUP_TIME = 0.2f;
     for (auto it = m_itemEntities.begin(); it != m_itemEntities.end(); ) {
         auto& e = it->second;
@@ -709,8 +771,7 @@ bool MyGame::OnUpdate(Eng::Engine&  /*engine*/, float deltaTime) {
                 continue;
             }
             glm::vec3 target = cameraPos + glm::vec3(0.0f, PLAYER_EYE / 2, 0.0f);
-            float pickupT = e.pickupT;
-            pickupT = pickupT * pickupT;
+            float pickupT = e.pickupT * e.pickupT;
             e.renderPos = glm::mix(e.pickupStart, target, pickupT);
             ++it;
             continue;
@@ -724,7 +785,6 @@ bool MyGame::OnUpdate(Eng::Engine&  /*engine*/, float deltaTime) {
         ++it;
     }
 
-    // —— 区块流式 ——
     m_world.UpdateStreaming(cameraPos, m_renderDistance,
         [this](int cx, int cz) {
             Eng::tool::MessageWriter w;
@@ -785,9 +845,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
     m_globalState.viewPos    = cameraPos;
     m_globalState.aoStrength = engine.GetConfig().render.m_aoStrength;
 
-    renderer->UpdateBuffer(
-        m_globalStateUBO, 0,
-        std::as_bytes(std::span<const GlobalState>(&m_globalState, 1)));
+    renderer->UpdateBuffer(m_globalStateUBO, 0, std::as_bytes(std::span<const GlobalState>(&m_globalState, 1)));
 
     const glm::vec4 clearColor = (m_state == GameState::Playing)
         ? glm::vec4(0.5f, 0.7f, 1.0f, 1.0f)
@@ -876,7 +934,9 @@ void MyGame::OnRender(Eng::Engine& engine) {
         m_sceneRenderer->EndScene(frameFrustum, m_cubeShader, m_atlasTexture);
     }
 
+    // 把 UI 处理完全交还给 ClientUI
     m_ui.Draw(engine, *this);
+    
     renderer->EndFrame();
 }
 
@@ -901,9 +961,7 @@ void MyGame::OnShutdown(Eng::Engine& /*engine*/) {
     m_win          = 0;
 }
 
-// ============================================================
 // 游戏生命周期
-// ============================================================
 void MyGame::EnterGame() {
     logInfo(logger, "[Game] Entering game session...");
 
@@ -985,7 +1043,7 @@ void MyGame::ExitGame() {
     m_knownSceneChunks.clear();
 
     m_state = GameState::MainMenu;
-    m_selectedWorldId.clear(); // ★ 退出时清空当前选中的世界
+    m_selectedWorldId.clear();
     m_menuOpen = false;
     m_statusText.clear();
 
@@ -999,17 +1057,14 @@ void MyGame::ReturnToMainMenu() {
     logInfo(logger, "[Game] Returned to main menu");
 }
 
-// ============================================================
 // 输入
-// ============================================================
 bool MyGame::GetInput(float dt) {
     if (!m_inputService) return m_shouldQuit;
-
-    // ---- UI 层开关 ----
+    
+    UpdateActiveInputMode();
     if (m_inputService->IsActionPressed(A_OpenMenu)) m_menuOpen = !m_menuOpen;
     if (m_menuOpen) return m_shouldQuit;
-
-    // ---- 玩家动作 ----
+    
     if (m_inputService->IsActionPressed(A_ToggleFly)) {
         m_flyMode = !m_flyMode;
         m_positionError  = glm::vec3(0.0f);
@@ -1020,39 +1075,38 @@ bool MyGame::GetInput(float dt) {
         auto& configs = mainWin->GetConfigs();
         configs.fullscreen = !configs.fullscreen;
         mainWin->SetFullscreen(configs.fullscreen);
-        RecreateFBOs(mainWin->GetConfigs().windowPixelWidth,
-                     mainWin->GetConfigs().windowPixelHeight);
+        RecreateFBOs(mainWin->GetConfigs().windowPixelWidth, mainWin->GetConfigs().windowPixelHeight);
     }
 
     if (m_inputService->IsActionPressed(A_ToggleDebug)) m_showDebug = !m_showDebug;
 
-    // ---- 视角（鼠标增量保留在 InputService 底层，不进 action 层） ----
-    glm::vec2 mouseDelta = m_inputService->GetMouseDelta();
-    ImGuiIO& io = ImGui::GetIO();
-    if (!io.WantCaptureMouse) {
-        yaw   += mouseDelta.x * 0.1f;
-        pitch -= mouseDelta.y * 0.1f;
-        pitch  = glm::clamp(pitch, -89.0f, 89.0f);
+    // 键鼠视角（只在 Keyboard & Mouse 模式下处理）
+    if (m_activeInputMode == InputMode::KeyboardMouse) {
+        glm::vec2 mouseDelta = m_inputService->GetMouseDelta();
+        ImGuiIO& io = ImGui::GetIO();
+        if (!io.WantCaptureMouse) {
+            yaw   += mouseDelta.x * 0.1f;
+            pitch -= mouseDelta.y * 0.1f;
+            pitch  = glm::clamp(pitch, -89.0f, 89.0f);
+        }
     }
-
+    
     glm::vec3 mousefront;
     mousefront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
     mousefront.y = sin(glm::radians(pitch));
     mousefront.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
     cameraFront = glm::normalize(mousefront);
 
-    // ---- 水平移动：GetMoveDir 返回 (x=右正左负, y=前正后负)，magnitude ≤ 1 ----
-    // 未来虚拟摇杆接进来后，这里不需要任何改动。
+    // 移动
     glm::vec2 moveLocal = m_inputService->GetMoveDir();
-
     glm::vec3 forward = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
     glm::vec3 right   = glm::normalize(glm::cross(forward, glm::vec3(0, 1, 0)));
     glm::vec3 moveDir = forward * moveLocal.y + right * moveLocal.x;
 
-    // ---- 垂直移动（fly 模式） ----
+    // 飞行模式：Jump = 上升，Sneak = 下降（不再有独立 FlyUp / FlyDown）
     if (m_flyMode) {
-        if (m_inputService->IsActionDown(A_FlyUp))   moveDir.y += 1.0f;
-        if (m_inputService->IsActionDown(A_FlyDown)) moveDir.y -= 1.0f;
+        if (m_inputService->IsActionDown(A_Jump))  moveDir.y += 1.0f;
+        if (m_inputService->IsActionDown(A_Sneak)) moveDir.y -= 1.0f;
     }
     if (glm::length(moveDir) > 0.001f) moveDir = glm::normalize(moveDir);
 
@@ -1061,9 +1115,12 @@ bool MyGame::GetInput(float dt) {
     m_lastMoveDir    = moveDir;
     netInput.look    = glm::vec2(glm::radians(yaw), glm::radians(pitch));
 
-    // ---- 跳跃（fly 模式下忽略；FlyUp 独立 action 处理垂直） ----
-    if (!m_flyMode && m_inputService->IsActionDown(A_Jump)) {
-        m_jumpHoldTimer = 0.2f;
+    // 非飞行模式：Jump = 跳跃；Sneak = 下蹲（待 v0.4.0 StepPlayer 支持 crouch 后接入）
+    if (!m_flyMode) {
+        if (m_inputService->IsActionDown(A_Jump)) {
+            m_jumpHoldTimer = 0.2f;
+        }
+        // TODO(v0.4.0): Sneak 下蹲 —— StepPlayer 增加 crouch 参数后在此接线
     }
     m_jumpHoldTimer = std::max(0.0f, m_jumpHoldTimer - dt);
     netInput.jump   = (!m_flyMode && m_jumpHoldTimer > 0.0f);
@@ -1071,12 +1128,10 @@ bool MyGame::GetInput(float dt) {
     m_placeCooldown = std::max(0.0f, m_placeCooldown - dt);
     m_digCooldown   = std::max(0.0f, m_digCooldown   - dt);
 
-    // ---- 滚轮切快捷栏 ----
     float scroll = m_inputService->GetScrollDelta();
     if (scroll > 0) m_hotbarIndex = (m_hotbarIndex - 1 + kHotbarSize) % kHotbarSize;
     if (scroll < 0) m_hotbarIndex = (m_hotbarIndex + 1) % kHotbarSize;
 
-    // ---- 数字键快捷栏（0-based 语义：HotbarSlot0 → m_hotbar[0]） ----
     if (m_inputService->IsActionPressed(A_HotbarSlot0)) m_hotbarIndex = 0;
     if (m_inputService->IsActionPressed(A_HotbarSlot1)) m_hotbarIndex = 1;
     if (m_inputService->IsActionPressed(A_HotbarSlot2)) m_hotbarIndex = 2;
@@ -1088,16 +1143,12 @@ bool MyGame::GetInput(float dt) {
     if (m_inputService->IsActionPressed(A_HotbarSlot8)) m_hotbarIndex = 8;
     if (m_hotbarIndex < 0 || m_hotbarIndex >= kHotbarSize) m_hotbarIndex = 0;
 
-    // ---- 挖掘 / 放置 ----
     bool wantDig   = m_inputService->IsActionDown(A_Dig);
     bool wantPlace = m_inputService->IsActionDown(A_Place);
 
     glm::vec3 eyePos = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
     m_currentRayHit = game::RayCast(
-        m_blockRegistry,
-        eyePos,
-        cameraFront,
-        5.0f,
+        m_blockRegistry, eyePos, cameraFront, 5.0f,
         [this](int wx, int wy, int wz) { return this->GetBlockAt(wx, wy, wz); }
     );
 
@@ -1136,14 +1187,47 @@ bool MyGame::GetInput(float dt) {
         m_walkDist = 0.0f;
     }
 
-    if (wantDig && m_digCooldown > 0.0f) {
+    if (wantDig) {
         m_swingProgress += dt * 4.0f;
-        if (m_swingProgress > 1.0f) m_swingProgress = 0.0f;
+        if (m_swingProgress > 1.0f) m_swingProgress -= 1.0f;
     } else {
         m_swingProgress = 0.0f;
     }
 
     return m_shouldQuit;
+}
+
+void MyGame::UpdateActiveInputMode() {
+    if (m_inputMode != InputMode::Auto) {
+        m_activeInputMode = m_inputMode;
+        return;
+    }
+
+    // 动态切换只在“游戏进行中且未打开菜单”时生效
+    if (Eng::tool::IsMobilePlatform() && m_state == GameState::Playing && !m_menuOpen) {
+        bool hasTouch = false;
+        if (m_inputService) {
+            for (const auto& t : m_inputService->GetAllTouches()) {
+                if (t.active) { hasTouch = true; break; }
+            }
+        }
+        
+        if (hasTouch) {
+            m_activeInputMode = InputMode::Touch;
+        } else {
+            auto device = m_inputService->GetLastInputDevice();
+            if (device == Eng::service::InputService::InputDevice::KeyboardMouse) {
+                m_activeInputMode = InputMode::KeyboardMouse;
+            } else {
+                m_activeInputMode = InputMode::Touch; // 默认保持 Touch
+            }
+        }
+    } else {
+        // 主菜单 / 设置菜单：完全交由 ImGui 原生处理，底层设备状态供其他逻辑参考
+        auto device = m_inputService->GetLastInputDevice();
+        if (device == Eng::service::InputService::InputDevice::Touch) m_activeInputMode = InputMode::Touch;
+        else if (device == Eng::service::InputService::InputDevice::KeyboardMouse) m_activeInputMode = InputMode::KeyboardMouse;
+    }
 }
 
 // ============================================================
@@ -1204,11 +1288,13 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             std::span<const BlockId> blockSpan(reinterpret_cast<const BlockId*>(bytes.data()), CHUNK_VOLUME);
 
             auto skyBytes = r.ReadBytes(CHUNK_VOLUME);
-            std::array<uint8_t, CHUNK_VOLUME> skyData;
-            std::memcpy(skyData.data(), skyBytes.data(), CHUNK_VOLUME);
-
             auto blockLightBytes = r.ReadBytes(CHUNK_VOLUME * sizeof(LightRGB));
-            std::array<LightRGB, CHUNK_VOLUME> blockLightData;
+
+            // ★ 优化：避免在栈上分配几百 KB 导致线程爆栈，使用 thread_local 复用内存
+            static thread_local std::array<uint8_t, CHUNK_VOLUME> skyData;
+            static thread_local std::array<LightRGB, CHUNK_VOLUME> blockLightData;
+            
+            std::memcpy(skyData.data(), skyBytes.data(), CHUNK_VOLUME);
             std::memcpy(blockLightData.data(), blockLightBytes.data(), CHUNK_VOLUME * sizeof(LightRGB));
 
             uint64_t key = ChunkKey(cx, cz);
@@ -1241,10 +1327,8 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
                 BlockId oldB = ChunkGet(chunk, lx, ly, lz);
                 ChunkSet(chunk, lx, ly, lz, t);
 
-                // 重算当前区块光照
                 LightEngine::OnBlockChanged(m_blockRegistry, chunk, lx, ly, lz, oldB, t);
 
-                // 标记当前区块及接壤区块为 dirty
                 m_world.MarkDirty(ChunkKey(cx, cz));
                 if (lx == 0)  m_world.MarkDirty(ChunkKey(cx - 1, cz));
                 if (lx == 15) m_world.MarkDirty(ChunkKey(cx + 1, cz));
@@ -1312,8 +1396,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             m_positionError = glm::vec3(0.0f);
             
             m_lodManager.Start(seed);
-            logInfo(logger, "[LOD] Received world seed: " << seed
-                    << " spawn: " << spawn.x << "," << spawn.y << "," << spawn.z);
+            logInfo(logger, "[LOD] Received world seed: " << seed << " spawn: " << spawn.x << "," << spawn.y << "," << spawn.z);
             break;
         }
 
@@ -1354,10 +1437,11 @@ Eng::client::RenderMesh MyGame::BuildPlayerMesh() {
     std::vector<Eng::service::Vertex> vertices;
     std::vector<uint32_t> indices;
 
-    glm::vec4 h_top(8,0,8,8), h_bot(16,0,8,8), h_right(0,8,8,8), h_left(16,8,8,8), h_front(8,8,8,8), h_back(24,8,8,8);
-    glm::vec4 b_top(20,16,8,4), b_bot(28,16,8,4), b_right(16,20,4,12), b_left(28,20,4,12), b_front(20,20,8,12), b_back(32,20,8,12);
-    glm::vec4 ra_top(44,16,4,4), ra_bot(48,16,4,4), ra_right(40,20,4,12), ra_left(48,20,4,12), ra_front(44,20,4,12), ra_back(52,20,4,12);
-    glm::vec4 rl_top(4,16,4,4), rl_bot(8,16,4,4), rl_right(0,20,4,12), rl_left(8,20,4,12), rl_front(4,20,4,12), rl_back(12,20,4,12);
+    // 优化：使用 constexpr 或 static const 避免每次重建时重复构造
+    static const glm::vec4 h_top(8,0,8,8), h_bot(16,0,8,8), h_right(0,8,8,8), h_left(16,8,8,8), h_front(8,8,8,8), h_back(24,8,8,8);
+    static const glm::vec4 b_top(20,16,8,4), b_bot(28,16,8,4), b_right(16,20,4,12), b_left(28,20,4,12), b_front(20,20,8,12), b_back(32,20,8,12);
+    static const glm::vec4 ra_top(44,16,4,4), ra_bot(48,16,4,4), ra_right(40,20,4,12), ra_left(48,20,4,12), ra_front(44,20,4,12), ra_back(52,20,4,12);
+    static const glm::vec4 rl_top(4,16,4,4), rl_bot(8,16,4,4), rl_right(0,20,4,12), rl_left(8,20,4,12), rl_front(4,20,4,12), rl_back(12,20,4,12);
 
     AppendPlayerBox({0.0f, 1.55f, 0.0f}, {0.5f, 0.5f, 0.5f}, h_top, h_bot, h_right, h_left, h_front, h_back, vertices, indices);
     AppendPlayerBox({0.0f, 1.05f, 0.0f}, {0.5f, 0.5f, 0.25f}, b_top, b_bot, b_right, b_left, b_front, b_back, vertices, indices);
@@ -1381,7 +1465,7 @@ Eng::client::RenderMesh MyGame::BuildHandMesh() {
     std::vector<Eng::service::Vertex> vertices;
     std::vector<uint32_t> indices;
 
-    glm::vec4 ra_top(44,16,4,4), ra_bot(48,16,4,4), ra_right(40,20,4,12), ra_left(48,20,4,12), ra_front(44,20,4,12), ra_back(52,20,4,12);
+    static const glm::vec4 ra_top(44,16,4,4), ra_bot(48,16,4,4), ra_right(40,20,4,12), ra_left(48,20,4,12), ra_front(44,20,4,12), ra_back(52,20,4,12);
     AppendPlayerBox({0.0f, 0.0f, 0.0f}, {0.25f, 0.25f, 0.6f}, ra_top, ra_bot, ra_right, ra_left, ra_front, ra_back, vertices, indices);
 
     Eng::client::RenderMesh mesh;
@@ -1410,6 +1494,7 @@ Eng::client::RenderMesh MyGame::BuildSkyboxMesh() {
         v[i].position = { verts[i*3], verts[i*3+1], verts[i*3+2] };
         v[i].normal   = { 0, 0, 0 };
         v[i].uv       = { 0, 0 };
+        v[i].layer    = 0.0f;
         v[i].ao       = 1.0f;
         v[i].light    = glm::vec4(1.0f);
     }
@@ -1484,7 +1569,6 @@ void MyGame::QueueChunkMeshTask(uint64_t key) {
     auto* cZm = m_world.GetChunk(ChunkKey(cx, cz - 1));
     auto* cZp = m_world.GetChunk(ChunkKey(cx, cz + 1));
 
-    // 版本号自增并提交
     uint32_t currentVersion = ++m_chunkMeshVersions[key];
 
     m_meshManager.Submit(
@@ -1499,10 +1583,7 @@ void MyGame::QueueChunkMeshTask(uint64_t key) {
 void MyGame::DrainMeshResults(size_t maxCount) {
     if (!m_sceneRenderer) return;
 
-    // 把 maxCount 传给底层 MeshManager，并在回调中校验版本号
     m_meshManager.DrainResults(maxCount, [this](game::client::MeshResult&& r) {
-        
-        // 1. 版本校验：如果这个结果比当前记录的版本旧，直接丢弃，防止旧网格覆盖新网格
         auto it = m_chunkMeshVersions.find(r.chunkKey);
         if (it != m_chunkMeshVersions.end() && r.version < it->second) {
             return; 
@@ -1515,13 +1596,7 @@ void MyGame::DrainMeshResults(size_t maxCount) {
         bool hasWater  = !r.waterVertices.empty() && !r.waterIndices.empty();
 
         if (hasOpaque) {
-            m_sceneRenderer->OnChunkMeshReady(
-                r.chunkKey,
-                std::move(r.vertices),
-                std::move(r.indices),
-                cc->aabbMin,
-                cc->aabbMax);
-            
+            m_sceneRenderer->OnChunkMeshReady(r.chunkKey, std::move(r.vertices), std::move(r.indices), cc->aabbMin, cc->aabbMax);
             m_knownSceneChunks.insert(r.chunkKey);
         } else {
             m_sceneRenderer->OnChunkUnloaded(r.chunkKey);
@@ -1529,12 +1604,7 @@ void MyGame::DrainMeshResults(size_t maxCount) {
         }
 
         if (hasWater) {
-            m_sceneRenderer->SubmitWaterChunk(
-                r.chunkKey,
-                std::move(r.waterVertices),
-                std::move(r.waterIndices),
-                cc->aabbMin,
-                cc->aabbMax);
+            m_sceneRenderer->SubmitWaterChunk(r.chunkKey, std::move(r.waterVertices), std::move(r.waterIndices), cc->aabbMin, cc->aabbMax);
         } else {
             m_sceneRenderer->RemoveWaterChunk(r.chunkKey);
         }

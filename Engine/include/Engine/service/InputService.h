@@ -120,6 +120,10 @@ public:
     // 成功时整批原子插入。
     bool RegisterActions(std::span<const ActionDesc> descs);
 
+    void InjectActionState(ActionHash a, bool state);
+    void InjectMoveDir(const glm::vec2& dir);
+    void ResetInjectedStates();
+
     // ============================================================
     // Action 查询（ActionHash 版本 = 编译期 hash，零开销）
     // ============================================================
@@ -177,12 +181,20 @@ public:
     // 返回全部槽位（含未激活的），业务层自行过滤 active。
     std::span<const TouchPoint> GetAllTouches() const { return m_touches; }
 
+    enum class InputDevice : std::uint8_t {
+        None,
+        KeyboardMouse,
+        Touch
+    };
+    InputDevice GetLastInputDevice() const { return m_lastInputDevice; }
+
 private:
     struct ActionSlot {
         std::string          name;
         std::string          description;
         std::vector<KeyCode> keys;
         bool                 prevDown = false;  // 上帧结束时的 down 状态（整体状态机用）
+        bool                 injected = false;
     };
 
     // 底层状态
@@ -193,8 +205,10 @@ private:
     glm::vec2 m_mouseDelta  = {0.0f, 0.0f};
     bool      m_firstMouse  = true;
     float     m_scrollDelta = 0.0f;
+    glm::vec2 m_injectedMoveDir = {0.0f, 0.0f};
 
     bool m_relativeMode = false;
+    InputDevice m_lastInputDevice = InputDevice::None;
 
     // Action 表
     std::unordered_map<ActionHash, ActionSlot> m_actions;

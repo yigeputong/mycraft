@@ -211,6 +211,26 @@ void InputService::Update() {
 // SDL 事件转发
 // ============================================================
 void InputService::ProcessEvent(const SDL_Event& event) {
+    // --- 追踪最近使用的设备 ---
+    switch (event.type) {
+        case SDL_EVENT_KEY_DOWN:
+        case SDL_EVENT_KEY_UP:
+        case SDL_EVENT_MOUSE_MOTION:
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+        case SDL_EVENT_MOUSE_WHEEL:
+            m_lastInputDevice = InputDevice::KeyboardMouse;
+            break;
+
+        case SDL_EVENT_FINGER_DOWN:
+        case SDL_EVENT_FINGER_MOTION:
+        case SDL_EVENT_FINGER_UP:
+        case SDL_EVENT_FINGER_CANCELED:
+            m_lastInputDevice = InputDevice::Touch;
+            break;
+        default:
+            break;
+    }
     switch (event.type) {
         case SDL_EVENT_KEY_DOWN: {
             KeyCode kc = SDLToKeyCode(event.key.scancode);
@@ -367,10 +387,27 @@ bool InputService::RegisterActions(std::span<const ActionDesc> descs) {
     return true;
 }
 
+void InputService::InjectActionState(ActionHash a, bool state) {
+    auto it = m_actions.find(a);
+    if (it != m_actions.end()) it->second.injected = state;
+}
+
+void InputService::InjectMoveDir(const glm::vec2& dir) {
+    m_injectedMoveDir = dir;
+}
+
+void InputService::ResetInjectedStates() {
+    for (auto& [h, slot] : m_actions) {
+        slot.injected = false;
+    }
+    m_injectedMoveDir = glm::vec2(0.0f);
+}
+
 // ============================================================
 // Action 查询
 // ============================================================
 bool InputService::ComputeActionDown(const ActionSlot& slot) const {
+    if (slot.injected) return true; // 注入优先
     for (KeyCode k : slot.keys) {
         if (IsKeyDown(k)) return true;
     }
@@ -421,14 +458,14 @@ void InputService::SetMoveActions(ActionHash forward, ActionHash back,
 }
 
 glm::vec2 InputService::GetMoveDir() const {
+    if (glm::length(m_injectedMoveDir) > 1e-4f) {
+        float len = glm::length(m_injectedMoveDir);
+        return len > 1.0f ? (m_injectedMoveDir / len) : m_injectedMoveDir;
+    }
     if (!m_moveBound) return glm::vec2(0.0f);
-
-    const float x = float(IsActionDown(m_moveRight)) - float(IsActionDown(m_moveLeft));
-    const float y = float(IsActionDown(m_moveForward)) - float(IsActionDown(m_moveBack));
+    const float x = static_cast<float>(IsActionDown(m_moveRight)) - static_cast<float>(IsActionDown(m_moveLeft));
+    const float y = static_cast<float>(IsActionDown(m_moveForward)) - static_cast<float>(IsActionDown(m_moveBack));
     glm::vec2 v(x, y);
-
-    // 幅值上限 1：斜向组合 (1,1) → 归一化；单轴保持 magnitude=1。
-    // 为未来 analog（摇杆）预留：只要 action 层扩展为 float value，这里自然支持 0..1。
     const float len = glm::length(v);
     if (len > 1.0f) v /= len;
     return v;
