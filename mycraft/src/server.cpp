@@ -157,6 +157,9 @@ void GameServer::Run() {
     while (m_running.load()) {
         m_server->Update();
 
+        // 每帧刷新锁文件心跳（内部有 1 秒节流，不会频繁 IO）
+        if (m_save) m_save->RefreshLock();
+
         auto now = std::chrono::steady_clock::now();
         float frameTime = std::chrono::duration<float>(now - last).count();
         last = now;

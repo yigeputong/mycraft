@@ -41,9 +41,9 @@ void Window::SetFullscreen(bool enabled) {
         SDL_SetWindowPosition(sdlWin, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
 
+    // 强制同步一次尺寸（重要：让 Vulkan Swapchain 捕获到正确的新尺寸）
     SDL_GetWindowSize(sdlWin, &m_config.windowWidth, &m_config.windowHeight);
     SDL_GetWindowSizeInPixels(sdlWin, &m_config.windowPixelWidth, &m_config.windowPixelHeight);
-    // 删除了 m_renderapi->SetViewport(...)：BeginFrame 每帧自动按窗口尺寸刷新
 }
 
 bool Window::CreateWindow() {
@@ -149,12 +149,15 @@ bool Window::CreateOpenGLWindow() {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, service::OpenGLRenderService::api_major);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, service::OpenGLRenderService::api_minor);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-
+    SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE;
+    if (m_config.fullscreen) {
+        flags |= SDL_WINDOW_FULLSCREEN;
+    }
     m_window = SDL_CreateWindow(
         m_config.title.c_str(),
         m_config.windowWidth,
         m_config.windowHeight,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
+        flags
     );
     if (!m_window) {
         SDL_Log("SDL_CreateWindow Error: %s", SDL_GetError());
@@ -165,11 +168,15 @@ bool Window::CreateOpenGLWindow() {
 }
 
 bool Window::CreateVulkanWindow() {
+    SDL_WindowFlags flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
+    if (m_config.fullscreen) {
+        flags |= SDL_WINDOW_FULLSCREEN;
+    }
     m_window = SDL_CreateWindow(
         m_config.title.c_str(),
         m_config.windowWidth,
         m_config.windowHeight,
-        SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
+        flags
     );
     if (!m_window) {
         SDL_Log("SDL_CreateWindow Error: %s", SDL_GetError());

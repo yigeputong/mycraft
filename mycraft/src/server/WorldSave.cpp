@@ -17,6 +17,18 @@ namespace game::server {
 namespace {
     constexpr const char* SAVES_DIR = "saves";
 
+    // 锁过期阈值：超过此时间未刷新，视为持有者已死
+    // Android 冷启动到点击 Play 通常需要 2~3 秒，5 秒足以避免误判。
+    constexpr int64_t kLockStaleThresholdMs = 5000;
+    
+    // 心跳刷新间隔（毫秒）
+    constexpr int64_t kLockRefreshIntervalMs = 1000;
+
+    int64_t NowMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+
     // 通过尝试打开文件来判断是否存在，代替 fs::exists
     bool FileExists(const std::string& path) {
         SDL_IOStream* io = SDL_IOFromFile(Eng::tool::GetWritablePath(path).c_str(), "r");
@@ -78,18 +90,90 @@ std::string WorldSave::SanitizeName(const std::string& in) {
 
 bool WorldSave::HasLevel()   const { return FileExists(LevelPath()); }
 bool WorldSave::HasChanges() const { return FileExists(ChangesPath()); }
-bool WorldSave::IsLocked()   const { return FileExists(LockPath()); }
+
+bool WorldSave::IsLocked() const {
+    // 先用 SDL 静默判断文件是否存在，避免文件不存在时触发 ReadFileToMemory 的 ERROR 日志
+    if (!FileExists(LockPath())) {
+        return false;
+    }
+
+    std::string path = Eng::tool::GetWritablePath(LockPath());
+    auto data = Eng::tool::ReadFileToMemory(path);
+    if (data.empty()) return false;
+
+    int64_t timestamp = 0;
+    try {
+        auto j = json::parse(data.begin(), data.end());
+        timestamp = j.value("timestamp", (int64_t)0);
+    } catch (...) {
+        // 旧格式纯文本 "locked" 或文件损坏 → 视为过期锁，自动清理
+        SDL_RemovePath(path.c_str());
+        return false;
+    }
+
+    if (timestamp <= 0) {
+        SDL_RemovePath(path.c_str());
+        return false;
+    }
+
+    int64_t now = NowMs();
+    if (now - timestamp > kLockStaleThresholdMs) {
+        // 时间戳过期（大退清后台 / 崩溃 / 僵死）→ 自动清理，允许接管
+        SDL_RemovePath(path.c_str());
+        return false;
+    }
+
+    return true;
+}
 
 bool WorldSave::Lock() {
     if (IsLocked()) return false;
+
+    int64_t now = NowMs();
+    json j;
+    j["timestamp"] = now;
+
     std::string path = Eng::tool::GetWritablePath(LockPath());
-    Eng::tool::WriteStringToFile(path, "locked");
+    if (!Eng::tool::WriteStringToFile(path, j.dump())) return false;
+
+    m_lastLockWriteMs = now;
     return true;
 }
 
 void WorldSave::Unlock() {
     std::string path = Eng::tool::GetWritablePath(LockPath());
     SDL_RemovePath(path.c_str());
+}
+
+void WorldSave::RefreshLock() {
+    int64_t now = NowMs();
+    // 节流：距离上次写入不足 1 秒则跳过
+    if (now - m_lastLockWriteMs < kLockRefreshIntervalMs) return;
+    m_lastLockWriteMs = now;
+
+    json j;
+    j["timestamp"] = now;
+
+    std::string path = Eng::tool::GetWritablePath(LockPath());
+    Eng::tool::WriteStringToFile(path, j.dump());
+}
+
+void WorldSave::CleanupStaleLocks() {
+    std::string savesDir = Eng::tool::GetWritablePath(SAVES_DIR);
+    SDL_CreateDirectory(savesDir.c_str());
+
+    SDL_EnumerateDirectory(savesDir.c_str(),
+        [](void* /*userdata*/, const char* dirname, const char* fname) -> SDL_EnumerationResult {
+            std::string fullPath = std::string(dirname) + "/" + fname;
+            SDL_PathInfo info;
+            if (!SDL_GetPathInfo(fullPath.c_str(), &info)) return SDL_ENUM_CONTINUE;
+            if (info.type != SDL_PATHTYPE_DIRECTORY) return SDL_ENUM_CONTINUE;
+
+            // 构造 WorldSave 并触发 IsLocked() 的自动清理逻辑
+            WorldSave ws(fname);
+            ws.IsLocked(); 
+            return SDL_ENUM_CONTINUE;
+        }, nullptr);
 }
 
 bool WorldSave::LoadLevel(WorldMetadata& outMeta, glm::vec3& outSpawn) {

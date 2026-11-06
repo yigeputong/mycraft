@@ -138,8 +138,7 @@ namespace {
 // 设置持久化
 // ============================================================
 void MyGame::LoadSettings(Eng::Engine& engine) {
-    //   先填默认值（首次运行 + 旧 settings.json 缺新按钮时的双重兜底）
-    //   Jump / Sneak 各自承担"地面/飞行"两种语义，由 GetInput 按 m_flyMode 分流
+    // 先填默认值
     m_virtualButtons = {
         {"OpenMenu", {0.08f, 0.08f}, 0.05f, "⬅️"},
         {"Jump",  {0.88f, 0.85f}, 0.05f, "⬆️"},
@@ -155,19 +154,22 @@ void MyGame::LoadSettings(Eng::Engine& engine) {
     try {
         auto j = json::parse(data.begin(), data.end());
 
+        // --- 窗口配置 ---
         auto& wcfg = engine.GetConfig().window;
-        if (j.contains("apitype")) {
-            int v = j["apitype"];
-            if (v >= 0 && v <= 2) {
-                wcfg.apitype = static_cast<Eng::tool::RenderAPItype>(v);
-            }
-        }
+        if (j.contains("apitype"))    wcfg.apitype    = static_cast<Eng::tool::RenderAPItype>(j["apitype"].get<int>());
+        if (j.contains("fullscreen")) wcfg.fullscreen = j["fullscreen"];
+        if (j.contains("vsync"))      wcfg.vsync      = j["vsync"];
 
+        // --- 渲染配置 ---
         auto& rcfg = engine.GetConfig().render;
         if (j.contains("renderDistance")) m_renderDistance = j["renderDistance"];
         if (j.contains("fov"))            rcfg.fov         = j["fov"];
         if (j.contains("aoStrength"))     rcfg.m_aoStrength = j["aoStrength"];
+        if (j.contains("mipmapLevels"))   rcfg.mipmapLevels = j["mipmapLevels"];
+        if (j.contains("enableAnisotropic")) rcfg.enableAnisotropic = j["enableAnisotropic"];
+        if (j.contains("maxAnisotropy"))     rcfg.maxAnisotropy     = j["maxAnisotropy"];
 
+        // --- 输入与触控 ---
         if (j.contains("input") && j["input"].is_object()) {
             LoadInputBindings(j["input"]);
         }
@@ -185,13 +187,11 @@ void MyGame::LoadSettings(Eng::Engine& engine) {
                 VirtualButtonConfig cfg;
                 cfg.actionName = btn.value("action", "");
 
-                // 过滤已废弃的旧 action（FlyUp→Jump、FlyDown→Sneak 已在 Action 表合并）
                 if (cfg.actionName == "FlyUp" || cfg.actionName == "FlyDown") {
                     logInfo(logger, "[Game] Dropping legacy virtual button: " << cfg.actionName);
                     continue;
                 }
 
-                // 钳制异常旧数据，防止 radius 被写成 0.5+ 导致全屏触发
                 cfg.pos.x = glm::clamp(btn.value("x", 0.5f), 0.02f, 0.98f);
                 cfg.pos.y = glm::clamp(btn.value("y", 0.5f), 0.02f, 0.98f);
                 cfg.radius = glm::clamp(btn.value("radius", 0.05f), 0.02f, 0.12f);
@@ -202,20 +202,14 @@ void MyGame::LoadSettings(Eng::Engine& engine) {
             }
         }
 
-        // ★ 兜底：确保 Jump 与 Sneak 至少各有一个（旧 settings.json 不含它们）
+        // 兜底按钮
         auto hasAction = [this](const std::string& name) {
             return std::any_of(m_virtualButtons.begin(), m_virtualButtons.end(),
                 [&](const VirtualButtonConfig& b) { return b.actionName == name; });
         };
-        if (!hasAction("OpenMenu")) {
-            m_virtualButtons.push_back({"OpenMenu", {0.08f, 0.08f}, 0.05f, "||"});
-        }
-        if (!hasAction("Jump")) {
-            m_virtualButtons.push_back({"Jump",  {0.88f, 0.85f}, 0.06f, "跳"});
-        }
-        if (!hasAction("Sneak")) {
-            m_virtualButtons.push_back({"Sneak", {0.50f, 0.85f}, 0.05f, "降"});
-        }
+        if (!hasAction("OpenMenu")) m_virtualButtons.push_back({"OpenMenu", {0.08f, 0.08f}, 0.05f, "||"});
+        if (!hasAction("Jump"))     m_virtualButtons.push_back({"Jump",  {0.88f, 0.85f}, 0.06f, "跳"});
+        if (!hasAction("Sneak"))    m_virtualButtons.push_back({"Sneak", {0.50f, 0.85f}, 0.05f, "降"});
     } catch (const std::exception& e) {
         logError(logger, "[Game] Failed to parse settings.json: " << e.what());
     }
@@ -223,13 +217,27 @@ void MyGame::LoadSettings(Eng::Engine& engine) {
 
 void MyGame::SaveSettings(Eng::Engine& engine) {
     json j;
-    j["apitype"] = static_cast<int>(engine.GetConfig().window.apitype);
+    
+    // UI 操作的是 mainWin 的配置，所以保存时必须以 mainWin 为准，并同步回 engine
+    auto& wcfg = mainWin ? mainWin->GetConfigs() : engine.GetConfig().window;
+    
+    // 同步给 engine，防止后续逻辑读错
+    engine.GetConfig().window.fullscreen = wcfg.fullscreen;
+    engine.GetConfig().window.vsync      = wcfg.vsync;
+    engine.GetConfig().window.apitype    = wcfg.apitype;
+    j["apitype"]    = static_cast<int>(wcfg.apitype);
+    j["fullscreen"] = wcfg.fullscreen;
+    j["vsync"]      = wcfg.vsync;
 
     auto& rcfg = engine.GetConfig().render;
-    j["renderDistance"] = m_renderDistance;
-    j["fov"]            = rcfg.fov;
-    j["aoStrength"]     = rcfg.m_aoStrength;
+    j["renderDistance"]    = m_renderDistance;
+    j["fov"]               = rcfg.fov;
+    j["aoStrength"]        = rcfg.m_aoStrength;
+    j["mipmapLevels"]      = rcfg.mipmapLevels;
+    j["enableAnisotropic"] = rcfg.enableAnisotropic;
+    j["maxAnisotropy"]     = rcfg.maxAnisotropy;
 
+    // --- 输入与触控 ---
     json jInput;
     SaveInputBindings(jInput);
     j["input"] = std::move(jInput);
@@ -387,7 +395,9 @@ bool MyGame::SetupWindow(Eng::Engine& engine) {
         .apitype      = engine.GetConfig().window.apitype,
         .title        = "Mycraft v" MYCRAFT_VERSION,
         .windowWidth  = 1280,
-        .windowHeight = 720
+        .windowHeight = 720,
+        .fullscreen   = engine.GetConfig().window.fullscreen,
+        .vsync        = engine.GetConfig().window.vsync 
     };
 
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
@@ -668,6 +678,8 @@ void MyGame::OnStart(Eng::Engine& engine) {
     m_meshManager.SetRegistry(&m_blockRegistry);
     m_world.SetRegistry(&m_blockRegistry);
     m_meshManager.Start();
+
+    game::server::WorldSave::CleanupStaleLocks();
 
     RefreshWorldList();
     m_state = GameState::MainMenu;

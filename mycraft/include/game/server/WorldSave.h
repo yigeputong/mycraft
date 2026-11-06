@@ -44,6 +44,13 @@ public:
     bool LoadPlayer(const std::string& name, glm::vec3& pos, float& yaw, float& pitch);
     void SavePlayer(const std::string& name, const glm::vec3& pos, float yaw, float pitch);
 
+    // 心跳刷新锁（内部节流，1 秒最多写一次）
+    void RefreshLock();
+    
+    // 启动时扫描所有世界目录，清理因异常退出遗留的过期锁
+    static void CleanupStaleLocks();
+
+
     // --- 静态工具方法（供 UI 层调用） ---
     
     // 扫描 saves/ 目录下所有合法的存档，按最后游玩时间降序排列
@@ -60,6 +67,9 @@ public:
 private:
     std::string m_worldId; // 纯 ID
     std::string m_dir;     // 完整相对路径 "saves/world_xxx"
+
+    // 心跳节流时间戳
+    int64_t m_lastLockWriteMs = 0;
 
     static constexpr const char* LEVEL_FILE    = "level.json";
     static constexpr const char* LEVEL_TMP     = "level.json.tmp";
