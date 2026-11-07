@@ -1,39 +1,41 @@
 #pragma once
 
-#include "Engine/Engine.h"
-#include "Engine/client/SceneRenderer.h"
-#include "Engine/tool/Transport.h"
-#include "Engine/service/AssetService.h"
-#include "game/Protocol.h"
-#include "game/GameServer.h"
-#include "game/server/WorldSave.h"
-#include "game/core/GameContext.h"
-#include "game/core/RayCast.h"
-#include "game/client/MeshManager.h"
-#include "game/client/ClientUI.h"
-#include "game/client/LODManager.h"
-
+#include <array>
 #include <memory>
+#include <nlohmann/json.hpp>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <array>
-#include <string>
-#include <nlohmann/json.hpp>
+
+#include "Engine/Engine.h"
+#include "Engine/client/SceneRenderer.h"
+#include "Engine/service/AssetService.h"
+#include "Engine/tool/Transport.h"
+
+#include "game/GameServer.h"
+#include "game/Protocol.h"
+#include "game/client/ClientUI.h"
+#include "game/client/LODManager.h"
+#include "game/client/MeshManager.h"
+#include "game/core/GameContext.h"
+#include "game/core/RayCast.h"
+#include "game/server/WorldSave.h"
+
 
 namespace game {
 
 struct GlobalState {
-    glm::mat4 view           = glm::mat4(1.0f);
-    glm::mat4 projection     = glm::mat4(1.0f);
-    glm::vec3 viewPos        = glm::vec3(0.0f);
-    float     aoStrength     = 1.0f;
-    glm::vec3 lightDir       = glm::vec3(0.5f, -1.0f, 0.3f);
-    float     lightIntensity = 1.0f;
-    glm::vec3 lightColor     = glm::vec3(1.0f);
-    float     timeOfDay      = 8.0f;
-    glm::vec3 lightAmbient   = glm::vec3(0.3f);
-    float     _pad2          = 0.0f;
+    glm::mat4 view = glm::mat4(1.0f);
+    glm::mat4 projection = glm::mat4(1.0f);
+    glm::vec3 viewPos = glm::vec3(0.0f);
+    float aoStrength = 1.0f;
+    glm::vec3 lightDir = glm::vec3(0.5f, -1.0f, 0.3f);
+    float lightIntensity = 1.0f;
+    glm::vec3 lightColor = glm::vec3(1.0f);
+    float timeOfDay = 8.0f;
+    glm::vec3 lightAmbient = glm::vec3(0.3f);
+    float _pad2 = 0.0f;
 };
 
 class MyGame : public Eng::IGame {
@@ -47,14 +49,14 @@ private:
     // ================================================================
     // 1. 引擎注入的底层服务 (由 Engine 注入，MyGame 仅借用，不负责销毁)
     // ================================================================
-    Eng::service::WindowService*   winMgr         = nullptr;
-    Eng::tool::Window*             mainWin        = nullptr;
-    Eng::service::IRenderService*  renderer       = nullptr;
-    Eng::service::AssetService*    m_assetManager = nullptr;
-    Eng::service::InputService*    m_inputService = nullptr;
-    uint32_t                       m_win          = 0;
-    Eng::service::DeviceInfo       m_deviceInfo;
-    bool                           m_useVulkan    = false;
+    Eng::service::WindowService* winMgr = nullptr;
+    Eng::tool::Window* mainWin = nullptr;
+    Eng::service::IRenderService* renderer = nullptr;
+    Eng::service::AssetService* m_assetManager = nullptr;
+    Eng::service::InputService* m_inputService = nullptr;
+    uint32_t m_win = 0;
+    Eng::service::DeviceInfo m_deviceInfo;
+    bool m_useVulkan = false;
 
     // ================================================================
     // 2. 游戏状态与全局配置 (驱动主循环的核心变量)
@@ -67,72 +69,72 @@ private:
     };
     GameState m_state = GameState::MainMenu;
 
-    bool m_shouldQuit         = false;
-    bool m_menuOpen           = false;
-    bool m_minimized          = false;
-    bool m_applyPending       = false;
-    bool m_returnToMenuPending= false;
-    bool m_apiChanged         = false;
-    int  m_settingsTab        = 0;
+    bool m_shouldQuit = false;
+    bool m_menuOpen = false;
+    bool m_minimized = false;
+    bool m_applyPending = false;
+    bool m_returnToMenuPending = false;
+    bool m_apiChanged = false;
+    int m_settingsTab = 0;
     std::string m_statusText;
 
     // ================================================================
     // 3. 全局静态资源 (生命周期与 Engine 同寿，在 OnStart / OnShutdown 处理)
     // ================================================================
     game::BlockRegistry m_blockRegistry;
-    game::GameContext   m_ctx{ m_blockRegistry };
-    int                 m_renderDistance    = 32;
-    int                 m_lodRenderDistance = m_renderDistance * 4;
-    bool                m_enableLod         = true;
+    game::GameContext m_ctx{m_blockRegistry};
+    int m_renderDistance = 2;
+    int m_lodRenderDistance = m_renderDistance * 4;
+    bool m_enableLod = false;
 
     // 核心渲染资产 (地形、天空、实体、手部 Shader 及贴图)
-    Eng::service::ShaderPtr      m_cubeShader;
-    Eng::service::ShaderPtr      m_skyShader;
-    Eng::service::ShaderPtr      m_lodShader;
-    Eng::service::ShaderPtr      m_entityShader;
-    Eng::service::ShaderPtr      m_handShader;
-    Eng::service::TexturePtr     m_playerTexture;
-    Eng::service::TexturePtr     m_atlasTexture;
+    Eng::service::ShaderPtr m_cubeShader;
+    Eng::service::ShaderPtr m_skyShader;
+    Eng::service::ShaderPtr m_lodShader;
+    Eng::service::ShaderPtr m_entityShader;
+    Eng::service::ShaderPtr m_handShader;
+    Eng::service::TexturePtr m_playerTexture;
+    Eng::service::TexturePtr m_atlasTexture;
     Eng::service::FramebufferPtr m_mainFbo;
-    Eng::service::BufferPtr      m_globalStateUBO;
+    Eng::service::BufferPtr m_globalStateUBO;
 
     // ================================================================
     // 4. 会话资源 (每次进游戏创建，退游戏销毁)
     // ================================================================
     // --- 4.1 网络相关 ---
-    std::unique_ptr<Eng::tool::IClientTransport>   m_client;
-    std::unique_ptr<game::server::GameServer>      m_server = nullptr;
-    uint32_t                                       m_myClientId = 0;
-    uint32_t                                       m_worldSeed = 0;
+    std::unique_ptr<Eng::tool::IClientTransport> m_client;
+    std::unique_ptr<game::server::GameServer> m_server = nullptr;
+    uint32_t m_myClientId = 0;
+    uint32_t m_worldSeed = 0;
     std::unordered_map<uint32_t, net::PlayerState> m_otherPlayers;
 
     // --- 4.2 世界与后台线程 ---
-    game::client::ClientWorld                    m_world;
-    client::MeshManager                          m_meshManager;
-    client::LodManager                           m_lodManager;
-    std::unordered_set<uint64_t>                 m_knownSceneChunks;
-    std::vector<Eng::client::RenderMesh>         m_visibleLodMeshes;
-    std::unordered_map<uint64_t, uint32_t>       m_chunkMeshVersions;
+    game::client::ClientWorld m_world;
+    client::MeshManager m_meshManager;
+    client::LodManager m_lodManager;
+    std::unordered_set<uint64_t> m_knownSceneChunks;
+    std::vector<Eng::client::RenderMesh> m_visibleLodMeshes;
+    std::unordered_map<uint64_t, uint32_t> m_chunkMeshVersions;
 
     // --- 4.3 渲染大脑 ---
-    std::unique_ptr<Eng::client::SceneRenderer>  m_sceneRenderer;
+    std::unique_ptr<Eng::client::SceneRenderer> m_sceneRenderer;
 
     // --- 4.4 存档与界面交互状态 ---
     std::vector<game::server::WorldMetadata> m_savedWorlds;
     std::string m_selectedWorldId;
     char m_searchBuffer[128] = "";
-    
+
     // 弹窗状态
     bool m_showNewWorldDialog = false;
     char m_newWorldNameBuffer[128] = "";
     char m_newWorldSeedBuffer[64] = "";
     bool m_showDeleteConfirmDialog = false;
     std::string m_worldToDelete;
-    
+
     // 多人连接弹窗
     bool m_showMultiplayerDialog = false;
     char m_ipBuffer[128] = "localhost";
-    int  m_portInput = 25565;
+    int m_portInput = 25565;
 
     // ================================================================
     // 5. 玩家状态与物理 (每次进游戏必须彻底重置)
@@ -141,59 +143,55 @@ private:
     glm::vec3 cameraPos{0.0f, 40.0f, 0.0f};
     glm::vec3 cameraFront{0.0f, 0.0f, -1.0f};
     glm::vec3 cameraUp{0.0f, 1.0f, 0.0f};
-    float yaw   = -90.0f;
-    float pitch =  0.0f;
-    glm::mat4 view       = glm::mat4(1.0f);
+    float yaw = -90.0f;
+    float pitch = 0.0f;
+    glm::mat4 view = glm::mat4(1.0f);
     glm::mat4 projection = glm::mat4(1.0f);
 
     // 物理与移动
     glm::vec3 m_positionError{0.0f};
     glm::vec3 m_playerVelocity{0.0f};
-    bool      m_playerOnGround = false;
+    bool m_playerOnGround = false;
     glm::vec3 m_lastMoveDir{0.0f};
-    game::RayHit m_currentRayHit; // 当前准星指着的方块
-    
+    game::RayHit m_currentRayHit;  // 当前准星指着的方块
+
     // 输入状态与冷却
-    bool  m_flyMode       = true;
-    bool  m_relativeMode  = true;
-    bool  m_showDebug     = true;
+    bool m_flyMode = true;
+    bool m_relativeMode = true;
+    bool m_showDebug = true;
     float m_jumpHoldTimer = 0.0f;
     float m_placeCooldown = 0.0f;
-    float m_digCooldown   = 0.0f;
+    float m_digCooldown = 0.0f;
     static constexpr float kPlaceInterval = 0.2f;
-    static constexpr float kDigInterval   = 0.2f;
+    static constexpr float kDigInterval = 0.2f;
 
     // ================================================================
     // 6. 输入模式与触控 UI 状态 (数据驱动)
     // ================================================================
-    enum class InputMode : std::uint8_t {
-        Auto = 0,
-        KeyboardMouse = 1,
-        Touch = 2
-    };
-    
+    enum class InputMode : std::uint8_t { Auto = 0, KeyboardMouse = 1, Touch = 2 };
+
     InputMode m_inputMode = InputMode::Auto;
     InputMode m_activeInputMode = InputMode::KeyboardMouse;
 
     // 触控参数
     float m_touchSensitivity = 0.15f;
-    float m_touchDeadzone    = 5.0f; // 像素
+    float m_touchDeadzone = 5.0f;  // 像素
 
     // 摇杆状态
     int m_leftTouchId = -1;
-    glm::vec2 m_joystickBasePos   = {0.18f, 0.70f}; 
-    glm::vec2 m_joystickOriginPx  = {0.0f, 0.0f};
+    glm::vec2 m_joystickBasePos = {0.18f, 0.70f};
+    glm::vec2 m_joystickOriginPx = {0.0f, 0.0f};
     glm::vec2 m_joystickCurrentPx = {0.0f, 0.0f};
 
     // 数据驱动虚拟按键
     struct VirtualButtonConfig {
         std::string actionName;
-        glm::vec2 pos = {0.5f, 0.5f}; // 归一化坐标
-        float radius = 0.05f;         // 归一化半径
+        glm::vec2 pos = {0.5f, 0.5f};  // 归一化坐标
+        float radius = 0.05f;          // 归一化半径
         std::string label;
     };
     std::vector<VirtualButtonConfig> m_virtualButtons;
-    bool m_isEditingLayout = false;   // 是否处于拖拽编辑模式
+    bool m_isEditingLayout = false;  // 是否处于拖拽编辑模式
 
     // 时间与动画
     float m_timeOfDay = 8.0f;
@@ -206,18 +204,18 @@ private:
     // 7. 实体、物品与背包
     // ================================================================
     struct ClientItemEntity : game::PointEntity {
-        uint32_t  id          = 0;
-        BlockId   itemType    = AIR_ID;
+        uint32_t id = 0;
+        BlockId itemType = AIR_ID;
         glm::vec3 renderPos{0.0f};
-        glm::vec3 prevPos  {0.0f};
+        glm::vec3 prevPos{0.0f};
         glm::vec3 targetPos{0.0f};
-        float     interpT = 1.0f;
-        bool      pickingUp   = false;
-        float     pickupT     = 0.0f;
+        float interpT = 1.0f;
+        bool pickingUp = false;
+        float pickupT = 0.0f;
         glm::vec3 pickupStart{0.0f};
-        uint32_t  pickerId    = 0;
+        uint32_t pickerId = 0;
     };
-    
+
     std::unordered_map<uint32_t, ClientItemEntity> m_itemEntities;
     std::unordered_map<BlockId, Eng::client::RenderMesh> m_itemMeshCache;
     Eng::client::RenderMesh m_playerMesh;
@@ -225,11 +223,11 @@ private:
     Eng::client::RenderMesh m_skyboxMesh;
 
     // 物品栏与背包
-    static constexpr int kHotbarSize = 9;    // 快捷栏固定 9 格
-    uint8_t m_hotbarIndex = 0;                   // 当前选中的快捷栏索引 (0~8)
+    static constexpr int kHotbarSize = 9;  // 快捷栏固定 9 格
+    uint8_t m_hotbarIndex = 0;             // 当前选中的快捷栏索引 (0~8)
     std::array<ItemStack, 36> m_inventory{};
     int32_t m_inventoryStateId = 0;
-    ItemStack m_heldItemStack{}; // 鼠标当前拿着的物品
+    ItemStack m_heldItemStack{};  // 鼠标当前拿着的物品
     bool m_inventoryOpen = false;
 
     // ================================================================
@@ -239,18 +237,18 @@ private:
     float m_uiScale = 1.0f;
 
     // FPS 与耗时统计
-    float m_lastFrameMs   = 0.0f;
-    float m_fpsTimer      = 0.0f;
-    int   m_fpsFrameCount = 0;
-    float m_fpsAccumMs    = 0.0f;
-    float m_fpsPeakMs     = 0.0f;
+    float m_lastFrameMs = 0.0f;
+    float m_fpsTimer = 0.0f;
+    int m_fpsFrameCount = 0;
+    float m_fpsAccumMs = 0.0f;
+    float m_fpsPeakMs = 0.0f;
 
-    float m_fpsDisplay       = 0.0f;
-    float m_frameMsDisplay   = 0.0f;
-    float m_frameMsAvgDisp   = 0.0f;
-    float m_frameMsPeakDisp  = 0.0f;
+    float m_fpsDisplay = 0.0f;
+    float m_frameMsDisplay = 0.0f;
+    float m_frameMsAvgDisp = 0.0f;
+    float m_frameMsPeakDisp = 0.0f;
 
-    float m_serverTickMs  = 0.0f;
+    float m_serverTickMs = 0.0f;
     float m_serverTickAvg = 0.0f;
     float m_serverTickMax = 0.0f;
 
@@ -288,7 +286,7 @@ private:
     // ================================================================
     Eng::client::RenderMesh BuildPlayerMesh();
     Eng::client::RenderMesh BuildHandMesh();
-    Eng::client::RenderMesh BuildSkyboxMesh(); 
+    Eng::client::RenderMesh BuildSkyboxMesh();
     const Eng::client::RenderMesh& GetOrCreateItemMesh(BlockId id);
     Eng::client::RenderMesh BuildItemCubeMesh(BlockId id);
     void QueueChunkMeshTask(uint64_t key);
@@ -311,4 +309,4 @@ private:
     friend class client::ClientUI;
 };
 
-} // namespace game
+}  // namespace game

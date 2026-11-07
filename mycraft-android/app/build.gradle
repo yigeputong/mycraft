@@ -18,6 +18,12 @@ if (currentAbi == "x86_64") {
     targetTriplet = "arm-android"
 }
 
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace = "com.yigeputong.mycraft"
     compileSdkVersion 35
@@ -29,8 +35,8 @@ android {
 
         minSdkVersion 28
         targetSdkVersion 35
-        versionCode 1
-        versionName "1.0"
+        versionCode 3
+        versionName "0.3.0"
 
         ndk {
            abiFilters 'arm64-v8a'
@@ -48,12 +54,23 @@ android {
         }
     }
 
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             // 替换为官方推荐的新版规则文件
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
         }
     }
 

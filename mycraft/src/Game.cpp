@@ -129,8 +129,9 @@ static constexpr ActionDesc kGameActions[] = {
 void MyGame::LoadSettings(Eng::Engine& engine) {
     // 先填默认值
     m_virtualButtons = {
-        {"OpenMenu", {0.08f, 0.08f}, 0.05f, "⬅️"}, {"Jump", {0.88f, 0.85f}, 0.05f, "⬆️"},
-        {"Dig", {0.75f, 0.88f}, 0.05f, "挖"},     {"Place", {0.62f, 0.85f}, 0.05f, "放"},
+        {"OpenMenu", {0.08f, 0.08f}, 0.05f, "⬅️"},      {"Jump", {0.88f, 0.85f}, 0.05f, "⬆️"},
+        {"OpenBackpack", {0.08f, 0.20f}, 0.05f, "包"}, {"ToggleFly", {0.08f, 0.32f}, 0.05f, "飞"},
+        {"Dig", {0.75f, 0.88f}, 0.05f, "挖"},          {"Place", {0.62f, 0.85f}, 0.05f, "放"},
         {"Sneak", {0.50f, 0.85f}, 0.05f, "⬇️"},
     };
 
@@ -212,6 +213,10 @@ void MyGame::LoadSettings(Eng::Engine& engine) {
         };
         if (!hasAction("OpenMenu"))
             m_virtualButtons.push_back({"OpenMenu", {0.08f, 0.08f}, 0.05f, "||"});
+        if (!hasAction("OpenBackpack"))
+            m_virtualButtons.push_back({"OpenBackpack", {0.08f, 0.20f}, 0.05f, "包"});
+        if (!hasAction("ToggleFly"))
+            m_virtualButtons.push_back({"ToggleFly", {0.08f, 0.32f}, 0.05f, "飞"});
         if (!hasAction("Jump"))
             m_virtualButtons.push_back({"Jump", {0.88f, 0.85f}, 0.06f, "跳"});
         if (!hasAction("Sneak"))

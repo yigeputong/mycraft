@@ -32,6 +32,7 @@ mycraft-android/build/
 mycraft-android/app/build/
 mycraft-android/app/.cxx/
 mycraft-android/local.properties
+mycraft-android/keystore.properties
 mycraft-android/.idea/
 *.apk
 *.aab

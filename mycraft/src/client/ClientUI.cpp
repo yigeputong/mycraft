@@ -1274,7 +1274,7 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
     }
 }
 
-void ClientUI::DrawInventory(Eng::Engine& /*engine*/, MyGame& game) {
+void ClientUI::DrawInventory([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
     if (!game.m_inventoryOpen)
         return;
 
@@ -1298,7 +1298,7 @@ void ClientUI::DrawInventory(Eng::Engine& /*engine*/, MyGame& game) {
         const float GAP = 4.0f;
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
-        // 物品颜色映射 (复用 HUD 里的)
+        // 物品颜色映射
         auto GetItemColor = [&](BlockId type) {
             if (type == game.m_blockRegistry.Get("mycraft:dirt").id)
                 return IM_COL32(110, 75, 50, 255);
@@ -1319,7 +1319,6 @@ void ClientUI::DrawInventory(Eng::Engine& /*engine*/, MyGame& game) {
             dl->AddRectFilled(pos, ImVec2(pos.x + SLOT_SIZE, pos.y + SLOT_SIZE), IM_COL32(40, 40, 40, 255));
             dl->AddRect(pos, ImVec2(pos.x + SLOT_SIZE, pos.y + SLOT_SIZE), IM_COL32(100, 100, 100, 255), 0.0f, 0, 2.0f);
 
-            // 交互判定
             ImGui::InvisibleButton("##slot", ImVec2(SLOT_SIZE, SLOT_SIZE));
             bool hovered = ImGui::IsItemHovered();
 
@@ -1327,11 +1326,9 @@ void ClientUI::DrawInventory(Eng::Engine& /*engine*/, MyGame& game) {
                 dl->AddRect(pos, ImVec2(pos.x + SLOT_SIZE, pos.y + SLOT_SIZE), IM_COL32_WHITE, 0.0f, 0, 2.0f);
             }
 
-            // ================== 本地预测交互逻辑 ==================
             auto& inv = game.m_inventory[slotIndex];
             auto& held = game.m_heldItemStack;
 
-            // 左键点击
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
                 if (held.isEmpty()) {
                     held = inv;
@@ -1348,11 +1345,8 @@ void ClientUI::DrawInventory(Eng::Engine& /*engine*/, MyGame& game) {
                 } else {
                     std::swap(inv, held);
                 }
-                // 发包给服务端：左键 = button 0, mode 0
                 game.SendClickContainer(slotIndex, 0, 0);
-            }
-            // 右键点击
-            else if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+            } else if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
                 if (held.isEmpty()) {
                     int half = (inv.count + 1) / 2;
                     held = inv;
@@ -1373,11 +1367,9 @@ void ClientUI::DrawInventory(Eng::Engine& /*engine*/, MyGame& game) {
                     if (held.count <= 0)
                         held = {};
                 }
-                // 发包给服务端：右键 = button 1, mode 0
                 game.SendClickContainer(slotIndex, 1, 0);
             }
 
-            // 绘制物品
             if (!inv.isEmpty()) {
                 ImU32 itemColor = GetItemColor(inv.type);
                 float inset = SLOT_SIZE * 0.15f;
@@ -1398,12 +1390,39 @@ void ClientUI::DrawInventory(Eng::Engine& /*engine*/, MyGame& game) {
 
         // 1. 绘制主背包 27 格 (索引 9~35)
         ImGui::TextDisabled("Main Inventory");
+
+        // ★ 增加右上角的关闭按钮
+        ImGui::SameLine();
+        // 计算网格总宽度：9 * 50 + 8 * 4 = 482。推到最右侧
+        float gridWidth = 9 * SLOT_SIZE + 8 * GAP;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + gridWidth - 24.0f - GAP);
+        if (ImGui::Button("X", ImVec2(24.0f, 24.0f))) {
+            game.m_inventoryOpen = false;
+            // 如果关闭时鼠标还拿着东西，强制塞回背包或丢弃
+            if (!game.m_heldItemStack.isEmpty()) {
+                bool placed = false;
+                for (int i = 0; i < 36; ++i) {
+                    if (game.m_inventory[i].isEmpty()) {
+                        game.m_inventory[i] = game.m_heldItemStack;
+                        game.m_heldItemStack = {};
+                        placed = true;
+                        game.SendClickContainer(i, 0, 0);  // 发包给服务端
+                        break;
+                    }
+                }
+                if (!placed) {
+                    game.SendClickContainer(-1, 0, 4);  // 背包满了，丢出
+                    game.m_heldItemStack = {};
+                }
+            }
+        }
+
         ImGui::Spacing();
         for (int row = 0; row < 3; ++row) {
             for (int col = 0; col < 9; ++col) {
                 DrawSlot(9 + row * 9 + col);
             }
-            ImGui::NewLine();  // 换行
+            ImGui::NewLine();
         }
 
         ImGui::Spacing();
@@ -1441,8 +1460,13 @@ void ClientUI::DrawInventory(Eng::Engine& /*engine*/, MyGame& game) {
 }
 
 void ClientUI::ProcessTouchInputAndDrawOverlay(Eng::Engine& engine, MyGame& game) {
-    if (game.m_activeInputMode != MyGame::InputMode::Touch && !game.m_isEditingLayout)
+    if (game.m_inventoryOpen || game.m_menuOpen) {
         return;
+    }
+
+    if (game.m_activeInputMode != MyGame::InputMode::Touch && !game.m_isEditingLayout) {
+        return;
+    }
 
     ImGuiIO& io = ImGui::GetIO();
     ImVec2 sz = io.DisplaySize;
@@ -1489,11 +1513,21 @@ void ClientUI::ProcessTouchInputAndDrawOverlay(Eng::Engine& engine, MyGame& game
                     consumedTouches.insert(t.fingerId);
                     isActive = true;
 
-                    // 针对 OpenMenu 特殊处理。
-                    // 原因是注入发生在 Render 阶段，IsActionPressed 会被下一帧的 Update 吞掉边沿。
+                    // 针对特殊 UI 按键（触发型）：只在手指按下的第一帧触发，防止按住时频繁翻转
                     if (btn.actionName == "OpenMenu") {
-                        game.m_menuOpen = true;
+                        if (!t.prevActive) {
+                            game.m_menuOpen = true;
+                        }
+                    } else if (btn.actionName == "OpenBackpack") {
+                        if (!t.prevActive) {
+                            game.m_inventoryOpen = !game.m_inventoryOpen;
+                        }
+                    } else if (btn.actionName == "ToggleFly") {
+                        if (!t.prevActive) {
+                            game.m_flyMode = !game.m_flyMode;
+                        }
                     } else {
+                        // 持续型按键（Jump, Dig, Place, Sneak）继续走持续注入
                         game.m_inputService->InjectActionState(Eng::service::HashActionName(btn.actionName), true);
                     }
                     break;
@@ -1520,6 +1554,13 @@ void ClientUI::ProcessTouchInputAndDrawOverlay(Eng::Engine& engine, MyGame& game
     float baseRadius = sz.x * 0.12f;
     float stickRadius = sz.x * 0.05f;
 
+    // ★ 核心修复：计算快捷栏的顶部 Y 坐标，防止摇杆抢占点击
+    float fontSize = ImGui::GetFontSize();
+    float safeBottom = Eng::tool::IsMobilePlatform() ? fontSize * SAFE_BOTTOM_RATIO : 0.0f;
+    float SLOT = fontSize * 3.5f;
+    // 在快捷栏上方留出 20px 的缓冲带，只要手指点到这个区域以下，就绝对不触发摇杆
+    float hotbarTopY = sz.y - SLOT - safeBottom - fontSize * 1.5f - 20.0f;
+
     if (!game.m_isEditingLayout) {
         // ================= 正常游玩模式 =================
         game.m_leftTouchId = -1;
@@ -1533,6 +1574,11 @@ void ClientUI::ProcessTouchInputAndDrawOverlay(Eng::Engine& engine, MyGame& game
             float pxDeltaY = t.delta.y * sz.y;
 
             if (t.pos.x < 0.5f) {
+                // ★ 如果触摸点在底部的快捷栏区域，直接跳过，不当作摇杆处理
+                if (touchPos.y > hotbarTopY) {
+                    continue;
+                }
+
                 // 左屏虚拟摇杆
                 if (game.m_leftTouchId == -1) {
                     game.m_leftTouchId = static_cast<int>(t.fingerId);
@@ -1613,10 +1659,6 @@ void ClientUI::ProcessTouchInputAndDrawOverlay(Eng::Engine& engine, MyGame& game
     }
 
     // 3. 编辑模式 UI 提示（嵌入 ##EditLayoutRoot 内部，中央面板）
-    //   原实现创建独立的 "##edit_controls" 窗口，但拖拽虚拟按钮时 InvisibleButton
-    //   会 FocusWindow(##EditLayoutRoot) 把全屏 Root 拉到顶层，覆盖掉独立面板 →
-    //   Done & Save 点不动。现在改为在当前窗口（##EditLayoutRoot）内部用
-    //   SetCursorScreenPos + Button 绘制，天然在同一层，无焦点抢占问题。
     if (game.m_isEditingLayout) {
         constexpr float kEditPanelWidth = 240.0f;
         constexpr float kEditPanelHeight = 100.0f;
