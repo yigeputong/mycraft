@@ -627,6 +627,16 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
     }
     renderer->BindUniformBuffer(m_globalStateUBO, 0, 0);
 
+    m_pigModel = game::client::ModelLoader::Load(renderer, m_assetManager, "assets/models/pig.glb",
+                                                 "assets/textures/entity/pig_temperature.png");
+    if (m_pigModel) {
+        m_pigRenderComp.model = m_pigModel.get();
+        m_pigRenderComp.currentClip = "Walk";  // 假设 Blender 里动画叫 Walk，如果没起名就是空字符串，就默认取第一个
+        if (m_pigRenderComp.currentClip.empty() && !m_pigModel->clips.empty()) {
+            m_pigRenderComp.currentClip = m_pigModel->clips.begin()->first;
+        }
+    }
+
     return true;
 }
 
@@ -759,6 +769,10 @@ bool MyGame::OnUpdate(Eng::Engine& /*engine*/, float deltaTime) {
 
     game::StepPlayer(m, m_lastMoveDir, m_jumpHoldTimer > 0.0f, deltaTime,
                      [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
+
+    if (m_pigModel) {
+        UpdateAnimation(m_pigRenderComp, deltaTime);
+    }
 
     cameraPos = m.position;
     m_playerVelocity = m.velocity;
@@ -947,6 +961,12 @@ void MyGame::OnRender(Eng::Engine& engine) {
             basePos.x -= swing * 0.15f;
             basePos.y -= swing * 0.15f;
             basePos.z += swing * 0.1f;
+        }
+
+        if (m_pigModel && m_pigModel->rootNode) {
+            glm::mat4 pigWorld = glm::translate(glm::mat4(1.0f), cameraPos + cameraFront * 5.0f);
+            pigWorld = glm::rotate(pigWorld, glm::radians(yaw + 180.0f), glm::vec3(0, 1, 0));  // 让猪朝向玩家
+            RenderModelNode(m_pigModel->rootNode.get(), pigWorld, m_pigRenderComp);
         }
 
         glm::mat4 handLocalModel = glm::mat4(1.0f);
@@ -1820,6 +1840,79 @@ void MyGame::DrainMeshResults(size_t maxCount) {
             m_sceneRenderer->RemoveWaterChunk(r.chunkKey);
         }
     });
+}
+
+void MyGame::UpdateAnimation(game::client::RenderableComponent& rc, float dt) {
+    if (!rc.model)
+        return;
+    auto it = rc.model->clips.find(rc.currentClip);
+    if (it == rc.model->clips.end())
+        return;
+    const auto& clip = it->second;
+
+    rc.animTime += dt;
+    if (rc.isLooping && clip.duration > 0.0f) {
+        rc.animTime = std::fmod(rc.animTime, clip.duration);
+    } else if (rc.animTime > clip.duration) {
+        rc.animTime = clip.duration;
+    }
+
+    ApplyAnimationToNodes(rc.model->rootNode.get(), clip, rc.animTime);
+}
+
+void MyGame::ApplyAnimationToNodes(game::client::ModelNode* node, const game::client::AnimationClip& clip,
+                                   float animTime) {
+    // 重置动画矩阵
+    node->currentAnimTransform = glm::mat4(1.0f);
+
+    // 查找当前节点是否有动画数据
+    for (const auto& channel : clip.channels) {
+        if (channel.nodeName == node->name && channel.keyframes.size() >= 2) {
+            logInfo(logger, "[Anim] 成功匹配节点: " << node->name);
+            size_t idx1 = 0;
+            for (size_t i = 0; i < channel.keyframes.size(); ++i) {
+                if (channel.keyframes[i].time <= animTime)
+                    idx1 = i;
+                else
+                    break;
+            }
+            size_t idx2 = (idx1 + 1) % channel.keyframes.size();
+
+            const auto& k1 = channel.keyframes[idx1];
+            const auto& k2 = channel.keyframes[idx2];
+
+            float timeDiff = k2.time - k1.time;
+            if (timeDiff < 0.0f && clip.duration > 0.0f)
+                timeDiff += clip.duration;
+            float t = (timeDiff > 0.0f) ? (animTime - k1.time) / timeDiff : 0.0f;
+            if (t < 0.0f)
+                t += 1.0f;
+
+            glm::quat finalRot = glm::slerp(k1.rotation, k2.rotation, t);
+            node->currentAnimTransform = glm::mat4_cast(finalRot);
+            break;
+        }
+    }
+
+    // 递归子节点
+    for (const auto& child : node->children) {
+        ApplyAnimationToNodes(child.get(), clip, animTime);
+    }
+}
+
+void MyGame::RenderModelNode(const game::client::ModelNode* node, const glm::mat4& parentTransform,
+                             const game::client::RenderableComponent& rc) {
+    // 组合基础矩阵和动画矩阵
+    glm::mat4 localMat = node->baseTransform * node->currentAnimTransform;
+    glm::mat4 worldMat = parentTransform * localMat;
+
+    for (uint32_t idx : node->meshIndices) {
+        m_sceneRenderer->SubmitMesh(rc.model->meshes[idx], m_entityShader, rc.model->texture, {.model = worldMat});
+    }
+
+    for (const auto& child : node->children) {
+        RenderModelNode(child.get(), worldMat, rc);
+    }
 }
 
 }  // namespace game

@@ -18,10 +18,10 @@
 #include "game/client/ClientUI.h"
 #include "game/client/LODManager.h"
 #include "game/client/MeshManager.h"
+#include "game/client/ModelLoader.h"
 #include "game/core/GameContext.h"
 #include "game/core/RayCast.h"
 #include "game/server/WorldSave.h"
-
 
 namespace game {
 
@@ -307,6 +307,14 @@ private:
 
     // 允许 ClientUI 访问 MyGame 的私有状态，用于绘制 HUD 与触控界面
     friend class client::ClientUI;
+
+    std::unique_ptr<game::client::LoadedModel> m_pigModel;
+    game::client::RenderableComponent m_pigRenderComp;
+
+    void UpdateAnimation(game::client::RenderableComponent& rc, float dt);
+    void ApplyAnimationToNodes(game::client::ModelNode* node, const game::client::AnimationClip& clip, float animTime);
+    void RenderModelNode(const game::client::ModelNode* node, const glm::mat4& parentTransform,
+                         const game::client::RenderableComponent& rc);
 };
 
 }  // namespace game
