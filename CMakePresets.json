@@ -8,7 +8,9 @@
             "cacheVariables": {
                 "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
                 "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
-                "BUILD_SHARED_LIBS": "ON"
+                "BUILD_SHARED_LIBS": "OFF",
+                "CMAKE_CXX_STANDARD": "23",
+                "CMAKE_CXX_STANDARD_REQUIRED": "ON"
             }
         },
         {
@@ -17,7 +19,7 @@
             "inherits": "base",
             "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-windows",
+                "VCPKG_TARGET_TRIPLET": "x64-windows-static-md",
                 "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
             }
         },
@@ -43,13 +45,13 @@
         },
         {
             "name": "windows-msvc",
-            "displayName": "Windows MSVC",
+            "displayName": "Windows MSVC (Static)",
             "inherits": "windows-base",
             "binaryDir": "${sourceDir}/build/msvc"
         },
         {
             "name": "windows-msvc-asan",
-            "displayName": "Windows MSVC ASan",
+            "displayName": "Windows MSVC ASan (Static)",
             "inherits": "windows-base",
             "binaryDir": "${sourceDir}/build/msvc-asan",
             "cacheVariables": {
@@ -58,7 +60,7 @@
         },
         {
             "name": "windows-clang",
-            "displayName": "Windows Clang",
+            "displayName": "Windows Clang (Static)",
             "inherits": "windows-base",
             "binaryDir": "${sourceDir}/build/clang",
             "cacheVariables": {
@@ -68,13 +70,25 @@
         },
         {
             "name": "windows-clang-asan",
-            "displayName": "Windows Clang ASan",
+            "displayName": "Windows Clang ASan (Static)",
             "inherits": "windows-base",
             "binaryDir": "${sourceDir}/build/clang-asan",
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang-cl",
                 "CMAKE_CXX_COMPILER": "clang-cl",
                 "SANITIZER": "address"
+            }
+        },
+        {
+            "name": "windows-mingw",
+            "displayName": "Windows MinGW (GCC)",
+            "inherits": "base",
+            "binaryDir": "${sourceDir}/build/mingw",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++",
+                "VCPKG_TARGET_TRIPLET": "x64-mingw-static",
+                "CMAKE_MSVC_RUNTIME_LIBRARY": "" 
             }
         },
         {
@@ -168,6 +182,18 @@
             "displayName": "Windows Clang ASan (RelWithDebInfo)",
             "configurePreset": "windows-clang-asan",
             "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "windows-mingw-debug",
+            "displayName": "Windows MinGW Debug",
+            "configurePreset": "windows-mingw",
+            "configuration": "Debug"
+        },
+        {
+            "name": "windows-mingw-release",
+            "displayName": "Windows MinGW Release",
+            "configurePreset": "windows-mingw",
+            "configuration": "Release"
         },
         {
             "name": "linux-gcc-debug",

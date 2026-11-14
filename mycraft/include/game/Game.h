@@ -21,6 +21,7 @@
 #include "game/client/ModelLoader.h"
 #include "game/core/GameContext.h"
 #include "game/core/RayCast.h"
+#include "game/core/ecs/EntityManager.h"
 #include "game/server/WorldSave.h"
 
 namespace game {
@@ -310,6 +311,8 @@ private:
 
     std::unique_ptr<game::client::LoadedModel> m_pigModel;
     game::client::RenderableComponent m_pigRenderComp;
+
+    game::core::ecs::EntityManager m_entityManager;
 
     void UpdateAnimation(game::client::RenderableComponent& rc, float dt);
     void ApplyAnimationToNodes(game::client::ModelNode* node, const game::client::AnimationClip& clip, float animTime);

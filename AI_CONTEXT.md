@@ -84,26 +84,20 @@
 
 ---
 
-## 三、✅ 当前架构现状 (v0.3.0+)
+## 三、✅ 当前架构现状 (v0.4.0-dev)
 
-### 3.1 渲染管线与 RHI
+### 3.1 v0.4.0 ECS 落地现状
 
-* **纹理架构**：彻底废弃 Texture Atlas，全面转向 **Texture Array**。支持 `arrayLayers` 和 `Vertex::layer`，根除渗色和黑线。
-* **MDI 架构**：地形不逐个 Draw，所有区块拼进全局大 Buffer，组装 `DrawIndexedIndirectCommand`，一次性 MDI 画完。
-* **着色器**：全面使用 `ShaderBytecode`（SPIR-V），基于 `GraphicsPipelineState` 数据驱动。
-* **第一人称手臂**：使用 `inverse(view) * handLocalModel` 锚定在相机空间。
+* **ECS 架构已定稿**：摒弃了纯血 Sparse Set，采用 `std::optional` 组合模式，兼顾直观与性能。
+* **实体管理器**：`EntityManager` 已实现，使用带 Generation 的 64 位 `uint64_t` ID 防悬空引用，包含 `Transform`、`Velocity`、`AABB`、`PigAI`、`Renderable` 组件。
+* **模型加载与动画**：Assimp 加载 glTF 完美运行，通过关键帧 `slerp` 插值与 `ModelNode` 树实现猪的交替步行动画。
+* **AI 逻辑修复**：已参考原版 MC 的 `LandRandomPos` 和 `PathNavigation` 实现。猪现在会寻找合法落脚点，撞墙会自动跳跃，被彻底卡住会立刻放弃并转向，解决了之前的“疯狂转圈”与“穿模”问题。
 
-### 3.2 游戏玩法与网络
+### 3.2 任务拆解
 
-* **世界生成**：3D 密度地形 + 节点树拼装 + Domain Warp + 三线性插值。
-* **光照系统**：RGB 三通道 BFS，跨区块 5x5 联合传播，平滑光照接缝消除。
-* **网络**：C2ME 异步架构服务端；服务端权威 36 格背包（带 StateID 校验与全量回推）；权威物理预测。
-
-### 3.3 正在处理：实体模型与动画
-
-* **路线**：使用 Assimp 解析 `.glb`（Blender 导出），但过河拆桥，转换纯 C++ 结构。
-* **动画方案**：放弃蒙皮，采用 **层级刚体 + 关键帧插值 (Slerp)**，通过 `ModelNode` 树和 `AnimationChannel` 驱动。
-* **已定方案**：Blender 模型导出时带 `+Y Up`，C++ 加载时 RootNode 乘 `180° Y轴旋转` 修正朝向；贴图打包成 1 层 Texture Array；已设计 `RenderableComponent` 为 ECS 铺路。
+1. **将世界地形、物理碰撞接入 ECS 系统**（当前猪的移动仅依赖局部 AABB 射线检测）。
+2. **将玩家的生成、移动和背包迁移进 ECS 系统**（剥离 `Game` 中的上帝类物理逻辑）。
+3. **网络同步预热**：为未来的服务端下发做准备，梳理实体生成（EntitySpawn）和实体状态同步（EntityUpdate）协议。
 
 ---
 

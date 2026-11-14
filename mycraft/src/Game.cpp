@@ -774,6 +774,8 @@ bool MyGame::OnUpdate(Eng::Engine& /*engine*/, float deltaTime) {
         UpdateAnimation(m_pigRenderComp, deltaTime);
     }
 
+    m_entityManager.Update(deltaTime, [this](int x, int y, int z) { return this->IsSolidAt(x, y, z); });
+
     cameraPos = m.position;
     m_playerVelocity = m.velocity;
     m_playerOnGround = m.onGround;
@@ -963,11 +965,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
             basePos.z += swing * 0.1f;
         }
 
-        if (m_pigModel && m_pigModel->rootNode) {
-            glm::mat4 pigWorld = glm::translate(glm::mat4(1.0f), cameraPos + cameraFront * 5.0f);
-            pigWorld = glm::rotate(pigWorld, glm::radians(yaw + 180.0f), glm::vec3(0, 1, 0));  // 让猪朝向玩家
-            RenderModelNode(m_pigModel->rootNode.get(), pigWorld, m_pigRenderComp);
-        }
+        m_entityManager.Render(projection * view, m_sceneRenderer.get(), m_entityShader);
 
         glm::mat4 handLocalModel = glm::mat4(1.0f);
         handLocalModel = glm::translate(handLocalModel, basePos);
@@ -1570,6 +1568,38 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             m_lodManager.Start(seed);
             logInfo(logger,
                     "[LOD] Received world seed: " << seed << " spawn: " << spawn.x << "," << spawn.y << "," << spawn.z);
+
+            // ★ 生成 3 只猪
+            for (int i = 0; i < 3; ++i) {
+                auto e = m_entityManager.CreateEntity();
+                auto* entity = m_entityManager.GetEntity(e);
+
+                // 在玩家正前方 5 格，左右散开
+                entity->transform.position = cameraPos + glm::vec3(i * 2.0f - 2.0f, 0.0f, -5.0f);
+
+                // 1. 赋予物理和碰撞组件
+                entity->velocity = game::core::ecs::VelocityComponent{};
+                entity->aabb = game::core::ecs::AABBComponent{};
+
+                // 2. 赋予 AI 组件
+                entity->pigAI = game::core::ecs::PigAIComponent{};
+                entity->pigAI->state = game::core::ecs::PigAIComponent::State::Idle;
+
+                // ★ 修复 1：错开它们的起步发呆时间，避免同时起步
+                entity->pigAI->idleTimer = 1.0f + i * 0.5f;
+
+                // ★ 修复 2：必须给每只猪一个独一无二的随机种子！
+                // 否则它们会用相同的随机序列，导致全朝一个方向走
+                entity->pigAI->rngState = seed + (i + 1) * 1337;
+
+                // 3. 赋予渲染组件
+                entity->renderable = game::core::ecs::RenderableComponent{
+                    .model = m_pigModel.get(), .currentClip = "Walk", .animTime = 0.0f};
+
+                logInfo(logger, "[Game] Spawned Pig " << i << " at " << entity->transform.position.x << ", "
+                                                      << entity->transform.position.y << ", "
+                                                      << entity->transform.position.z);
+            }
             break;
         }
 
@@ -1868,7 +1898,6 @@ void MyGame::ApplyAnimationToNodes(game::client::ModelNode* node, const game::cl
     // 查找当前节点是否有动画数据
     for (const auto& channel : clip.channels) {
         if (channel.nodeName == node->name && channel.keyframes.size() >= 2) {
-            logInfo(logger, "[Anim] 成功匹配节点: " << node->name);
             size_t idx1 = 0;
             for (size_t i = 0; i < channel.keyframes.size(); ++i) {
                 if (channel.keyframes[i].time <= animTime)

@@ -8,6 +8,7 @@ add_library(game-server STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/DensityFunctionJson.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/LightEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/BlockRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/ecs/EntityManager.cpp
 )
 target_include_directories(game-server PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -66,6 +67,12 @@ else()
     add_executable(mycraft-server ${CMAKE_CURRENT_SOURCE_DIR}/src/serverMain.cpp)
     target_include_directories(mycraft-server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_link_libraries(mycraft-server PRIVATE game-server project_options project_sanitizer)
+    # 显式链接 UCRT 库，以匹配 /MD 运行时
+    target_link_libraries(mycraft-server PRIVATE
+        ucrt.lib
+        msvcrt.lib
+        oldnames.lib
+    )
 endif()
 
 # ============================================================

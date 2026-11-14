@@ -91,11 +91,6 @@ std::unique_ptr<LoadedModel> ModelLoader::Load(Eng::service::IRenderService* ren
     };
     model->rootNode = buildTree(scene->mRootNode);
 
-    // ★ 核心修复：模型加载时直接修正坐标系朝向（180度 Y 轴旋转）
-    // 因为 Blender 导出的 +Y Up 在引擎里可能面朝 -Z，需要转过来面朝 +Z 或修正
-    glm::mat4 engineFix = glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0, 1, 0));
-    model->rootNode->baseTransform = engineFix * model->rootNode->baseTransform;
-
     // 3. 解析动画（★ 核心修复：合并所有的动画轨道）
     if (scene->mNumAnimations > 0) {
         AnimationClip clip;
