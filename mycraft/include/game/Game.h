@@ -141,18 +141,10 @@ private:
     // 5. 玩家状态与物理 (每次进游戏必须彻底重置)
     // ================================================================
     // 镜头与视角
-    glm::vec3 cameraPos{0.0f, 40.0f, 0.0f};
-    glm::vec3 cameraFront{0.0f, 0.0f, -1.0f};
-    glm::vec3 cameraUp{0.0f, 1.0f, 0.0f};
-    float yaw = -90.0f;
-    float pitch = 0.0f;
     glm::mat4 view = glm::mat4(1.0f);
     glm::mat4 projection = glm::mat4(1.0f);
 
     // 物理与移动
-    glm::vec3 m_positionError{0.0f};
-    glm::vec3 m_playerVelocity{0.0f};
-    bool m_playerOnGround = false;
     glm::vec3 m_lastMoveDir{0.0f};
     game::RayHit m_currentRayHit;  // 当前准星指着的方块
 
@@ -160,11 +152,15 @@ private:
     bool m_flyMode = true;
     bool m_relativeMode = true;
     bool m_showDebug = true;
-    float m_jumpHoldTimer = 0.0f;
     float m_placeCooldown = 0.0f;
     float m_digCooldown = 0.0f;
     static constexpr float kPlaceInterval = 0.2f;
     static constexpr float kDigInterval = 0.2f;
+
+    game::core::ecs::EntityId m_localPlayerEntity = game::core::ecs::INVALID_ENTITY;
+
+    glm::vec3 ComputeCameraFront();
+    glm::vec3 GetPlayerEyePos();
 
     // ================================================================
     // 6. 输入模式与触控 UI 状态 (数据驱动)

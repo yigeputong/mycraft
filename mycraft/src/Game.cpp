@@ -754,27 +754,35 @@ bool MyGame::OnUpdate(Eng::Engine& /*engine*/, float deltaTime) {
         return m_shouldQuit;
     }
 
-    game::PlayerMotion m;
-    m.position = cameraPos;
-    m.velocity = m_playerVelocity;
-    m.onGround = m_playerOnGround;
-    m.flyMode = m_flyMode;
+    auto* player = m_entityManager.GetEntity(m_localPlayerEntity);
+    if (!player || !player->player) {
+        return m_shouldQuit;
+    }
 
-    game::StepPlayer(m, m_lastMoveDir, m_jumpHoldTimer > 0.0f, deltaTime,
+    // ---- 玩家物理：从 ECS 读 → StepPlayer → 写回 ECS ----
+    game::PlayerMotion motion;
+    motion.position = player->transform.position;
+    motion.velocity = player->player->velocity;
+    motion.onGround = player->player->onGround;
+    motion.flyMode = player->player->flyMode;
+
+    game::StepPlayer(motion, m_lastMoveDir, player->player->jumpHoldTimer > 0.0f, deltaTime,
                      [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
 
-    m_entityManager.Update(deltaTime, [this](int x, int y, int z) { return this->IsSolidAt(x, y, z); }, cameraPos);
+    player->transform.position = motion.position;
+    player->player->velocity = motion.velocity;
+    player->player->onGround = motion.onGround;
 
-    cameraPos = m.position;
-    m_playerVelocity = m.velocity;
-    m_playerOnGround = m.onGround;
+    m_entityManager.Update(
+        deltaTime, [this](int x, int y, int z) { return this->IsSolidAt(x, y, z); }, player->transform.position);
 
+    // 服务端校正残差平滑叠加
     constexpr float CORRECTION_RATE = 8.0f;
     float t = 1.0f - std::exp(-CORRECTION_RATE * deltaTime);
-    cameraPos += m_positionError * t;
-    m_positionError *= (1.0f - t);
+    player->transform.position += player->player->positionError * t;
+    player->player->positionError *= (1.0f - t);
 
-    float hoursPerSec = 24.0f / kDayLengthSec;
+    const float hoursPerSec = 24.0f / kDayLengthSec;
     m_timeOfDay = std::fmod(m_timeOfDay + hoursPerSec * deltaTime, 24.0f);
 
     float angle = (m_timeOfDay / 24.0f) * 6.2831853f - 1.5707963f;
@@ -801,8 +809,15 @@ bool MyGame::OnUpdate(Eng::Engine& /*engine*/, float deltaTime) {
         HandleServerMessage(data);
     }
 
+    // HandleServerMessage 可能触发 EntitySpawn 生成掉落物，导致 vector 扩容
+    // 之前的 player 指针已失效，必须重新获取
+    player = m_entityManager.GetEntity(m_localPlayerEntity);
+    if (!player) {
+        return m_shouldQuit;
+    }
+
     m_world.UpdateStreaming(
-        cameraPos, m_renderDistance,
+        player->transform.position, m_renderDistance,
         [this](int cx, int cz) {
             Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkRequest));
@@ -831,11 +846,28 @@ bool MyGame::OnUpdate(Eng::Engine& /*engine*/, float deltaTime) {
     }
 
     int actualLodDistance = m_enableLod ? m_lodRenderDistance : 0;
-    m_lodManager.Update(cameraPos, m_world, m_renderDistance, actualLodDistance, renderer);
+    m_lodManager.Update(player->transform.position, m_world, m_renderDistance, actualLodDistance, renderer);
 
     DrainMeshResults(16);
 
     return false;
+}
+
+glm::vec3 MyGame::ComputeCameraFront() {
+    auto* player = m_entityManager.GetEntity(m_localPlayerEntity);
+    if (!player)
+        return glm::vec3(0.0f, 0.0f, -1.0f);
+    const float yawRad = glm::radians(player->transform.yaw);
+    const float pitchRad = glm::radians(player->transform.pitch);
+    const float cosPitch = std::cos(pitchRad);
+    return glm::normalize(glm::vec3(std::cos(yawRad) * cosPitch, std::sin(pitchRad), std::sin(yawRad) * cosPitch));
+}
+
+glm::vec3 MyGame::GetPlayerEyePos() {
+    auto* player = m_entityManager.GetEntity(m_localPlayerEntity);
+    if (!player)
+        return glm::vec3(0.0f);
+    return player->transform.position + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
 }
 
 void MyGame::OnRender(Eng::Engine& engine) {
@@ -848,16 +880,18 @@ void MyGame::OnRender(Eng::Engine& engine) {
     }
 
     if (m_state == GameState::Playing) {
-        glm::vec3 eye = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
-        view = glm::lookAt(eye, eye + cameraFront, cameraUp);
+        glm::vec3 eye = GetPlayerEyePos();
+        glm::vec3 front = ComputeCameraFront();
+        view = glm::lookAt(eye, eye + front, glm::vec3(0.0f, 1.0f, 0.0f));
         projection =
             renderer->MakePerspectiveMatrix(glm::radians(engine.GetConfig().render.fov), mainWin->GetAspectRatio(),
                                             engine.GetConfig().render.zNear, engine.GetConfig().render.zFar);
     }
 
+    auto* playerEntity = m_entityManager.GetEntity(m_localPlayerEntity);
     m_globalState.view = view;
     m_globalState.projection = projection;
-    m_globalState.viewPos = cameraPos;
+    m_globalState.viewPos = playerEntity ? playerEntity->transform.position : glm::vec3(0.0f);
     m_globalState.aoStrength = engine.GetConfig().render.m_aoStrength;
 
     renderer->UpdateBuffer(m_globalStateUBO, 0, std::as_bytes(std::span<const GlobalState>(&m_globalState, 1)));
@@ -972,21 +1006,10 @@ void MyGame::EnterGame() {
 
     m_meshManager.Start();
 
-    cameraPos = glm::vec3(0.0f, 40.0f, 0.0f);
-    cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
-    yaw = -90.0f;
-    pitch = 0.0f;
-    m_playerVelocity = glm::vec3(0.0f);
-    m_positionError = glm::vec3(0.0f);
-    m_lastMoveDir = glm::vec3(0.0f);
-    m_playerOnGround = false;
-
     m_timeOfDay = 8.0f;
     m_animTime = 0.0f;
     m_walkDist = 0.0f;
     m_swingProgress = 0.0f;
-
-    m_jumpHoldTimer = 0.0f;
     m_placeCooldown = 0.0f;
     m_digCooldown = 0.0f;
 
@@ -1004,11 +1027,22 @@ void MyGame::EnterGame() {
 
     m_hotbarIndex = 0;
     m_inventoryOpen = false;
+    m_lastMoveDir = glm::vec3(0.0f);
 
     m_entityManager.Clear();
     m_netToEcsMap.clear();
     m_otherPlayers.clear();
     m_myClientId = 0;
+
+    // ★ 创建本地玩家实体
+    m_localPlayerEntity = m_entityManager.CreateEntity();
+    auto* player = m_entityManager.GetEntity(m_localPlayerEntity);
+    if (player) {
+        player->transform.position = glm::vec3(0.0f, 40.0f, 0.0f);
+        player->transform.yaw = -90.0f;
+        player->transform.pitch = 0.0f;
+        player->player = game::core::ecs::PlayerComponent{};
+    }
 
     if (m_sceneRenderer) {
         m_sceneRenderer->Clear();
@@ -1043,6 +1077,7 @@ void MyGame::ExitGame() {
     m_entityManager.Clear();
     m_netToEcsMap.clear();
     m_otherPlayers.clear();
+    m_localPlayerEntity = game::core::ecs::INVALID_ENTITY;
 
     m_playerMesh = {};
     m_handMesh = {};
@@ -1090,58 +1125,50 @@ bool MyGame::GetInput(float dt) {
 
     UpdateActiveInputMode();
 
-    // ==========================================
-    // 1. 全局 UI 开关
-    // ==========================================
+    auto* player = m_entityManager.GetEntity(m_localPlayerEntity);
+    if (!player || !player->player)
+        return m_shouldQuit;
+
     if (m_inputService->IsActionPressed(A_OpenMenu)) {
         m_menuOpen = !m_menuOpen;
         if (m_menuOpen)
-            m_inventoryOpen = false;  // 打开菜单时自动关背包
+            m_inventoryOpen = false;
     }
     if (m_inputService->IsActionPressed(A_OpenBackpack)) {
         m_inventoryOpen = !m_inventoryOpen;
 
-        // 如果关闭背包，且手上还拿着东西
         if (!m_inventoryOpen && !m_heldItemStack.isEmpty()) {
             bool placed = false;
-            // 优先寻找主背包或快捷栏的空位放回去
             for (int i = 0; i < 36; ++i) {
                 if (m_inventory[i].isEmpty()) {
                     m_inventory[i] = m_heldItemStack;
                     m_heldItemStack = {};
                     placed = true;
-                    // 发送左键点击放回该格子
                     SendClickContainer(i, 0, 0);
                     break;
                 }
             }
-            // 如果背包真的满了，再执行丢弃
             if (!placed) {
                 SendClickContainer(-1, 0, 4);
-                m_heldItemStack = {};  // 本地预测清空
+                m_heldItemStack = {};
             }
         }
     }
 
-    // 如果菜单或背包打开，拦截后续游戏内操作
     if (m_menuOpen || m_inventoryOpen) {
-        // 处理背包内的 Q 键丢弃（快捷栏里的物品）
         if (m_inventoryOpen && m_inputService->IsKeyPressed(Eng::service::KeyCode::Q)) {
             auto& curSlot = m_inventory[m_hotbarIndex];
             if (!curSlot.isEmpty()) {
-                SendClickContainer(m_hotbarIndex, 0, 4);  // 丢一个
+                SendClickContainer(m_hotbarIndex, 0, 4);
             }
         }
         return m_shouldQuit;
     }
 
-    // ==========================================
-    // 2. 游戏内视角与移动
-    // ==========================================
     if (m_inputService->IsActionPressed(A_ToggleFly)) {
-        m_flyMode = !m_flyMode;
-        m_positionError = glm::vec3(0.0f);
-        m_playerVelocity = glm::vec3(0.0f);
+        player->player->flyMode = !player->player->flyMode;
+        player->player->positionError = glm::vec3(0.0f);
+        player->player->velocity = glm::vec3(0.0f);
     }
 
     if (m_inputService->IsActionPressed(A_ToggleFullscreen)) {
@@ -1154,31 +1181,25 @@ bool MyGame::GetInput(float dt) {
     if (m_inputService->IsActionPressed(A_ToggleDebug))
         m_showDebug = !m_showDebug;
 
-    // 键鼠视角
+    // 键鼠视角：直接写 ECS transform
     if (m_activeInputMode == InputMode::KeyboardMouse) {
         glm::vec2 mouseDelta = m_inputService->GetMouseDelta();
         ImGuiIO& io = ImGui::GetIO();
         if (!io.WantCaptureMouse) {
-            yaw += mouseDelta.x * 0.1f;
-            pitch -= mouseDelta.y * 0.1f;
-            pitch = glm::clamp(pitch, -89.0f, 89.0f);
+            player->transform.yaw += mouseDelta.x * 0.1f;
+            player->transform.pitch -= mouseDelta.y * 0.1f;
+            player->transform.pitch = glm::clamp(player->transform.pitch, -89.0f, 89.0f);
         }
     }
 
-    glm::vec3 mousefront;
-    mousefront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
-    mousefront.y = sin(glm::radians(pitch));
-    mousefront.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
-    cameraFront = glm::normalize(mousefront);
+    glm::vec3 cameraFront = ComputeCameraFront();
 
-    // 移动
     glm::vec2 moveLocal = m_inputService->GetMoveDir();
     glm::vec3 forward = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
     glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0, 1, 0)));
     glm::vec3 moveDir = forward * moveLocal.y + right * moveLocal.x;
 
-    // 飞行
-    if (m_flyMode) {
+    if (player->player->flyMode) {
         if (m_inputService->IsActionDown(A_Jump))
             moveDir.y += 1.0f;
         if (m_inputService->IsActionDown(A_Sneak))
@@ -1190,20 +1211,15 @@ bool MyGame::GetInput(float dt) {
     game::net::PlayerInput netInput;
     netInput.moveDir = moveDir;
     m_lastMoveDir = moveDir;
-    netInput.look = glm::vec2(glm::radians(yaw), glm::radians(pitch));
+    netInput.look = glm::vec2(glm::radians(player->transform.yaw), glm::radians(player->transform.pitch));
 
-    // 跳跃
-    if (!m_flyMode) {
-        if (m_inputService->IsActionDown(A_Jump)) {
-            m_jumpHoldTimer = 0.2f;
-        }
+    if (!player->player->flyMode) {
+        if (m_inputService->IsActionDown(A_Jump))
+            player->player->jumpHoldTimer = 0.2f;
     }
-    m_jumpHoldTimer = std::max(0.0f, m_jumpHoldTimer - dt);
-    netInput.jump = (!m_flyMode && m_jumpHoldTimer > 0.0f);
+    player->player->jumpHoldTimer = std::max(0.0f, player->player->jumpHoldTimer - dt);
+    netInput.jump = (!player->player->flyMode && player->player->jumpHoldTimer > 0.0f);
 
-    // ==========================================
-    // 3. 快捷栏切换 (使用合并后的 m_inventory)
-    // ==========================================
     m_placeCooldown = std::max(0.0f, m_placeCooldown - dt);
     m_digCooldown = std::max(0.0f, m_digCooldown - dt);
 
@@ -1234,13 +1250,10 @@ bool MyGame::GetInput(float dt) {
     if (m_hotbarIndex < 0 || m_hotbarIndex >= kHotbarSize)
         m_hotbarIndex = 0;
 
-    // ==========================================
-    // 4. 挖掘与放置
-    // ==========================================
     bool wantDig = m_inputService->IsActionDown(A_Dig);
     bool wantPlace = m_inputService->IsActionDown(A_Place);
 
-    glm::vec3 eyePos = cameraPos + glm::vec3(0.0f, PLAYER_EYE, 0.0f);
+    glm::vec3 eyePos = GetPlayerEyePos();
     m_currentRayHit = game::RayCast(m_blockRegistry, eyePos, cameraFront, 5.0f,
                                     [this](int wx, int wy, int wz) { return this->GetBlockAt(wx, wy, wz); });
 
@@ -1252,7 +1265,6 @@ bool MyGame::GetInput(float dt) {
     if (netInput.place)
         m_placeCooldown = kPlaceInterval;
 
-    // 从合并后的快捷栏 0~8 获取当前物品
     auto& curSlot = m_inventory[m_hotbarIndex];
 
     if (curSlot.isEmpty()) {
@@ -1260,18 +1272,13 @@ bool MyGame::GetInput(float dt) {
     } else {
         netInput.placeBlock = curSlot.type;
         if (netInput.place) {
-            // 本地预测扣除
             curSlot.count--;
             if (curSlot.count <= 0)
                 curSlot = game::ItemStack{};
-
-            // 发送放置请求时，服务端其实也应该通过 PlayerInput 扣除背包
-            // 这里假设你服务端的 ApplyPlayerInput 已经处理了扣减逻辑
         }
     }
-    netInput.fly = m_flyMode;
+    netInput.fly = player->player->flyMode;
 
-    // 发送移动与操作包
     Eng::tool::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::PlayerInput));
     w.WriteVec3(netInput.moveDir);
@@ -1283,10 +1290,7 @@ bool MyGame::GetInput(float dt) {
     w.Write(static_cast<uint8_t>(netInput.fly ? 1 : 0));
     m_client->Send(w.GetBuffer());
 
-    // ==========================================
-    // 5. 动画与反馈
-    // ==========================================
-    if (glm::length(moveDir) > 0.1f && m_playerOnGround) {
+    if (glm::length(moveDir) > 0.1f && player->player->onGround) {
         m_walkDist += dt * 10.0f;
     } else {
         m_walkDist = 0.0f;
@@ -1370,13 +1374,16 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
                 ps.pitch = r.Read<float>();
 
                 if (ps.id == m_myClientId) {
-                    glm::vec3 diff = ps.position - cameraPos;
-                    if (glm::length(diff) > 3.0f) {
-                        cameraPos = ps.position;
-                        m_playerVelocity = glm::vec3(0.0f);
-                        m_positionError = glm::vec3(0.0f);
-                    } else {
-                        m_positionError = diff;
+                    auto* player = m_entityManager.GetEntity(m_localPlayerEntity);
+                    if (player && player->player) {
+                        glm::vec3 diff = ps.position - player->transform.position;
+                        if (glm::length(diff) > 3.0f) {
+                            player->transform.position = ps.position;
+                            player->player->velocity = glm::vec3(0.0f);
+                            player->player->positionError = glm::vec3(0.0f);
+                        } else {
+                            player->player->positionError = diff;
+                        }
                     }
                 } else {
                     m_otherPlayers[ps.id] = ps;
@@ -1529,38 +1536,32 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             glm::vec3 spawn = r.ReadVec3();
 
             m_worldSeed = seed;
-            cameraPos = spawn;
-            m_playerVelocity = glm::vec3(0.0f);
-            m_positionError = glm::vec3(0.0f);
+
+            auto* player = m_entityManager.GetEntity(m_localPlayerEntity);
+            if (player && player->player) {
+                player->transform.position = spawn;
+                player->player->velocity = glm::vec3(0.0f);
+                player->player->positionError = glm::vec3(0.0f);
+            }
 
             m_lodManager.Start(seed);
             logInfo(logger,
                     "[LOD] Received world seed: " << seed << " spawn: " << spawn.x << "," << spawn.y << "," << spawn.z);
 
-            // ★ 生成 3 只猪
             for (int i = 0; i < 3; ++i) {
                 auto e = m_entityManager.CreateEntity();
                 auto* entity = m_entityManager.GetEntity(e);
 
-                // 在玩家正前方 5 格，左右散开
-                entity->transform.position = cameraPos + glm::vec3(i * 2.0f - 2.0f, 0.0f, -5.0f);
+                entity->transform.position = spawn + glm::vec3(i * 2.0f - 2.0f, 0.0f, -5.0f);
 
-                // 1. 赋予物理和碰撞组件
                 entity->velocity = game::core::ecs::VelocityComponent{};
                 entity->aabb = game::core::ecs::AABBComponent{};
 
-                // 2. 赋予 AI 组件
                 entity->pigAI = game::core::ecs::PigAIComponent{};
                 entity->pigAI->state = game::core::ecs::PigAIComponent::State::Idle;
-
-                // ★ 修复 1：错开它们的起步发呆时间，避免同时起步
                 entity->pigAI->idleTimer = 1.0f + i * 0.5f;
-
-                // ★ 修复 2：必须给每只猪一个独一无二的随机种子！
-                // 否则它们会用相同的随机序列，导致全朝一个方向走
                 entity->pigAI->rngState = seed + (i + 1) * 1337;
 
-                // 3. 赋予渲染组件
                 entity->renderable = game::core::ecs::RenderableComponent{
                     .model = m_pigModel.get(), .currentClip = "Walk", .animTime = 0.0f};
 

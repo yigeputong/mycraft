@@ -9,7 +9,8 @@ namespace game::core::ecs {
 
 struct TransformComponent {
     glm::vec3 position{0.0f};
-    float yaw = 0.0f;
+    float yaw = 0.0f;    // 水平朝向（度）。约定：front = (cos yaw, 0, sin yaw)
+    float pitch = 0.0f;  // 垂直朝向（度）。仅玩家相机使用，其他实体默认 0
 };
 
 struct VelocityComponent {
@@ -36,7 +37,7 @@ struct PigAIComponent {
     uint32_t rngState = 1337;
 };
 
-// ★ 新增：掉落物组件
+// 掉落物组件
 struct ItemComponent {
     BlockId itemType = AIR_ID;
     int count = 1;
@@ -49,20 +50,31 @@ struct ItemComponent {
     uint32_t pickerId = 0;
 };
 
-// ★ 新增：网络插值组件
+// 网络插值组件
 struct NetInterpolationComponent {
     glm::vec3 prevPos{0.0f};
     glm::vec3 targetPos{0.0f};
     float interpT = 1.0f;
 };
 
-// ★ 改造：渲染组件支持方块和模型
+// ★ 新增：玩家组件
+// 玩家物理权威走 game::StepPlayer，velocity 是完整三维向量，
+// 不复用 VelocityComponent（那是猪的 moveDir+speed 拆分语义）。
+struct PlayerComponent {
+    glm::vec3 velocity{0.0f};  // StepPlayer 权威速度
+    bool onGround = false;
+    bool flyMode = true;
+    float jumpHoldTimer = 0.0f;     // 跳跃输入保持窗口
+    glm::vec3 positionError{0.0f};  // 服务端校正残差（平滑叠加到 transform）
+};
+
+// 渲染组件：模型（猪）与方块（掉落物）二选一
 struct RenderableComponent {
     client::LoadedModel* model = nullptr;
     std::string currentClip = "Walk";
     float animTime = 0.0f;
 
-    BlockId blockType = AIR_ID;  // 如果是方块掉落物，这里存 BlockId
+    BlockId blockType = AIR_ID;
 };
 
 }  // namespace game::core::ecs

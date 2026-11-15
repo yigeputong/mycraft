@@ -24,6 +24,7 @@ struct Entity {
     std::optional<PigAIComponent> pigAI;
     std::optional<ItemComponent> item;
     std::optional<NetInterpolationComponent> netInterp;
+    std::optional<PlayerComponent> player;
     std::optional<RenderableComponent> renderable;
 };
 

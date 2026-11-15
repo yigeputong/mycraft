@@ -154,6 +154,12 @@
             "configuration": "Debug"
         },
         {
+            "name": "windows-msvc-relwithdebinfo",
+            "displayName": "Windows MSVC RelWithDebInfo",
+            "configurePreset": "windows-msvc",
+            "configuration": "RelWithDebInfo"
+        },
+        {
             "name": "windows-msvc-release",
             "displayName": "Windows MSVC Release",
             "configurePreset": "windows-msvc",
@@ -170,6 +176,12 @@
             "displayName": "Windows Clang Debug",
             "configurePreset": "windows-clang",
             "configuration": "Debug"
+        },
+        {
+            "name": "windows-clang-relwithdebinfo",
+            "displayName": "Windows Clang RelWithDebInfo",
+            "configurePreset": "windows-clang",
+            "configuration": "RelWithDebInfo"
         },
         {
             "name": "windows-clang-release",
@@ -202,6 +214,12 @@
             "configuration": "Debug"
         },
         {
+            "name": "linux-gcc-relwithdebinfo",
+            "displayName": "Linux GCC RelWithDebInfo",
+            "configurePreset": "linux-gcc",
+            "configuration": "RelWithDebInfo"
+        },
+        {
             "name": "linux-gcc-release",
             "displayName": "Linux GCC Release",
             "configurePreset": "linux-gcc",
@@ -226,10 +244,22 @@
             "configuration": "Debug"
         },
         {
+            "name": "linux-clang-relwithdebinfo",
+            "displayName": "Linux Clang RelWithDebInfo",
+            "configurePreset": "linux-clang",
+            "configuration": "RelWithDebInfo"
+        },
+        {
             "name": "android-arm64-v8a-debug",
             "displayName": "Android arm64-v8a Debug",
             "configurePreset": "android-arm64-v8a",
             "configuration": "Debug"
+        },
+        {
+            "name": "android-arm64-v8a-relwithdebinfo",
+            "displayName": "Android arm64-v8a RelWithDebInfo",
+            "configurePreset": "android-arm64-v8a",
+            "configuration": "RelWithDebInfo"
         },
         {
             "name": "android-arm64-v8a-release",

@@ -1062,6 +1062,12 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
     }
     ImDrawList* dl = ImGui::GetForegroundDrawList();
 
+    // 统一从 ECS 取本地玩家状态，避免 Debug 段多处判空
+    const auto* localPlayer = game.m_entityManager.GetEntity(game.m_localPlayerEntity);
+    const glm::vec3 playerPos = localPlayer ? localPlayer->transform.position : glm::vec3(0.0f);
+    const float playerYaw = localPlayer ? localPlayer->transform.yaw : 0.0f;
+    const float playerPitch = localPlayer ? localPlayer->transform.pitch : 0.0f;
+
     if (!game.m_inventoryOpen) {
         ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
         float LEN = fontSize * 0.6f, THICK = fontSize * 0.15f, GAP = fontSize * 0.15f;
@@ -1140,7 +1146,7 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         dl->AddRectFilled(p0, p1, bg);
         dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 255), 0, 0, 2.0f);
 
-        // ★ 核心修改：从合并后的 m_inventory 读取前 9 格
+        // 从合并后的 m_inventory 读取前 9 格
         const auto& slot = game.m_inventory[i];
         if (slot.isEmpty())
             continue;
@@ -1209,17 +1215,18 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
         dbgY += lineHeight;
         dbgY += lineHeight * 0.5f;
 
-        int bx = (int)std::floor(game.cameraPos.x);
-        int by = (int)std::floor(game.cameraPos.y);
-        int bz = (int)std::floor(game.cameraPos.z);
-        DrawLineBgLeft(leftX, dbgY, white, "XYZ: %.2f / %.2f / %.2f", game.cameraPos.x, game.cameraPos.y,
-                       game.cameraPos.z);
+        // ★ ECS 玩家位置
+        int bx = (int)std::floor(playerPos.x);
+        int by = (int)std::floor(playerPos.y);
+        int bz = (int)std::floor(playerPos.z);
+        DrawLineBgLeft(leftX, dbgY, white, "XYZ: %.2f / %.2f / %.2f", playerPos.x, playerPos.y, playerPos.z);
         dbgY += lineHeight;
         DrawLineBgLeft(leftX, dbgY, white, "Block: %d, %d, %d", bx, by, bz);
         dbgY += lineHeight;
         DrawLineBgLeft(leftX, dbgY, white, "Chunk: %d, %d", bx >> 4, bz >> 4);
         dbgY += lineHeight;
-        DrawLineBgLeft(leftX, dbgY, white, "Yaw / Pitch: %.1f / %.1f", game.yaw, game.pitch);
+        // ★ ECS 玩家朝向
+        DrawLineBgLeft(leftX, dbgY, white, "Yaw / Pitch: %.1f / %.1f", playerYaw, playerPitch);
         dbgY += lineHeight;
         dbgY += lineHeight * 0.5f;
 
@@ -1468,6 +1475,12 @@ void ClientUI::ProcessTouchInputAndDrawOverlay(Eng::Engine& engine, MyGame& game
         return;
     }
 
+    // ★ 统一从 ECS 取本地玩家，读写朝向/飞行模式
+    auto* localPlayer = game.m_entityManager.GetEntity(game.m_localPlayerEntity);
+    if (!localPlayer || !localPlayer->player) {
+        return;
+    }
+
     ImGuiIO& io = ImGui::GetIO();
     ImVec2 sz = io.DisplaySize;
     ImDrawList* fgDraw = ImGui::GetForegroundDrawList();
@@ -1483,9 +1496,9 @@ void ClientUI::ProcessTouchInputAndDrawOverlay(Eng::Engine& engine, MyGame& game
         bool isHovered = false;
         bool isActive = false;
 
-        // 视觉层的动态标签
+        // 视觉层的动态标签（★ 读 ECS 飞行模式）
         std::string labelToShow = btn.label;
-        if (btn.actionName == "Jump" && game.m_flyMode)
+        if (btn.actionName == "Jump" && localPlayer->player->flyMode)
             labelToShow = "升";
 
         if (game.m_isEditingLayout) {
@@ -1524,7 +1537,10 @@ void ClientUI::ProcessTouchInputAndDrawOverlay(Eng::Engine& engine, MyGame& game
                         }
                     } else if (btn.actionName == "ToggleFly") {
                         if (!t.prevActive) {
-                            game.m_flyMode = !game.m_flyMode;
+                            // ★ 与键盘 GetInput 对齐：翻转飞行模式并清空速度/残差
+                            localPlayer->player->flyMode = !localPlayer->player->flyMode;
+                            localPlayer->player->positionError = glm::vec3(0.0f);
+                            localPlayer->player->velocity = glm::vec3(0.0f);
                         }
                     } else {
                         // 持续型按键（Jump, Dig, Place, Sneak）继续走持续注入
@@ -1554,7 +1570,7 @@ void ClientUI::ProcessTouchInputAndDrawOverlay(Eng::Engine& engine, MyGame& game
     float baseRadius = sz.x * 0.12f;
     float stickRadius = sz.x * 0.05f;
 
-    // ★ 核心修复：计算快捷栏的顶部 Y 坐标，防止摇杆抢占点击
+    // 计算快捷栏的顶部 Y 坐标，防止摇杆抢占点击
     float fontSize = ImGui::GetFontSize();
     float safeBottom = Eng::tool::IsMobilePlatform() ? fontSize * SAFE_BOTTOM_RATIO : 0.0f;
     float SLOT = fontSize * 3.5f;
@@ -1574,7 +1590,7 @@ void ClientUI::ProcessTouchInputAndDrawOverlay(Eng::Engine& engine, MyGame& game
             float pxDeltaY = t.delta.y * sz.y;
 
             if (t.pos.x < 0.5f) {
-                // ★ 如果触摸点在底部的快捷栏区域，直接跳过，不当作摇杆处理
+                // 如果触摸点在底部的快捷栏区域，直接跳过，不当作摇杆处理
                 if (touchPos.y > hotbarTopY) {
                     continue;
                 }
@@ -1601,12 +1617,12 @@ void ClientUI::ProcessTouchInputAndDrawOverlay(Eng::Engine& engine, MyGame& game
                     game.m_inputService->InjectMoveDir(glm::vec2(diffX / maxRadius, -diffY / maxRadius));
                 }
             } else {
-                // 右屏视角滑动
+                // 右屏视角滑动（★ 写 ECS transform）
                 float lenSqr = pxDeltaX * pxDeltaX + pxDeltaY * pxDeltaY;
                 if (lenSqr > game.m_touchDeadzone * game.m_touchDeadzone) {
-                    game.yaw += pxDeltaX * game.m_touchSensitivity;
-                    game.pitch -= pxDeltaY * game.m_touchSensitivity;
-                    game.pitch = glm::clamp(game.pitch, -89.0f, 89.0f);
+                    localPlayer->transform.yaw += pxDeltaX * game.m_touchSensitivity;
+                    localPlayer->transform.pitch -= pxDeltaY * game.m_touchSensitivity;
+                    localPlayer->transform.pitch = glm::clamp(localPlayer->transform.pitch, -89.0f, 89.0f);
                 }
             }
         }

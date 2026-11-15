@@ -41,7 +41,9 @@ target_compile_definitions(project_options INTERFACE
     $<$<CONFIG:Debug>:MYCRAFT_DEBUG>
 )
 
-# 编译器特定选项
+# =============================================================================
+# 3.1 编译器特定选项 (警告与诊断)
+# =============================================================================
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # ---- 纯 MSVC ----
     target_compile_options(project_options INTERFACE 
@@ -52,9 +54,6 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     # ★ 核心修复：使用前端变体来区分 clang-cl 和纯 clang
     if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
         # ---- clang-cl (仅限 Windows) ----
-        # /utf-8 /W4 /permissive-：保持与 MSVC 一致的命令行风格（clang-cl 支持）
-        # -fdiagnostics-format=clang：强制 LLVM 原生诊断格式
-        # -fcolor-diagnostics -fansi-escape-codes：终端里带颜色
         target_compile_options(project_options INTERFACE 
             /utf-8 /W4 /WX- /permissive-
             -clang:-fdiagnostics-format=clang
@@ -74,6 +73,55 @@ else()
     target_compile_options(project_options INTERFACE 
         -Wall -Wextra -Wpedantic -Wshadow
         -fdiagnostics-color=always
+    )
+endif()
+
+# =============================================================================
+# 3.2 针对不同构建配置的极致优化
+# =============================================================================
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    # ---- 纯 MSVC ----
+    target_compile_options(project_options INTERFACE
+        # RelWithDebInfo: O2 + 函数级优化 + 激进内联 + 优化局部变量
+        $<$<CONFIG:RelWithDebInfo>: /O2 /Ob3 /Oi /Oy /Zi>
+        # Release: O2 + 全程序优化(/GL) + 快速浮点(/fp:fast)
+        $<$<CONFIG:Release>: /O2 /Ob3 /Oi /Oy /GL /fp:fast>
+    )
+    target_link_options(project_options INTERFACE
+        # Release: LTCG(链接时代码生成) + 消除未引用函数/合并相同函数
+        $<$<CONFIG:Release>: /LTCG /OPT:REF /OPT:ICF /INCREMENTAL:NO>
+    )
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+        # ---- clang-cl (Windows) ----
+        target_compile_options(project_options INTERFACE
+            $<$<CONFIG:RelWithDebInfo>: /O2 /Ob3 /Oi /Oy /Zi>
+            # clang-cl 原生支持 /O3 和 ThinLTO，用 -clang: 透传以保证生效
+            $<$<CONFIG:Release>: /O3 /Ob3 /Oi /Oy -clang:-flto=thin -clang:-fno-math-errno>
+        )
+        target_link_options(project_options INTERFACE
+            $<$<CONFIG:Release>: -clang:-flto=thin /OPT:REF /OPT:ICF /INCREMENTAL:NO>
+        )
+    else()
+        # ---- 纯 Clang (Linux/macOS/Android) ----
+        target_compile_options(project_options INTERFACE
+            $<$<CONFIG:RelWithDebInfo>: -O2 -g -DNDEBUG>
+            # -ffunction-sections -fdata-sections 为链接器剔除无用代码做准备
+            $<$<CONFIG:Release>: -O3 -flto=thin -fno-math-errno -ffunction-sections -fdata-sections -DNDEBUG>
+        )
+        target_link_options(project_options INTERFACE
+            # -Wl,--gc-sections 剔除无用段
+            $<$<CONFIG:Release>: -flto=thin -Wl,--gc-sections>
+        )
+    endif()
+else()
+    # ---- GCC ----
+    target_compile_options(project_options INTERFACE
+        $<$<CONFIG:RelWithDebInfo>: -O2 -g -DNDEBUG>
+        $<$<CONFIG:Release>: -O3 -flto=auto -fno-math-errno -ffunction-sections -fdata-sections -DNDEBUG>
+    )
+    target_link_options(project_options INTERFACE
+        $<$<CONFIG:Release>: -flto=auto -Wl,--gc-sections>
     )
 endif()
 

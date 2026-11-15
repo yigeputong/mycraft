@@ -60,6 +60,7 @@ EntityId EntityManager::CreateEntity() {
     e.pigAI.reset();
     e.item.reset();
     e.netInterp.reset();
+    e.player.reset();
     e.renderable.reset();
     return id;
 }
