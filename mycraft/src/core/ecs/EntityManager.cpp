@@ -2,11 +2,10 @@
 
 #include <cmath>
 
-#include "Engine/tool/Log.h"
+#include "game/core/Physics.h"
 
 namespace game::core::ecs {
 
-// 手搓的 xorshift32，保证跨平台绝对一致
 static uint32_t XorShift32(uint32_t& state) {
     uint32_t x = state;
     x ^= x << 13;
@@ -21,10 +20,27 @@ static float RandomFloat(uint32_t& state, float range) {
     return (normalized * 2.0f - 1.0f) * range;
 }
 
+static bool FindValidTarget(glm::vec3 currentPos, uint32_t& rngState,
+                            const std::function<bool(int, int, int)>& isSolidAt, glm::vec3& outTarget) {
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        float dx = RandomFloat(rngState, 10.0f);
+        float dz = RandomFloat(rngState, 10.0f);
+        glm::vec3 testPos = currentPos + glm::vec3(dx, 0.0f, dz);
+        int bx = static_cast<int>(std::floor(testPos.x));
+        int by = static_cast<int>(std::floor(testPos.y));
+        int bz = static_cast<int>(std::floor(testPos.z));
+
+        if (isSolidAt(bx, by - 1, bz) && !isSolidAt(bx, by, bz) && !isSolidAt(bx, by + 1, bz)) {
+            outTarget = testPos;
+            return true;
+        }
+    }
+    return false;
+}
+
 EntityId EntityManager::CreateEntity() {
     uint32_t index;
     uint32_t generation = 0;
-
     if (!m_freeIndices.empty()) {
         index = m_freeIndices.back();
         m_freeIndices.pop_back();
@@ -34,18 +50,17 @@ EntityId EntityManager::CreateEntity() {
         m_entities.emplace_back();
         m_generations.push_back(0);
     }
-
     EntityId id = CreateEntityId(index, generation);
     auto& e = m_entities[index];
     e.id = id;
     e.active = true;
-
     e.transform = {};
     e.velocity.reset();
     e.aabb.reset();
     e.pigAI.reset();
+    e.item.reset();
+    e.netInterp.reset();
     e.renderable.reset();
-
     return id;
 }
 
@@ -53,11 +68,10 @@ void EntityManager::DestroyEntity(EntityId id) {
     uint32_t index = GetEntityIndex(id);
     if (index >= m_entities.size())
         return;
-
     auto& e = m_entities[index];
     if (e.id == id && e.active) {
         e.active = false;
-        m_generations[index]++;  // 版本号递增
+        m_generations[index]++;
         m_freeIndices.push_back(index);
     }
 }
@@ -67,145 +81,145 @@ Entity* EntityManager::GetEntity(EntityId id) {
     uint32_t generation = GetEntityGeneration(id);
     if (index >= m_entities.size())
         return nullptr;
-
     auto& e = m_entities[index];
-    if (e.active && m_generations[index] == generation) {
+    if (e.active && m_generations[index] == generation)
         return &e;
-    }
     return nullptr;
 }
 
-// =========================================================
-// 1. 新增辅助函数：模仿 MC 的 LandRandomPos 合法选点
-// 放在 EntityManager::CreateEntity() 之前即可
-// =========================================================
-static bool FindValidTarget(glm::vec3 currentPos, uint32_t& rngState,
-                            const std::function<bool(int, int, int)>& isSolidAt, glm::vec3& outTarget) {
-    for (int attempt = 0; attempt < 10; ++attempt) {
-        float dx = RandomFloat(rngState, 10.0f);
-        float dz = RandomFloat(rngState, 10.0f);
-        glm::vec3 testPos = currentPos + glm::vec3(dx, 0.0f, dz);
-
-        int bx = static_cast<int>(std::floor(testPos.x));
-        int by = static_cast<int>(std::floor(testPos.y));
-        int bz = static_cast<int>(std::floor(testPos.z));
-
-        // 规则：脚下是实心，中间是空气，头顶是空气
-        if (isSolidAt(bx, by - 1, bz) && !isSolidAt(bx, by, bz) && !isSolidAt(bx, by + 1, bz)) {
-            outTarget = testPos;
-            return true;
-        }
-    }
-    return false;
+void EntityManager::Clear() {
+    m_entities.clear();
+    m_freeIndices.clear();
+    m_generations.clear();
 }
 
-// =========================================================
-// 2. 替换 EntityManager::Update
-// =========================================================
-void EntityManager::Update(float dt, const std::function<bool(int, int, int)>& isSolidAt) {
-    UpdatePigAI(dt, isSolidAt);  // ★ 注意这里传了回调
+void EntityManager::Update(float dt, const std::function<bool(int, int, int)>& isSolidAt, const glm::vec3& playerPos) {
+    UpdatePigAI(dt, isSolidAt);
+    UpdateItems(dt, playerPos);
     UpdateMovement(dt, isSolidAt);
     UpdateAnimation(dt);
 }
 
-// =========================================================
-// 3. 替换 EntityManager::UpdatePigAI
-// =========================================================
 void EntityManager::UpdatePigAI(float dt, const std::function<bool(int, int, int)>& isSolidAt) {
     for (auto& e : m_entities) {
         if (!e.active || !e.pigAI || !e.velocity)
             continue;
         auto& ai = *e.pigAI;
-
         if (ai.state == PigAIComponent::State::Idle) {
             e.velocity->speed = 0.0f;
             ai.idleTimer -= dt;
-
             if (ai.idleTimer <= 0.0f) {
                 glm::vec3 target;
-                // 尝试找合法目标点
                 if (FindValidTarget(e.transform.position, ai.rngState, isSolidAt, target)) {
                     ai.targetPos = target;
                     ai.state = PigAIComponent::State::Walk;
-                    ai.walkTimer = 8.0f;  // 最多走 8 秒
+                    ai.walkTimer = 8.0f;
                     ai.stuckTimer = 0.0f;
                 } else {
-                    ai.idleTimer = 1.0f;  // 没找到合法点，呆 1 秒再试
+                    ai.idleTimer = 1.0f;
                 }
             }
         } else if (ai.state == PigAIComponent::State::Walk) {
             glm::vec3 dir = ai.targetPos - e.transform.position;
             dir.y = 0.0f;
             float distance = glm::length(dir);
-
             ai.walkTimer -= dt;
-
-            // 结束条件：到达 / 超时 / 卡死
             if (distance < 0.5f || ai.walkTimer <= 0.0f || ai.stuckTimer > 0.5f) {
                 ai.state = PigAIComponent::State::Idle;
                 ai.idleTimer = 1.0f + RandomFloat(ai.rngState, 3.0f);
                 e.velocity->speed = 0.0f;
                 continue;
             }
-
-            // 卡死检测累加
-            if (e.velocity->speed < 0.1f) {
+            if (e.velocity->speed < 0.1f)
                 ai.stuckTimer += dt;
-            } else {
+            else
                 ai.stuckTimer = 0.0f;
-            }
 
-            // 执行移动
             dir = glm::normalize(dir);
             e.velocity->moveDir = dir;
             e.velocity->speed = ai.baseSpeed;
 
-            // 平滑转向
             float targetYaw = glm::degrees(std::atan2(dir.x, dir.z));
             float yawDiff = targetYaw - e.transform.yaw;
             while (yawDiff > 180.0f)
                 yawDiff -= 360.0f;
             while (yawDiff < -180.0f)
                 yawDiff += 360.0f;
-
             float maxTurn = 360.0f * dt;
-            if (std::abs(yawDiff) > maxTurn) {
+            if (std::abs(yawDiff) > maxTurn)
                 e.transform.yaw += (yawDiff > 0 ? maxTurn : -maxTurn);
-            } else {
+            else
                 e.transform.yaw = targetYaw;
-            }
         }
     }
 }
 
-// =========================================================
-// 4. 替换 EntityManager::UpdateMovement
-// （把之前带重力、自动跳跃、Epsilon的版本换上，并在末尾加上撞墙信号）
-// =========================================================
+void EntityManager::UpdateItems(float dt, const glm::vec3& playerPos) {
+    constexpr float PICKUP_DURATION = 0.2f;
+    constexpr float PICKUP_TARGET_EYE_RATIO = 0.5f;  // 飞向眼睛下方
+
+    for (auto& e : m_entities) {
+        if (!e.active || !e.item)
+            continue;
+        auto& item = *e.item;
+
+        if (item.pickupDelay > 0.0f)
+            item.pickupDelay -= dt;
+
+        // 网络位置插值
+        if (e.netInterp && e.netInterp->interpT < 1.0f) {
+            e.netInterp->interpT += dt * 20.0f;
+            if (e.netInterp->interpT > 1.0f)
+                e.netInterp->interpT = 1.0f;
+            e.transform.position = glm::mix(e.netInterp->prevPos, e.netInterp->targetPos, e.netInterp->interpT);
+        }
+
+        // 拾取吸附动画
+        if (item.isPickingUp) {
+            item.pickupT += dt / PICKUP_DURATION;
+            if (item.pickupT >= 1.0f) {
+                DestroyEntity(e.id);
+                continue;
+            }
+            float t = item.pickupT * item.pickupT;
+            glm::vec3 target = playerPos + glm::vec3(0.0f, PLAYER_EYE * PICKUP_TARGET_EYE_RATIO, 0.0f);
+            e.transform.position = glm::mix(item.pickupStart, target, t);
+        } else {
+            item.bobTime += dt;
+        }
+    }
+}
+
 void EntityManager::UpdateMovement(float dt, const std::function<bool(int, int, int)>& isSolidAt) {
     constexpr float GRAVITY = -24.0f;
     constexpr float MAX_FALL_SPEED = -50.0f;
     constexpr float EPSILON = 0.001f;
+    constexpr float JUMP_VELOCITY = 7.0f;
+    constexpr float JUMP_CLEARANCE = 1.05f;
 
     for (auto& e : m_entities) {
         if (!e.active || !e.velocity || !e.aabb)
             continue;
+        // 网络同步实体完全由服务端下发位置驱动，跳过本地物理，避免插值被覆盖
+        if (e.netInterp)
+            continue;
 
         auto& vel = *e.velocity;
         auto& aabb = *e.aabb;
-
-        float halfW = aabb.halfExtents.x;
-        float height = aabb.halfExtents.y * 2.0f;
-        float halfD = aabb.halfExtents.z;
+        const float halfW = aabb.halfExtents.x;
+        const float halfH = aabb.halfExtents.y;
+        const float height = halfH * 2.0f;
+        const float halfD = aabb.halfExtents.z;
+        const float pivotOffsetY = aabb.positionIsFeet ? 0.0f : -halfH;
 
         auto checkCollision = [&](const glm::vec3& testPos) -> bool {
+            const float footY = testPos.y + pivotOffsetY;
             int minX = static_cast<int>(std::floor(testPos.x - halfW + EPSILON));
             int maxX = static_cast<int>(std::floor(testPos.x + halfW - EPSILON));
-            int minY = static_cast<int>(std::floor(testPos.y + EPSILON));
-            int maxY = static_cast<int>(std::floor(testPos.y + height - EPSILON));
+            int minY = static_cast<int>(std::floor(footY + EPSILON));
+            int maxY = static_cast<int>(std::floor(footY + height - EPSILON));
             int minZ = static_cast<int>(std::floor(testPos.z - halfD + EPSILON));
             int maxZ = static_cast<int>(std::floor(testPos.z + halfD - EPSILON));
-
             for (int x = minX; x <= maxX; ++x)
                 for (int y = minY; y <= maxY; ++y)
                     for (int z = minZ; z <= maxZ; ++z)
@@ -219,7 +233,6 @@ void EntityManager::UpdateMovement(float dt, const std::function<bool(int, int, 
             displacement.x = vel.moveDir.x * vel.speed * dt;
             displacement.z = vel.moveDir.z * vel.speed * dt;
         }
-
         vel.yVelocity += GRAVITY * dt;
         if (vel.yVelocity < MAX_FALL_SPEED)
             vel.yVelocity = MAX_FALL_SPEED;
@@ -234,18 +247,18 @@ void EntityManager::UpdateMovement(float dt, const std::function<bool(int, int, 
             nextPos.x = currentPos.x;
             hitX = true;
         }
-
         nextPos.z += displacement.z;
         if (checkCollision(nextPos)) {
             nextPos.z = currentPos.z;
             hitZ = true;
         }
 
-        if ((hitX || hitZ) && vel.onGround) {
+        // 撞墙跳跃仅对脚底枢轴实体生效，掉落物不跳
+        if ((hitX || hitZ) && vel.onGround && aabb.positionIsFeet) {
             glm::vec3 jumpTest = nextPos;
-            jumpTest.y += 1.05f;
+            jumpTest.y += JUMP_CLEARANCE;
             if (!checkCollision(jumpTest)) {
-                vel.yVelocity = 7.0f;
+                vel.yVelocity = JUMP_VELOCITY;
                 vel.onGround = false;
                 nextPos.x = currentPos.x + displacement.x;
                 nextPos.z = currentPos.z + displacement.z;
@@ -257,7 +270,7 @@ void EntityManager::UpdateMovement(float dt, const std::function<bool(int, int, 
         if (checkCollision(nextPos)) {
             if (displacement.y < 0.0f) {
                 vel.onGround = true;
-                nextPos.y = std::ceil(nextPos.y - EPSILON);
+                nextPos.y = std::ceil(nextPos.y + pivotOffsetY - EPSILON) - pivotOffsetY;
                 vel.yVelocity = 0.0f;
             } else if (displacement.y > 0.0f) {
                 nextPos.y = currentPos.y;
@@ -265,28 +278,24 @@ void EntityManager::UpdateMovement(float dt, const std::function<bool(int, int, 
             }
         }
 
-        // ★ 关键：如果水平被挡住，且没跳上去，速度清零（触发 AI 的 stuckTimer）
         if (vel.speed > 0.01f) {
             float movedDistSq = (nextPos.x - currentPos.x) * (nextPos.x - currentPos.x) +
                                 (nextPos.z - currentPos.z) * (nextPos.z - currentPos.z);
-            if (movedDistSq < 1e-6f) {
+            if (movedDistSq < 1e-6f)
                 vel.speed = 0.0f;
-            }
         }
-
         e.transform.position = nextPos;
     }
 }
 
 void EntityManager::UpdateAnimation(float dt) {
     for (auto& e : m_entities) {
-        if (!e.active || !e.renderable || !e.pigAI)
+        if (!e.active || !e.renderable || !e.velocity)
             continue;
-        if (e.pigAI->state == PigAIComponent::State::Walk) {
+        if (e.velocity->speed > 0.01f)
             e.renderable->animTime += dt;
-        } else {
+        else
             e.renderable->animTime = 0.0f;
-        }
     }
 }
 
@@ -302,38 +311,39 @@ void EntityManager::ApplyAnimationToNodes(client::ModelNode* node, const client:
                     break;
             }
             size_t idx2 = (idx1 + 1) % channel.keyframes.size();
-
             const auto& k1 = channel.keyframes[idx1];
             const auto& k2 = channel.keyframes[idx2];
-
             float timeDiff = k2.time - k1.time;
             if (timeDiff < 0.0f && clip.duration > 0.0f)
                 timeDiff += clip.duration;
             float t = (timeDiff > 0.0f) ? (animTime - k1.time) / timeDiff : 0.0f;
             if (t < 0.0f)
                 t += 1.0f;
-
             glm::quat finalRot = glm::slerp(k1.rotation, k2.rotation, t);
             node->currentAnimTransform = glm::mat4_cast(finalRot);
             break;
         }
     }
-    for (const auto& child : node->children) {
+    for (const auto& child : node->children)
         ApplyAnimationToNodes(child.get(), clip, animTime);
-    }
 }
 
 void EntityManager::Render(const glm::mat4& viewProj, Eng::client::SceneRenderer* renderer,
-                           Eng::service::ShaderPtr entityShader) {
+                           const Eng::service::ShaderPtr& entityShader, const Eng::service::TexturePtr& atlasTexture,
+                           const std::function<const Eng::client::RenderMesh&(BlockId)>& getItemMeshFunc) {
+    [[maybe_unused]] const glm::mat4& vp = viewProj;  // 预留给未来视锥剔除
+
+    std::unordered_map<BlockId, std::vector<Eng::service::rhi::PerObjectData>> itemInstances;
+
     for (auto& e : m_entities) {
         if (!e.active || !e.renderable)
             continue;
-
-        glm::mat4 worldMat = glm::translate(glm::mat4(1.0f), e.transform.position);
-        worldMat = glm::rotate(worldMat, glm::radians(e.transform.yaw), glm::vec3(0, 1, 0));
-
         auto& rc = *e.renderable;
+
+        // 渲染猪（骨骼模型）
         if (rc.model) {
+            glm::mat4 worldMat = glm::translate(glm::mat4(1.0f), e.transform.position);
+            worldMat = glm::rotate(worldMat, glm::radians(e.transform.yaw), glm::vec3(0, 1, 0));
             auto it = rc.model->clips.find(rc.currentClip);
             if (it != rc.model->clips.end()) {
                 const auto& clip = it->second;
@@ -342,22 +352,47 @@ void EntityManager::Render(const glm::mat4& viewProj, Eng::client::SceneRenderer
             }
             RenderNode(rc.model->rootNode.get(), worldMat, rc, renderer, entityShader);
         }
+
+        // 收集掉落物实例化数据
+        if (e.item && rc.blockType != AIR_ID) {
+            // 用实体索引做相位，避免 uint64 高位参与 sin 导致精度爆炸
+            const float entityPhase = static_cast<float>(GetEntityIndex(e.id)) * 0.5f;
+
+            Eng::service::rhi::PerObjectData data;
+            data.model = glm::translate(glm::mat4(1.0f), e.transform.position);
+            data.model = glm::rotate(data.model, e.item->bobTime * 2.0f, glm::vec3(0, 1, 0));
+            data.model = glm::translate(
+                data.model, glm::vec3(0.0f, std::sin(e.item->bobTime * 3.0f + entityPhase) * 0.1f + 0.1f, 0.0f));
+
+            if (e.item->isPickingUp) {
+                float scale = 1.0f - e.item->pickupT;
+                data.model = glm::scale(data.model, glm::vec3(0.25f * scale));
+            } else {
+                data.model = glm::scale(data.model, glm::vec3(0.25f));
+            }
+
+            itemInstances[rc.blockType].push_back(data);
+        }
+    }
+
+    // 提交掉落物批量渲染，传 atlas 纹理
+    for (const auto& [type, perObjects] : itemInstances) {
+        const auto& mesh = getItemMeshFunc(type);
+        if (mesh.vbo) {
+            renderer->SubmitInstancedMesh(mesh, entityShader, atlasTexture, perObjects);
+        }
     }
 }
 
-void EntityManager::RenderNode(client::ModelNode* node, const glm::mat4& parentTransform,
-                               const client::RenderableComponent& rc, Eng::client::SceneRenderer* renderer,
-                               Eng::service::ShaderPtr entityShader) {
+void EntityManager::RenderNode(client::ModelNode* node, const glm::mat4& parentTransform, const RenderableComponent& rc,
+                               Eng::client::SceneRenderer* renderer, const Eng::service::ShaderPtr& entityShader) {
     glm::mat4 localMat = node->baseTransform * node->currentAnimTransform;
     glm::mat4 worldMat = parentTransform * localMat;
-
     for (uint32_t idx : node->meshIndices) {
         renderer->SubmitMesh(rc.model->meshes[idx], entityShader, rc.model->texture, {.model = worldMat});
     }
-
-    for (const auto& child : node->children) {
+    for (const auto& child : node->children)
         RenderNode(child.get(), worldMat, rc, renderer, entityShader);
-    }
 }
 
 }  // namespace game::core::ecs

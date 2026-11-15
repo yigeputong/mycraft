@@ -217,8 +217,8 @@ private:
         uint32_t pickerId = 0;
     };
 
-    std::unordered_map<uint32_t, ClientItemEntity> m_itemEntities;
     std::unordered_map<BlockId, Eng::client::RenderMesh> m_itemMeshCache;
+    std::unordered_map<uint32_t, game::core::ecs::EntityId> m_netToEcsMap;
     Eng::client::RenderMesh m_playerMesh;
     Eng::client::RenderMesh m_handMesh;
     Eng::client::RenderMesh m_skyboxMesh;
@@ -310,14 +310,8 @@ private:
     friend class client::ClientUI;
 
     std::unique_ptr<game::client::LoadedModel> m_pigModel;
-    game::client::RenderableComponent m_pigRenderComp;
 
     game::core::ecs::EntityManager m_entityManager;
-
-    void UpdateAnimation(game::client::RenderableComponent& rc, float dt);
-    void ApplyAnimationToNodes(game::client::ModelNode* node, const game::client::AnimationClip& clip, float animTime);
-    void RenderModelNode(const game::client::ModelNode* node, const glm::mat4& parentTransform,
-                         const game::client::RenderableComponent& rc);
 };
 
 }  // namespace game

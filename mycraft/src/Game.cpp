@@ -629,13 +629,6 @@ bool MyGame::SetupRenderer(Eng::Engine& engine) {
 
     m_pigModel = game::client::ModelLoader::Load(renderer, m_assetManager, "assets/models/pig.glb",
                                                  "assets/textures/entity/pig_temperature.png");
-    if (m_pigModel) {
-        m_pigRenderComp.model = m_pigModel.get();
-        m_pigRenderComp.currentClip = "Walk";  // 假设 Blender 里动画叫 Walk，如果没起名就是空字符串，就默认取第一个
-        if (m_pigRenderComp.currentClip.empty() && !m_pigModel->clips.empty()) {
-            m_pigRenderComp.currentClip = m_pigModel->clips.begin()->first;
-        }
-    }
 
     return true;
 }
@@ -770,11 +763,7 @@ bool MyGame::OnUpdate(Eng::Engine& /*engine*/, float deltaTime) {
     game::StepPlayer(m, m_lastMoveDir, m_jumpHoldTimer > 0.0f, deltaTime,
                      [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
 
-    if (m_pigModel) {
-        UpdateAnimation(m_pigRenderComp, deltaTime);
-    }
-
-    m_entityManager.Update(deltaTime, [this](int x, int y, int z) { return this->IsSolidAt(x, y, z); });
+    m_entityManager.Update(deltaTime, [this](int x, int y, int z) { return this->IsSolidAt(x, y, z); }, cameraPos);
 
     cameraPos = m.position;
     m_playerVelocity = m.velocity;
@@ -810,34 +799,6 @@ bool MyGame::OnUpdate(Eng::Engine& /*engine*/, float deltaTime) {
     std::vector<uint8_t> data;
     while (m_client->Receive(data)) {
         HandleServerMessage(data);
-    }
-
-    constexpr float PICKUP_TIME = 0.2f;
-    for (auto it = m_itemEntities.begin(); it != m_itemEntities.end();) {
-        auto& e = it->second;
-
-        if (e.pickingUp) {
-            e.pickupT += deltaTime / PICKUP_TIME;
-            if (e.pickupT >= 1.0f) {
-                if (e.pickerId == m_myClientId)
-                    AddToInventory(e.itemType, 1);
-                it = m_itemEntities.erase(it);
-                continue;
-            }
-            glm::vec3 target = cameraPos + glm::vec3(0.0f, PLAYER_EYE / 2, 0.0f);
-            float pickupT = e.pickupT * e.pickupT;
-            e.renderPos = glm::mix(e.pickupStart, target, pickupT);
-            ++it;
-            continue;
-        }
-
-        if (e.interpT < 1.0f) {
-            e.interpT += deltaTime * 20.0f;
-            if (e.interpT > 1.0f)
-                e.interpT = 1.0f;
-            e.renderPos = glm::mix(e.prevPos, e.targetPos, e.interpT);
-        }
-        ++it;
     }
 
     m_world.UpdateStreaming(
@@ -926,25 +887,9 @@ void MyGame::OnRender(Eng::Engine& engine) {
             m_sceneRenderer->SubmitMesh(m_playerMesh, m_entityShader, m_playerTexture, data);
         }
 
-        if (!m_itemEntities.empty()) {
-            std::unordered_map<BlockId, std::vector<Eng::service::rhi::PerObjectData>> instances;
-            for (const auto& [id, e] : m_itemEntities) {
-                Eng::service::rhi::PerObjectData data;
-                data.model = glm::translate(glm::mat4(1.0f), e.renderPos);
-                data.model = glm::rotate(data.model, m_animTime * 2.0f, glm::vec3(0, 1, 0));
-                data.model = glm::translate(
-                    data.model, glm::vec3(0.0f, std::sin(m_animTime * 3.0f + e.id * 0.5f) * 0.1f + 0.1f, 0.0f));
-                data.model = glm::scale(data.model, glm::vec3(0.25f));
-                instances[e.itemType].push_back(data);
-            }
-
-            for (const auto& [type, perObjects] : instances) {
-                const auto& mesh = GetOrCreateItemMesh(type);
-                if (mesh.vbo) {
-                    m_sceneRenderer->SubmitInstancedMesh(mesh, m_entityShader, m_atlasTexture, perObjects);
-                }
-            }
-        }
+        m_entityManager.Render(
+            projection * view, m_sceneRenderer.get(), m_entityShader, m_atlasTexture,
+            [this](BlockId id) -> const Eng::client::RenderMesh& { return GetOrCreateItemMesh(id); });
 
         if (!m_skyboxMesh.vbo)
             m_skyboxMesh = BuildSkyboxMesh();
@@ -964,8 +909,9 @@ void MyGame::OnRender(Eng::Engine& engine) {
             basePos.y -= swing * 0.15f;
             basePos.z += swing * 0.1f;
         }
-
-        m_entityManager.Render(projection * view, m_sceneRenderer.get(), m_entityShader);
+        m_entityManager.Render(
+            projection * view, m_sceneRenderer.get(), m_entityShader, m_atlasTexture,
+            [this](BlockId id) -> const Eng::client::RenderMesh& { return GetOrCreateItemMesh(id); });
 
         glm::mat4 handLocalModel = glm::mat4(1.0f);
         handLocalModel = glm::translate(handLocalModel, basePos);
@@ -1059,7 +1005,8 @@ void MyGame::EnterGame() {
     m_hotbarIndex = 0;
     m_inventoryOpen = false;
 
-    m_itemEntities.clear();
+    m_entityManager.Clear();
+    m_netToEcsMap.clear();
     m_otherPlayers.clear();
     m_myClientId = 0;
 
@@ -1093,7 +1040,8 @@ void MyGame::ExitGame() {
 
     m_world.Clear();
     m_lodManager.Clear();
-    m_itemEntities.clear();
+    m_entityManager.Clear();
+    m_netToEcsMap.clear();
     m_otherPlayers.clear();
 
     m_playerMesh = {};
@@ -1513,14 +1461,17 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             glm::vec3 pos = r.ReadVec3();
             BlockId bt = r.Read<uint16_t>();
 
-            ClientItemEntity e;
-            e.id = id;
-            e.itemType = bt;
-            e.renderPos = pos;
-            e.prevPos = pos;
-            e.targetPos = pos;
-            e.interpT = 1.0f;
-            m_itemEntities[id] = e;
+            auto e = m_entityManager.CreateEntity();
+            auto* entity = m_entityManager.GetEntity(e);
+
+            entity->transform.position = pos;
+            // ★ 不再赋予 velocity / aabb：掉落物由服务端 EntityUpdate 驱动，客户端只插值
+            entity->netInterp =
+                game::core::ecs::NetInterpolationComponent{.prevPos = pos, .targetPos = pos, .interpT = 1.0f};
+            entity->item = game::core::ecs::ItemComponent{.itemType = bt, .count = 1, .pickupDelay = 0.5f};
+            entity->renderable = game::core::ecs::RenderableComponent{.blockType = bt};
+
+            m_netToEcsMap[id] = e;
             break;
         }
 
@@ -1528,11 +1479,14 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             uint32_t id = r.Read<uint32_t>();
             glm::vec3 pos = r.ReadVec3();
 
-            auto it = m_itemEntities.find(id);
-            if (it != m_itemEntities.end()) {
-                it->second.prevPos = it->second.renderPos;
-                it->second.targetPos = pos;
-                it->second.interpT = 0.0f;
+            auto it = m_netToEcsMap.find(id);
+            if (it != m_netToEcsMap.end()) {
+                auto* entity = m_entityManager.GetEntity(it->second);
+                if (entity && entity->netInterp) {
+                    entity->netInterp->prevPos = entity->transform.position;
+                    entity->netInterp->targetPos = pos;
+                    entity->netInterp->interpT = 0.0f;
+                }
             }
             break;
         }
@@ -1542,15 +1496,29 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             uint8_t reason = r.Read<uint8_t>();
             uint32_t pickerId = r.ReadU32BE();
 
-            auto it = m_itemEntities.find(id);
-            if (it != m_itemEntities.end()) {
-                if (reason == 1) {
-                    it->second.pickingUp = true;
-                    it->second.pickupT = 0.0f;
-                    it->second.pickupStart = it->second.renderPos;
-                    it->second.pickerId = pickerId;
+            auto it = m_netToEcsMap.find(id);
+            if (it != m_netToEcsMap.end()) {
+                auto* entity = m_entityManager.GetEntity(it->second);
+                if (entity && entity->item) {
+                    if (reason == 1) {
+                        // 被捡起：启动吸附动画，网络 ID 已终结，立即清映射
+                        entity->item->isPickingUp = true;
+                        entity->item->pickupT = 0.0f;
+                        entity->item->pickupStart = entity->transform.position;
+                        entity->item->pickerId = pickerId;
+
+                        if (pickerId == m_myClientId) {
+                            AddToInventory(entity->item->itemType, 1);
+                        }
+                        m_netToEcsMap.erase(it);  // ★ 补：防止映射泄漏
+                    } else {
+                        // 超时消失：立即销毁实体
+                        m_entityManager.DestroyEntity(it->second);
+                        m_netToEcsMap.erase(it);
+                    }
                 } else {
-                    m_itemEntities.erase(it);
+                    // 实体已不存在（重复消息等），兜底清理
+                    m_netToEcsMap.erase(it);
                 }
             }
             break;
@@ -1870,78 +1838,6 @@ void MyGame::DrainMeshResults(size_t maxCount) {
             m_sceneRenderer->RemoveWaterChunk(r.chunkKey);
         }
     });
-}
-
-void MyGame::UpdateAnimation(game::client::RenderableComponent& rc, float dt) {
-    if (!rc.model)
-        return;
-    auto it = rc.model->clips.find(rc.currentClip);
-    if (it == rc.model->clips.end())
-        return;
-    const auto& clip = it->second;
-
-    rc.animTime += dt;
-    if (rc.isLooping && clip.duration > 0.0f) {
-        rc.animTime = std::fmod(rc.animTime, clip.duration);
-    } else if (rc.animTime > clip.duration) {
-        rc.animTime = clip.duration;
-    }
-
-    ApplyAnimationToNodes(rc.model->rootNode.get(), clip, rc.animTime);
-}
-
-void MyGame::ApplyAnimationToNodes(game::client::ModelNode* node, const game::client::AnimationClip& clip,
-                                   float animTime) {
-    // 重置动画矩阵
-    node->currentAnimTransform = glm::mat4(1.0f);
-
-    // 查找当前节点是否有动画数据
-    for (const auto& channel : clip.channels) {
-        if (channel.nodeName == node->name && channel.keyframes.size() >= 2) {
-            size_t idx1 = 0;
-            for (size_t i = 0; i < channel.keyframes.size(); ++i) {
-                if (channel.keyframes[i].time <= animTime)
-                    idx1 = i;
-                else
-                    break;
-            }
-            size_t idx2 = (idx1 + 1) % channel.keyframes.size();
-
-            const auto& k1 = channel.keyframes[idx1];
-            const auto& k2 = channel.keyframes[idx2];
-
-            float timeDiff = k2.time - k1.time;
-            if (timeDiff < 0.0f && clip.duration > 0.0f)
-                timeDiff += clip.duration;
-            float t = (timeDiff > 0.0f) ? (animTime - k1.time) / timeDiff : 0.0f;
-            if (t < 0.0f)
-                t += 1.0f;
-
-            glm::quat finalRot = glm::slerp(k1.rotation, k2.rotation, t);
-            node->currentAnimTransform = glm::mat4_cast(finalRot);
-            break;
-        }
-    }
-
-    // 递归子节点
-    for (const auto& child : node->children) {
-        ApplyAnimationToNodes(child.get(), clip, animTime);
-    }
-}
-
-void MyGame::RenderModelNode(const game::client::ModelNode* node, const glm::mat4& parentTransform,
-                             const game::client::RenderableComponent& rc) {
-    // 组合基础矩阵和动画矩阵
-    glm::mat4 localMat = node->baseTransform * node->currentAnimTransform;
-    glm::mat4 worldMat = parentTransform * localMat;
-
-    for (uint32_t idx : node->meshIndices) {
-        m_sceneRenderer->SubmitMesh(rc.model->meshes[idx], m_entityShader, rc.model->texture, {.model = worldMat});
-    }
-
-    for (const auto& child : node->children) {
-        RenderModelNode(child.get(), worldMat, rc);
-    }
 }
 
 }  // namespace game

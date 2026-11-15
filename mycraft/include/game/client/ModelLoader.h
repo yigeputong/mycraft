@@ -9,6 +9,9 @@
 
 #include "Engine/client/SceneRenderer.h"
 
+#include "game/core/BlockRegistry.h"
+
+
 namespace game::client {
 
 // 关键帧数据（只保留旋转，因为猪的位移/缩放没变）
@@ -49,10 +52,13 @@ struct LoadedModel {
 
 // ECS 预热组件
 struct RenderableComponent {
-    LoadedModel* model = nullptr;
+    // 如果是猪，model 不为空
+    client::LoadedModel* model = nullptr;
     std::string currentClip = "Walk";
     float animTime = 0.0f;
-    bool isLooping = true;
+
+    // 如果是掉落物，blockType 不为 AIR_ID
+    BlockId blockType = AIR_ID;
 };
 
 // 静态加载工具类
