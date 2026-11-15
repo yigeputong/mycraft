@@ -1,12 +1,8 @@
 #pragma once
 
-#include <functional>
 #include <glm/glm.hpp>
 #include <optional>
 #include <vector>
-
-#include "Engine/client/SceneRenderer.h"
-#include "Engine/service/IRenderService.h"
 
 #include "game/core/ecs/Components.h"
 #include "game/core/ecs/Entity.h"
@@ -25,7 +21,11 @@ struct Entity {
     std::optional<ItemComponent> item;
     std::optional<NetInterpolationComponent> netInterp;
     std::optional<PlayerComponent> player;
+    std::optional<ServerPlayerComponent> serverPlayer;
     std::optional<RenderableComponent> renderable;
+    std::optional<ChunkCoordComponent> chunkCoord;
+    std::optional<ChunkComponent> chunkData;
+    std::optional<ChunkRenderComponent> chunkRender;
 };
 
 class EntityManager {
@@ -35,7 +35,7 @@ public:
     EntityId CreateEntity();
     void DestroyEntity(EntityId id);
 
-    Entity* GetEntity(EntityId id);
+    Entity* GetEntity(EntityId id) const;
     // 提供安全的实体内存访问（供 System 使用）
     std::vector<Entity>& GetEntities() { return m_entities; }
 

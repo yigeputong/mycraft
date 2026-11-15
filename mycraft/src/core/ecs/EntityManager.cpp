@@ -2,8 +2,6 @@
 
 #include <cmath>
 
-#include "game/core/Physics.h"
-
 namespace game::core::ecs {
 
 static uint32_t XorShift32(uint32_t& state) {
@@ -61,6 +59,7 @@ EntityId EntityManager::CreateEntity() {
     e.item.reset();
     e.netInterp.reset();
     e.player.reset();
+    e.serverPlayer.reset();
     e.renderable.reset();
     return id;
 }
@@ -77,14 +76,16 @@ void EntityManager::DestroyEntity(EntityId id) {
     }
 }
 
-Entity* EntityManager::GetEntity(EntityId id) {
+Entity* EntityManager::GetEntity(EntityId id) const {
     uint32_t index = GetEntityIndex(id);
     uint32_t generation = GetEntityGeneration(id);
     if (index >= m_entities.size())
         return nullptr;
-    auto& e = m_entities[index];
-    if (e.active && m_generations[index] == generation)
-        return &e;
+
+    const auto& e = m_entities[index];
+    if (e.active && m_generations[index] == generation) {
+        return const_cast<Entity*>(&e);
+    }
     return nullptr;
 }
 

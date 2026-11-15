@@ -1,16 +1,22 @@
 #pragma once
-
+#include <array>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <string>
 
 #include "game/client/ModelLoader.h"
+#include "game/core/Blocks.h"
+
+namespace game {
+struct Chunk;
+}
 
 namespace game::core::ecs {
 
 struct TransformComponent {
     glm::vec3 position{0.0f};
-    float yaw = 0.0f;    // 水平朝向（度）。约定：front = (cos yaw, 0, sin yaw)
-    float pitch = 0.0f;  // 垂直朝向（度）。仅玩家相机使用，其他实体默认 0
+    float yaw = 0.0f;
+    float pitch = 0.0f;
 };
 
 struct VelocityComponent {
@@ -22,7 +28,6 @@ struct VelocityComponent {
 
 struct AABBComponent {
     glm::vec3 halfExtents{0.45f, 0.45f, 0.45f};
-    // position 语义：true = 脚底（玩家/猪），false = 几何中心（掉落物）
     bool positionIsFeet = true;
 };
 
@@ -37,44 +42,78 @@ struct PigAIComponent {
     uint32_t rngState = 1337;
 };
 
-// 掉落物组件
 struct ItemComponent {
     BlockId itemType = AIR_ID;
     int count = 1;
     float pickupDelay = 0.5f;
     float bobTime = 0.0f;
-
+    float age = 0.0f;
     bool isPickingUp = false;
     float pickupT = 0.0f;
     glm::vec3 pickupStart{0.0f};
     uint32_t pickerId = 0;
 };
 
-// 网络插值组件
 struct NetInterpolationComponent {
     glm::vec3 prevPos{0.0f};
     glm::vec3 targetPos{0.0f};
     float interpT = 1.0f;
 };
 
-// ★ 新增：玩家组件
-// 玩家物理权威走 game::StepPlayer，velocity 是完整三维向量，
-// 不复用 VelocityComponent（那是猪的 moveDir+speed 拆分语义）。
+// 客户端专属：平滑插值、预测误差等
 struct PlayerComponent {
-    glm::vec3 velocity{0.0f};  // StepPlayer 权威速度
+    glm::vec3 velocity{0.0f};
     bool onGround = false;
     bool flyMode = true;
-    float jumpHoldTimer = 0.0f;     // 跳跃输入保持窗口
-    glm::vec3 positionError{0.0f};  // 服务端校正残差（平滑叠加到 transform）
+    float jumpHoldTimer = 0.0f;
+    glm::vec3 positionError{0.0f};
 };
 
-// 渲染组件：模型（猪）与方块（掉落物）二选一
+// 服务端专属：网络同步、背包、权威物理
+struct ServerPlayerComponent {
+    uint32_t clientId = 0;
+    std::string name;
+    std::array<ItemStack, 36> inventory{};
+    int32_t inventoryStateId = 0;
+    ItemStack heldItem{};
+
+    // 输入缓存
+    bool jumpInput = false;
+    bool flyMode = false;
+    glm::vec3 moveInput{0.0f};
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+
+    // 物理权威缓存 (给 StepPlayer 用)
+    glm::vec3 velocity{0.0f};
+    bool onGround = false;
+};
+
 struct RenderableComponent {
     client::LoadedModel* model = nullptr;
     std::string currentClip = "Walk";
     float animTime = 0.0f;
-
     BlockId blockType = AIR_ID;
+};
+
+// 区块坐标组件
+struct ChunkCoordComponent {
+    int cx = 0;
+    int cz = 0;
+};
+
+// 区块数据组件（持有数据与Mesh版本）
+struct ChunkComponent {
+    std::shared_ptr<Chunk> data = nullptr;  // 共享区块数据
+    uint32_t meshVersion = 0;               // 用于校验异步建网格时的版本冲突
+    bool isMeshDirty = false;               // 是否需要重新建网格
+};
+
+// 区块渲染组件（客户端专用）
+struct ChunkRenderComponent {
+    // 未来这里会存 VBO/IBO 的 offset、indexCount 等
+    uint32_t indexCount = 0;
+    bool isUploaded = false;
 };
 
 }  // namespace game::core::ecs

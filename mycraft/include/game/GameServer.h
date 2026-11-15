@@ -3,6 +3,7 @@
 #include <condition_variable>
 #include <glm/glm.hpp>
 #include <memory>
+#include <mutex>
 #include <queue>
 #include <shared_mutex>
 #include <string>
@@ -20,9 +21,11 @@
 #include "game/core/BlockRegistry.h"
 #include "game/core/Physics.h"
 #include "game/core/World.h"
+#include "game/core/ecs/Components.h"
+#include "game/core/ecs/EntityManager.h"
+#include "game/core/ecs/System.h"
 #include "game/server/WorldGenerator.h"
 #include "game/server/WorldSave.h"
-
 
 namespace game::server {
 
@@ -34,7 +37,6 @@ public:
     std::shared_ptr<Eng::tool::MemoryPipe> GetMemoryPipe() const;
     size_t GetChunkCount() const { return m_chunks.size(); }
 
-    // 提供给 UI 绘制“小太阳”的进度查询接口
     GenPhase GetChunkProgress(int cx, int cz) const;
 
 private:
@@ -48,24 +50,15 @@ private:
     std::unique_ptr<Eng::tool::Log> m_logger = std::make_unique<Eng::tool::Log>();
     game::BlockRegistry m_registry;
 
-    // ==================== 玩家 ====================
-    struct ServerPlayer {
-        uint32_t id = 0;
-        std::string name;
-        glm::vec3 position{0.0f, 256.0f, 0.0f};
-        glm::vec3 velocity{0.0f};
-        bool onGround = false;
-        bool jump = false;
-        float yaw = 0.0f;
-        float pitch = 0.0f;
-        glm::vec3 moveDir{0.0f};
-        bool flyMode = false;
-        std::array<ItemStack, 36> inventory{};  // 0-8 快捷栏，9-35 背包
-        int32_t inventoryStateId = 0;
-        ItemStack heldItem{};
-    };
-    std::vector<ServerPlayer> m_players;
-    mutable std::mutex m_playersMutex;
+    // ==================== ECS 世界 ====================
+    game::core::ecs::EntityManager m_ecsWorld;
+    mutable std::mutex m_worldMutex;
+
+    // 网络 ID <-> ECS EntityId 映射
+    std::unordered_map<uint32_t, game::core::ecs::EntityId> m_netToEcsMap;
+    std::unordered_map<game::core::ecs::EntityId, uint32_t> m_ecsToNetMap;
+    uint32_t m_nextNetEntityId = 1;
+
     static constexpr float REACH_DISTANCE = 5.0f;
 
     // ==================== 世界数据 ====================
@@ -93,14 +86,12 @@ private:
         std::unique_ptr<ChunkGenContext> ctx;
         std::atomic<GenPhase> phase{GenPhase::Empty};
     };
-
     static constexpr size_t MAX_CONCURRENT_GENERATING = 64;
 
     mutable std::shared_mutex m_genMutex;
     std::unordered_map<uint64_t, std::shared_ptr<InFlightChunk>> m_generatingChunks;
 
     std::vector<std::unique_ptr<Eng::tool::RAIIThread>> m_workers;
-
     std::mutex m_taskMutex;
     std::condition_variable m_taskCv;
     std::queue<Eng::tool::UniqueFunction> m_taskQueue;
@@ -112,7 +103,6 @@ private:
     };
     std::mutex m_resultMutex;
     std::queue<ChunkResult> m_resultQueue;
-
     std::unordered_map<uint64_t, std::vector<int>> m_waitingClients;
 
     void StartWorkers(uint32_t seed);
@@ -121,25 +111,9 @@ private:
     void DrainChunkResults();
     void SendChunkTo(int clientId, const Chunk& chunk);
 
-    // ==================== 实体 ====================
-    struct ItemEntity : game::PointEntity {
-        uint32_t id = 0;
-        float pickupDelay = 0.5f;
-        float age = 0.0f;
-        BlockId itemType = AIR_ID;
-    };
-    std::unordered_map<uint32_t, ItemEntity> m_entities;
-    uint32_t m_nextEntityId = 1;
-    std::vector<uint32_t> m_freeEntityIds;
-
-    uint32_t AllocEntityId() {
-        if (!m_freeEntityIds.empty()) {
-            uint32_t id = m_freeEntityIds.back();
-            m_freeEntityIds.pop_back();
-            return id;
-        }
-        return m_nextEntityId++;
-    }
+    // ==================== ECS 辅助 ====================
+    game::core::ecs::EntityId CreateNetworkEntity(uint32_t& outNetId);
+    game::core::ecs::Entity* GetEntityByNetId(uint32_t netId);
 
     void SpawnItemDrop(const glm::vec3& pos, BlockId id);
     void TickEntities(float dt);
@@ -157,14 +131,14 @@ private:
     Chunk* GetCachedChunk(int cx, int cz);
     BlockId GetBlockAt(int wx, int wy, int wz) const;
     void SetBlockAt(int wx, int wy, int wz, BlockId id);
-    bool IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz);
+    bool IsInsidePlayer(game::core::ecs::Entity& playerEntity, int bx, int by, int bz);
     void SendInventoryUpdate(int clientId);
     void HandleClickContainer(int clientId, Eng::tool::MessageReader& r);
 
     // ==================== 交互 ====================
-    void HandleDig(ServerPlayer& p);
-    void HandlePlace(ServerPlayer& p, BlockId id);
-    void AddToInventory(ServerPlayer& p, BlockId id, int count);
+    void HandleDig(game::core::ecs::Entity& playerEntity);
+    void HandlePlace(game::core::ecs::Entity& playerEntity, BlockId id);
+    void AddToInventory(game::core::ecs::Entity& playerEntity, BlockId id, int count);
 
     // ==================== 广播 ====================
     void BroadcastWorldState();

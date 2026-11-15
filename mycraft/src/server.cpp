@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <random>
 
-#include "Engine/tool/Log.h"
 #include "Engine/tool/MessageReader.h"
 #include "Engine/tool/MessageWriter.h"
 #include "Engine/tool/NetworkTransport.h"
@@ -15,9 +14,29 @@
 #include "game/core/LightEngine.h"
 #include "game/core/Physics.h"
 #include "game/core/RayCast.h"
+#include "game/core/ecs/PhysicsSystem.h"
 #include "game/server/WorldGenerator.h"
 
 namespace game::server {
+
+// ============================================================
+// ECS 辅助方法
+// ============================================================
+game::core::ecs::EntityId GameServer::CreateNetworkEntity(uint32_t& outNetId) {
+    outNetId = m_nextNetEntityId++;
+    auto eid = m_ecsWorld.CreateEntity();
+    m_netToEcsMap[outNetId] = eid;
+    m_ecsToNetMap[eid] = outNetId;
+    return eid;
+}
+
+game::core::ecs::Entity* GameServer::GetEntityByNetId(uint32_t netId) {
+    auto it = m_netToEcsMap.find(netId);
+    if (it != m_netToEcsMap.end()) {
+        return m_ecsWorld.GetEntity(it->second);
+    }
+    return nullptr;
+}
 
 // ============================================================
 // 流水线进度查询
@@ -55,22 +74,19 @@ void GameServer::StopWorkers() {
         m_workersStop = true;
     }
     m_taskCv.notify_all();
-
     m_workers.clear();
 }
 
 void GameServer::WorkerLoop(uint32_t seed, const std::stop_token& st) {
     TerrainGenerator terrain(seed, m_registry);
-
     while (true) {
         Eng::tool::UniqueFunction task;
         {
             std::unique_lock lk(m_taskMutex);
             m_taskCv.wait(lk,
                           [this, &st] { return m_workersStop.load() || st.stop_requested() || !m_taskQueue.empty(); });
-            if ((m_workersStop.load() || st.stop_requested()) && m_taskQueue.empty()) {
+            if ((m_workersStop.load() || st.stop_requested()) && m_taskQueue.empty())
                 return;
-            }
             task = std::move(m_taskQueue.front());
             m_taskQueue.pop();
         }
@@ -92,7 +108,6 @@ void GameServer::DrainChunkResults() {
             m_resultQueue.pop();
         }
 
-        // 1. 应用存档中的方块改变
         auto cit = m_pendingChanges.find(r.key);
         if (cit != m_pendingChanges.end()) {
             for (const auto& c : cit->second) {
@@ -100,8 +115,6 @@ void GameServer::DrainChunkResults() {
                 int lz = c.z & 15;
                 ChunkSet(*r.chunk, lx, c.y, lz, c.block);
             }
-
-            // 应用完方块改变后，立刻重算该区块的光照
             int cx = r.chunk->chunk_x;
             int cz = r.chunk->chunk_z;
             auto* cXm = GetCachedChunk(cx - 1, cz);
@@ -111,24 +124,18 @@ void GameServer::DrainChunkResults() {
             LightEngine::InitRegion(m_registry, *r.chunk, cXm, cXp, cZm, cZp);
         }
 
-        // 2. 存入缓存
-        if (r.chunk) {
+        if (r.chunk)
             m_chunks.emplace(r.key, *r.chunk);
-        }
-
-        // 3. 移除生成队列
         {
             std::unique_lock lock(m_genMutex);
             m_generatingChunks.erase(r.key);
         }
 
-        // 4. 发送给等待的客户端
         auto it = m_waitingClients.find(r.key);
         if (it != m_waitingClients.end()) {
             const Chunk& c = m_chunks.at(r.key);
-            for (int cid : it->second) {
+            for (int cid : it->second)
                 SendChunkTo(cid, c);
-            }
             m_waitingClients.erase(it);
         }
         ++sends;
@@ -160,7 +167,6 @@ void GameServer::Run() {
 
     while (m_running.load()) {
         m_server->Update();
-
         if (m_save)
             m_save->RefreshLock();
 
@@ -175,9 +181,8 @@ void GameServer::Run() {
             while (!m_chunkQueue.empty()) {
                 {
                     std::shared_lock lock(m_genMutex);
-                    if (m_generatingChunks.size() >= MAX_CONCURRENT_GENERATING) {
+                    if (m_generatingChunks.size() >= MAX_CONCURRENT_GENERATING)
                         break;
-                    }
                 }
 
                 auto req = m_chunkQueue.front();
@@ -214,7 +219,6 @@ void GameServer::Run() {
                     inFlight->phase.store(GenPhase::Lighting, std::memory_order_relaxed);
                     LightEngine::InitRegion(m_registry, *inFlight->ctx->chunk, nullptr, nullptr, nullptr, nullptr);
                     inFlight->phase.store(GenPhase::Ready, std::memory_order_relaxed);
-
                     std::lock_guard lk4(m_resultMutex);
                     m_resultQueue.push({inFlight->key, std::move(inFlight->ctx->chunk)});
                 });
@@ -228,24 +232,20 @@ void GameServer::Run() {
             m_saveAccum += TICK_INTERVAL;
             if (m_dirty && m_saveAccum >= kSaveIntervalSec) {
                 std::vector<BlockChange> flat;
-                for (auto& [k, v] : m_pendingChanges) {
+                for (auto& [k, v] : m_pendingChanges)
                     flat.insert(flat.end(), v.begin(), v.end());
-                }
                 m_save->SaveChanges(flat);
                 m_dirty = false;
                 m_saveAccum = 0.0f;
             }
 
             BroadcastWorldState();
-
             auto tickEnd = std::chrono::steady_clock::now();
             m_lastTickMs = std::chrono::duration<float, std::milli>(tickEnd - tickStart).count();
-
             accumulator -= TICK_INTERVAL;
         }
         SDL_Delay(1);
     }
-
     StopWorkers();
 }
 
@@ -258,9 +258,8 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
 
     m_registry.LoadAll("assets/block");
     m_save = std::make_unique<WorldSave>(worldId);
-
     if (!m_save->Lock()) {
-        logError(m_logger, "[Server] World " << worldId << " is locked (already in use or crashed).");
+        m_save->Unlock();
         return false;
     }
 
@@ -269,63 +268,40 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
     if (m_save->LoadLevel(meta, spawn)) {
         m_worldSeed = meta.seed;
         m_spawnPos = spawn;
-        meta.lastPlayedTime =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-                .count();
     } else {
-        logError(m_logger, "[Server] Failed to load level.json for " << worldId);
         m_save->Unlock();
         return false;
     }
 
     bool needNewSpawn = (m_spawnPos.y < 60.0f || m_spawnPos.y > 120.0f);
     if (needNewSpawn) {
-        logInfo(m_logger, "[Server] Generating chunks to search for a valid spawn point...");
-
         TerrainGenerator gen(m_worldSeed, m_registry);
         glm::vec3 foundPos(0.0f);
         bool found = false;
         BlockId waterId = m_registry.Get("mycraft:water").id;
 
-        // 搜索半径 3 个区块（7x7区块，约 112x112 区域）
         for (int r = 0; r <= 3 && !found; ++r) {
             for (int cx = -r; cx <= r && !found; ++cx) {
                 for (int cz = -r; cz <= r && !found; ++cz) {
-                    // 只搜索最外圈
                     if (r > 0 && std::abs(cx) != r && std::abs(cz) != r)
                         continue;
-
-                    // 强制生成该区块的真实数据
                     Chunk chunk = gen.GenerateChunk(cx, cz);
                     uint64_t key = ChunkKey(cx, cz);
-
-                    // 把生成的区块顺手塞进服务端缓存，客户端连入时秒发！
-                    if (!m_chunks.contains(key)) {
+                    if (!m_chunks.contains(key))
                         m_chunks.emplace(key, chunk);
-                    }
 
-                    // 在生成的区块里，从最高点往下寻找安全的陆地
                     for (int lx = 0; lx < 16 && !found; ++lx) {
                         for (int lz = 0; lz < 16 && !found; ++lz) {
                             for (int y = CHUNK_SIZE_Y - 1; y > 0; --y) {
                                 BlockId b = ChunkGet(chunk, lx, y, lz);
-
-                                // 必须是实心方块，且不能是水
                                 if (b != AIR_ID && b != waterId) {
-                                    // 检查头顶两格必须全是空气（防止出生在树里或者山洞里）
                                     BlockId h1 = ChunkGet(chunk, lx, y + 1, lz);
                                     BlockId h2 = ChunkGet(chunk, lx, y + 2, lz);
-
-                                    if (h1 == AIR_ID && h2 == AIR_ID) {
-                                        // 确保不是极深的地底
-                                        if (y > SEA_LEVEL) {
-                                            int wx = cx * 16 + lx;
-                                            int wz = cz * 16 + lz;
-                                            foundPos = glm::vec3(wx + 0.5f, y + 1.0f, wz + 0.5f);
-                                            found = true;
-                                        }
+                                    if (h1 == AIR_ID && h2 == AIR_ID && y > SEA_LEVEL) {
+                                        foundPos = glm::vec3(cx * 16 + lx + 0.5f, y + 1.0f, cz * 16 + lz + 0.5f);
+                                        found = true;
                                     }
-                                    break;  // 这一列已经找到最高实心方块了，跳出 Y 循环
+                                    break;
                                 }
                             }
                         }
@@ -333,37 +309,23 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
                 }
             }
         }
-
         if (found) {
             m_spawnPos = foundPos;
-            logInfo(m_logger, "[Server] Spawn point successfully set to: " << m_spawnPos.x << ", " << m_spawnPos.y
-                                                                           << ", " << m_spawnPos.z);
-
             for (auto& [key, chunk] : m_chunks) {
                 int cx = chunk.chunk_x;
                 int cz = chunk.chunk_z;
                 LightEngine::InitRegion(m_registry, chunk, GetCachedChunk(cx - 1, cz), GetCachedChunk(cx + 1, cz),
                                         GetCachedChunk(cx, cz - 1), GetCachedChunk(cx, cz + 1));
             }
-            logInfo(m_logger, "[Server] Initialized lighting for " << m_chunks.size() << " spawn chunks.");
         } else {
-            // 全图都是水，直接强行抬到 Y=150 的虚空
             m_spawnPos = glm::vec3(0.5f, 150.0f, 0.5f);
-            logError(m_logger, "[Server] Failed to find land, falling back to (0.5, 150, 0.5)");
         }
-
         m_save->SaveLevel(meta, m_spawnPos);
-    } else {
-        m_save->SaveLevel(meta, m_spawnPos);
-        logInfo(m_logger, "[Server] Loaded world '" << meta.displayName << "', spawn at " << m_spawnPos.x << ", "
-                                                    << m_spawnPos.y << ", " << m_spawnPos.z);
     }
 
     auto changes = m_save->LoadChanges();
-    for (auto& c : changes) {
-        uint64_t k = ChunkKey(c.x >> 4, c.z >> 4);
-        m_pendingChanges[k].push_back(c);
-    }
+    for (auto& c : changes)
+        m_pendingChanges[ChunkKey(c.x >> 4, c.z >> 4)].push_back(c);
 
     if (useMemory)
         m_server = std::make_unique<Eng::tool::MemoryServerTransport>();
@@ -376,27 +338,32 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
     }
 
     m_server->SetConnectCallback([this](int id) {
+        uint32_t netId = (uint32_t)id;
+
+        // 1. 初始化玩家实体
         {
-            std::lock_guard<std::mutex> lock(m_playersMutex);
-            ServerPlayer p;
-            p.id = (uint32_t)id;
-            p.position = m_spawnPos;
+            std::lock_guard<std::mutex> lock(m_worldMutex);
+            auto eid = CreateNetworkEntity(netId);
+            auto* e = m_ecsWorld.GetEntity(eid);
+            if (!e)
+                return;
 
-            // 给新玩家一点初始物品，防止空手测试
-            p.inventory[0].type = m_registry.Get("mycraft:grass_block").id;
-            p.inventory[0].count = 64;
-
-            p.inventory[1].type = m_registry.Get("mycraft:dirt").id;
-            p.inventory[1].count = 64;
-
-            m_players.push_back(p);
-
-            Eng::tool::MessageWriter w;
-            w.Write(static_cast<uint8_t>(net::MessageType::PlayerId));
-            w.WriteU32BE((uint32_t)id);
-            m_server->SendTo(id, w.GetBuffer());
+            e->transform.position = m_spawnPos;
+            e->serverPlayer = game::core::ecs::ServerPlayerComponent{};
+            e->serverPlayer->clientId = netId;
+            e->serverPlayer->inventory[0].type = m_registry.Get("mycraft:grass_block").id;
+            e->serverPlayer->inventory[0].count = 64;
+            e->serverPlayer->inventory[1].type = m_registry.Get("mycraft:dirt").id;
+            e->serverPlayer->inventory[1].count = 64;
         }
 
+        // 2. 发送网络包 (无需加锁)
+        {
+            Eng::tool::MessageWriter w;
+            w.Write(static_cast<uint8_t>(net::MessageType::PlayerId));
+            w.WriteU32BE(netId);
+            m_server->SendTo(id, w.GetBuffer());
+        }
         {
             Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(net::MessageType::ServerInfo));
@@ -405,19 +372,23 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
             m_server->SendTo(id, w.GetBuffer());
         }
 
+        // 3. 发送已有实体 (读取实体列表时加锁)
         {
-            std::lock_guard<std::mutex> lock(m_playersMutex);
-            for (auto& [eid, e] : m_entities) {
+            std::lock_guard<std::mutex> lock(m_worldMutex);
+            for (auto& ent : m_ecsWorld.GetEntities()) {
+                if (!ent.active || !ent.item)
+                    continue;
+                uint32_t itemNetId = m_ecsToNetMap[ent.id];
                 Eng::tool::MessageWriter w;
                 w.Write(static_cast<uint8_t>(game::net::MessageType::EntitySpawn));
-                w.Write<uint32_t>(eid);
-                w.WriteVec3(e.position);
-                w.Write<uint16_t>(e.itemType);
+                w.Write<uint32_t>(itemNetId);
+                w.WriteVec3(ent.transform.position);
+                w.Write<uint16_t>(ent.item->itemType);
                 m_server->SendTo(id, w.GetBuffer());
             }
         }
 
-        // 发送初始背包同步
+        // 4. 发送背包 (内部已有锁，放心调用)
         SendInventoryUpdate(id);
         logInfo(m_logger, "[Server] Player " << id << " joined");
     });
@@ -425,19 +396,21 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
     m_server->SetMessageCallback([this](int id, const std::vector<uint8_t>& data) { HandleMessage(id, data); });
 
     m_server->SetDisconnectCallback([this](int id) {
-        std::lock_guard<std::mutex> lock(m_playersMutex);
-        for (auto& p : m_players) {
-            if (p.id == (uint32_t)id) {
-                if (m_save && !p.name.empty()) {
-                    m_save->SavePlayer(p.name, p.position, p.yaw, p.pitch, p.inventory);
+        std::lock_guard<std::mutex> lock(m_worldMutex);
+        uint32_t netId = (uint32_t)id;
+        auto it = m_netToEcsMap.find(netId);
+        if (it != m_netToEcsMap.end()) {
+            auto* e = m_ecsWorld.GetEntity(it->second);
+            if (e && e->serverPlayer) {
+                if (m_save && !e->serverPlayer->name.empty()) {
+                    m_save->SavePlayer(e->serverPlayer->name, e->transform.position, e->serverPlayer->yaw,
+                                       e->serverPlayer->pitch, e->serverPlayer->inventory);
                 }
-                break;
+                m_ecsToNetMap.erase(e->id);
+                m_ecsWorld.DestroyEntity(e->id);
             }
+            m_netToEcsMap.erase(it);
         }
-        m_players.erase(std::remove_if(m_players.begin(), m_players.end(),
-                                       [id](const ServerPlayer& p) { return p.id == (uint32_t)id; }),
-                        m_players.end());
-        logInfo(m_logger, "[Server] Player " << id << " left");
     });
 
     m_running.store(true);
@@ -451,36 +424,36 @@ void GameServer::Stop() {
         m_server->Shutdown();
     if (m_thread.joinable())
         m_thread.join();
-
+    std::lock_guard<std::mutex> lock(m_worldMutex);
     if (m_save) {
-        for (auto& p : m_players) {
-            if (!p.name.empty()) {
-                m_save->SavePlayer(p.name, p.position, p.yaw, p.pitch, p.inventory);
+        for (auto& e : m_ecsWorld.GetEntities()) {
+            if (e.active && e.serverPlayer && !e.serverPlayer->name.empty()) {
+                m_save->SavePlayer(e.serverPlayer->name, e.transform.position, e.serverPlayer->yaw,
+                                   e.serverPlayer->pitch, e.serverPlayer->inventory);
             }
         }
         if (m_dirty) {
             std::vector<BlockChange> flat;
-            for (auto& [k, v] : m_pendingChanges) {
+            for (auto& [k, v] : m_pendingChanges)
                 flat.insert(flat.end(), v.begin(), v.end());
-            }
             m_save->SaveChanges(flat);
         }
         m_save->Unlock();
     }
-    logInfo(m_logger, "[Server] Stopped");
+    m_ecsWorld.Clear();
+    m_netToEcsMap.clear();
+    m_ecsToNetMap.clear();
 }
 
 std::shared_ptr<Eng::tool::MemoryPipe> GameServer::GetMemoryPipe() const {
-    if (auto* mem = dynamic_cast<Eng::tool::MemoryServerTransport*>(m_server.get())) {
+    if (auto* mem = dynamic_cast<Eng::tool::MemoryServerTransport*>(m_server.get()))
         return mem->m_pipe;
-    }
     return nullptr;
 }
 
 void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
     if (data.empty())
         return;
-
     auto type = static_cast<game::net::MessageType>(data[0]);
     Eng::tool::MessageReader r(std::span<const uint8_t>(data).subspan(1));
 
@@ -494,12 +467,9 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
             in.place = r.Read<uint8_t>() != 0;
             in.placeBlock = r.Read<uint16_t>();
             in.fly = r.Read<uint8_t>() != 0;
-
             ApplyPlayerInput(clientId, in);
-            // 放置方块会扣除背包，处理完立刻同步背包状态
-            if (in.place) {
+            if (in.place)
                 SendInventoryUpdate(clientId);
-            }
             break;
         }
         case game::net::MessageType::ChunkRequest: {
@@ -514,152 +484,180 @@ void GameServer::HandleMessage(int clientId, const std::vector<uint8_t>& data) {
                 nlen = 32;
             auto bytes = r.ReadBytes(nlen);
             std::string name(bytes.begin(), bytes.end());
-
-            std::lock_guard<std::mutex> lock(m_playersMutex);
-            for (auto& p : m_players) {
-                if (p.id == (uint32_t)clientId) {
-                    p.name = name;
-                    glm::vec3 sp;
-                    float sy = 0, spitch = 0;
-                    if (m_save && m_save->LoadPlayer(name, sp, sy, spitch, p.inventory)) {
-                        p.position = sp;
-                        p.yaw = sy;
-                        p.pitch = spitch;
-                        if (p.position.y < 60.0f || p.position.y > 150.0f)
-                            p.position = m_spawnPos;
-                    } else {
-                        p.position = m_spawnPos;
-                    }
-                    break;
+            std::lock_guard<std::mutex> lock(m_worldMutex);
+            auto* e = GetEntityByNetId((uint32_t)clientId);
+            if (e && e->serverPlayer) {
+                e->serverPlayer->name = name;
+                glm::vec3 sp;
+                float sy = 0, spitch = 0;
+                if (m_save && m_save->LoadPlayer(name, sp, sy, spitch, e->serverPlayer->inventory)) {
+                    e->transform.position = sp;
+                    e->serverPlayer->yaw = sy;
+                    e->serverPlayer->pitch = spitch;
+                    if (e->transform.position.y < 60.0f || e->transform.position.y > 150.0f)
+                        e->transform.position = m_spawnPos;
+                } else {
+                    e->transform.position = m_spawnPos;
                 }
             }
             break;
         }
-        case game::net::MessageType::ClickContainer: {
+        case game::net::MessageType::ClickContainer:
             HandleClickContainer(clientId, r);
             break;
-        }
         default:
             break;
     }
 }
 
 void GameServer::ApplyPlayerInput(int clientId, const net::PlayerInput& in) {
-    std::lock_guard<std::mutex> lock(m_playersMutex);  // ★ 防止并发修改
-    for (auto& p : m_players) {
-        if (p.id == (uint32_t)clientId) {
-            p.moveDir = in.moveDir;
-            p.yaw = in.look.x;
-            p.pitch = in.look.y;
-            p.jump = in.jump;
-            p.flyMode = in.fly;
-            if (in.dig)
-                HandleDig(p);
-            if (in.place)
-                HandlePlace(p, in.placeBlock);
-            return;
-        }
-    }
+    std::lock_guard<std::mutex> lock(m_worldMutex);
+    auto* e = GetEntityByNetId((uint32_t)clientId);
+    if (!e || !e->serverPlayer)
+        return;
+
+    e->serverPlayer->moveInput = in.moveDir;
+    e->serverPlayer->yaw = in.look.x;
+    e->serverPlayer->pitch = in.look.y;
+    e->serverPlayer->jumpInput = in.jump;
+    e->serverPlayer->flyMode = in.fly;
+
+    if (in.dig)
+        HandleDig(*e);
+    if (in.place)
+        HandlePlace(*e, in.placeBlock);
 }
 
 void GameServer::TickWorld(float dt) {
-    std::lock_guard<std::mutex> lock(m_playersMutex);
-    for (auto& p : m_players) {
+    std::lock_guard<std::mutex> lock(m_worldMutex);
+    for (auto& e : m_ecsWorld.GetEntities()) {
+        if (!e.active || !e.serverPlayer)
+            continue;
+
         game::PlayerMotion m;
-        m.position = p.position;
-        m.velocity = p.velocity;
-        m.onGround = p.onGround;
-        m.flyMode = p.flyMode;
+        m.position = e.transform.position;
+        m.velocity = e.serverPlayer->velocity;
+        m.onGround = e.serverPlayer->onGround;
+        m.flyMode = e.serverPlayer->flyMode;
 
-        game::StepPlayer(m, p.moveDir, p.jump, dt, [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
+        game::StepPlayer(m, e.serverPlayer->moveInput, e.serverPlayer->jumpInput, dt,
+                         [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
 
-        p.position = m.position;
-        p.velocity = m.velocity;
-        p.onGround = m.onGround;
-        p.jump = false;
+        e.transform.position = m.position;
+        e.serverPlayer->velocity = m.velocity;
+        e.serverPlayer->onGround = m.onGround;
+        e.serverPlayer->jumpInput = false;
     }
 }
 
 void GameServer::SpawnItemDrop(const glm::vec3& pos, BlockId id) {
     static thread_local std::mt19937 s_rng(std::random_device{}());
     static thread_local std::uniform_real_distribution<float> s_dist(-1.0f, 1.0f);
-    ItemEntity e;
-    e.id = AllocEntityId();
-    e.position = pos;
-    e.velocity = glm::vec3(s_dist(s_rng) * 2.0f, 2.5f, s_dist(s_rng) * 2.0f);
-    e.pickupDelay = 0.5f;
-    e.itemType = id;
+    uint32_t netId = 0;
+    auto eid = CreateNetworkEntity(netId);
+    auto* e = m_ecsWorld.GetEntity(eid);
+    if (!e)
+        return;
 
-    m_entities[e.id] = e;
+    e->transform.position = pos;
+    e->velocity =
+        game::core::ecs::VelocityComponent{.moveDir = glm::normalize(glm::vec3(s_dist(s_rng), 0.0f, s_dist(s_rng))),
+                                           .speed = 2.0f,
+                                           .yVelocity = 2.5f,
+                                           .onGround = false};
+    e->aabb = game::core::ecs::AABBComponent{.halfExtents = glm::vec3(0.15f, 0.15f, 0.15f), .positionIsFeet = false};
+    e->item =
+        game::core::ecs::ItemComponent{.itemType = id, .count = 1, .pickupDelay = 0.5f, .bobTime = 0.0f, .age = 0.0f};
 
     Eng::tool::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::EntitySpawn));
-    w.Write<uint32_t>(e.id);
+    w.Write<uint32_t>(netId);
     w.WriteVec3(pos);
     w.Write<uint16_t>(id);
     m_server->Broadcast(w.GetBuffer());
 }
 
 void GameServer::TickEntities(float dt) {
-    std::vector<uint32_t> toRemove;
+    game::core::ecs::SystemContext ctx;
+    ctx.dt = dt;
+    ctx.playerPos = glm::vec3(0.0f);
+    ctx.isSolidAt = [this](int x, int y, int z) { return IsSolidAt(x, y, z); };
+
+    static game::core::ecs::PhysicsSystem physicsSystem;
+    physicsSystem.Update(m_ecsWorld, ctx);
+
+    std::vector<game::core::ecs::EntityId> toDestroy;
     std::vector<int> clientsToSync;
 
     {
-        std::lock_guard<std::mutex> lock(m_playersMutex);
-        for (auto& [id, e] : m_entities) {
-            game::StepPointEntity(e, dt, [this](int x, int y, int z) { return IsSolidAt(x, y, z); });
-
-            if (e.pickupDelay > 0)
-                e.pickupDelay -= dt;
-            e.age += dt;
+        std::lock_guard<std::mutex> lock(m_worldMutex);
+        for (auto& e : m_ecsWorld.GetEntities()) {
+            if (!e.active || !e.item)
+                continue;
+            auto& item = *e.item;
+            uint32_t netId = m_ecsToNetMap[e.id];
 
             {
                 Eng::tool::MessageWriter w;
                 w.Write(static_cast<uint8_t>(game::net::MessageType::EntityUpdate));
-                w.Write<uint32_t>(id);
-                w.WriteVec3(e.position);
+                w.Write<uint32_t>(netId);
+                w.WriteVec3(e.transform.position);
                 m_server->Broadcast(w.GetBuffer());
             }
 
-            if (e.age > 300.0f) {
+            item.age += dt;
+            if (item.pickupDelay > 0)
+                item.pickupDelay -= dt;
+
+            if (item.age > 300.0f) {
                 Eng::tool::MessageWriter w;
                 w.Write(static_cast<uint8_t>(game::net::MessageType::EntityDestroy));
-                w.Write<uint32_t>(id);
+                w.Write<uint32_t>(netId);
                 w.Write<uint8_t>(0);
                 w.WriteU32BE(0);
                 m_server->Broadcast(w.GetBuffer());
-                toRemove.push_back(id);
+                toDestroy.push_back(e.id);
                 continue;
             }
 
-            if (e.pickupDelay <= 0.0f) {
-                for (auto& p : m_players) {
-                    glm::vec3 center = p.position + glm::vec3(0.0f, 0.9f, 0.0f);
-                    float d2 = glm::distance(e.position, center);
-                    if (d2 < 1.5f * 1.5f) {
+            if (item.pickupDelay <= 0.0f) {
+                for (auto& playerEnt : m_ecsWorld.GetEntities()) {
+                    if (!playerEnt.active || !playerEnt.serverPlayer)
+                        continue;
+                    glm::vec3 center = playerEnt.transform.position + glm::vec3(0.0f, 0.9f, 0.0f);
+                    if (glm::distance(e.transform.position, center) < 1.5f) {
                         Eng::tool::MessageWriter w;
                         w.Write(static_cast<uint8_t>(game::net::MessageType::EntityDestroy));
-                        w.Write<uint32_t>(id);
+                        w.Write<uint32_t>(netId);
                         w.Write<uint8_t>(1);
-                        w.WriteU32BE(p.id);
+                        w.WriteU32BE(playerEnt.serverPlayer->clientId);
                         m_server->Broadcast(w.GetBuffer());
-                        toRemove.push_back(id);
 
-                        AddToInventory(p, e.itemType, 1);
-                        p.inventoryStateId++;
-                        clientsToSync.push_back(p.id);
+                        AddToInventory(playerEnt, item.itemType, 1);
+                        playerEnt.serverPlayer->inventoryStateId++;
+                        clientsToSync.push_back(playerEnt.serverPlayer->clientId);
+                        toDestroy.push_back(e.id);
                         break;
                     }
                 }
             }
         }
+    }
 
-        for (uint32_t id : toRemove) {
-            m_entities.erase(id);
-            m_freeEntityIds.push_back(id);
+    // 销毁实体
+    if (!toDestroy.empty()) {
+        std::lock_guard<std::mutex> lock(m_worldMutex);
+        for (auto eid : toDestroy) {
+            auto it = m_ecsToNetMap.find(eid);
+            if (it != m_ecsToNetMap.end()) {
+                m_netToEcsMap.erase(it->second);
+                m_ecsToNetMap.erase(it);
+            }
+            m_ecsWorld.DestroyEntity(eid);
         }
     }
 
+    // 在锁外部进行网络同步
     for (int cid : clientsToSync) {
         SendInventoryUpdate(cid);
     }
@@ -670,14 +668,15 @@ Chunk* GameServer::GetCachedChunk(int cx, int cz) {
     return it == m_chunks.end() ? nullptr : &it->second;
 }
 
-void GameServer::HandleDig(ServerPlayer& p) {
+void GameServer::HandleDig(game::core::ecs::Entity& playerEntity) {
+    auto& p = *playerEntity.serverPlayer;
     glm::vec3 front;
     front.x = cosf(p.yaw) * cosf(p.pitch);
     front.y = sinf(p.pitch);
     front.z = sinf(p.yaw) * cosf(p.pitch);
     front = glm::normalize(front);
 
-    glm::vec3 eye = p.position + glm::vec3(0.0f, game::PLAYER_EYE, 0.0f);
+    glm::vec3 eye = playerEntity.transform.position + glm::vec3(0.0f, game::PLAYER_EYE, 0.0f);
     auto hit = game::RayCast(m_registry, eye, front, REACH_DISTANCE,
                              [this](int x, int y, int z) { return GetBlockAt(x, y, z); });
     if (!hit.hit)
@@ -695,17 +694,17 @@ void GameServer::HandleDig(ServerPlayer& p) {
     int lx = game::WorldToLocalX(hit.bx);
     int lz = game::WorldToLocalZ(hit.bz);
     auto it = m_chunks.find(game::ChunkKey(cx, cz));
-    if (it != m_chunks.end()) {
+    if (it != m_chunks.end())
         game::LightEngine::OnBlockChanged(m_registry, it->second, lx, hit.by, lz, oldBlock, AIR_ID);
-    }
+
     SpawnItemDrop(glm::vec3(hit.bx + 0.5f, hit.by + 0.5f, hit.bz + 0.5f), oldBlock);
 }
 
-void GameServer::HandlePlace(ServerPlayer& p, BlockId type) {
+void GameServer::HandlePlace(game::core::ecs::Entity& playerEntity, BlockId type) {
     if (m_registry.Get(type).id == UNKNOWN_ID)
         return;
+    auto& p = *playerEntity.serverPlayer;
 
-    // ★ 核心修复：检查服务端背包是否有此物品，并扣除
     int slotIndex = -1;
     for (int i = 0; i < 36; ++i) {
         if (p.inventory[i].type == type && p.inventory[i].count > 0) {
@@ -714,7 +713,7 @@ void GameServer::HandlePlace(ServerPlayer& p, BlockId type) {
         }
     }
     if (slotIndex == -1)
-        return;  // 没有这个方块，直接拒绝放置，防作弊
+        return;
 
     glm::vec3 front;
     front.x = cos(p.yaw) * cos(p.pitch);
@@ -722,7 +721,7 @@ void GameServer::HandlePlace(ServerPlayer& p, BlockId type) {
     front.z = sin(p.yaw) * cos(p.pitch);
     front = glm::normalize(front);
 
-    glm::vec3 eye = p.position + glm::vec3(0.0f, game::PLAYER_EYE, 0.0f);
+    glm::vec3 eye = playerEntity.transform.position + glm::vec3(0.0f, game::PLAYER_EYE, 0.0f);
     auto hit = game::RayCast(m_registry, eye, front, REACH_DISTANCE,
                              [this](int x, int y, int z) { return GetBlockAt(x, y, z); });
     if (!hit.hit)
@@ -731,8 +730,7 @@ void GameServer::HandlePlace(ServerPlayer& p, BlockId type) {
     int px = hit.bx + hit.nx;
     int py = hit.by + hit.ny;
     int pz = hit.bz + hit.nz;
-
-    if (IsInsidePlayer(p, px, py, pz))
+    if (IsInsidePlayer(playerEntity, px, py, pz))
         return;
 
     BlockId oldBlock = GetBlockAt(px, py, pz);
@@ -747,51 +745,49 @@ void GameServer::HandlePlace(ServerPlayer& p, BlockId type) {
     int lx = game::WorldToLocalX(px);
     int lz = game::WorldToLocalZ(pz);
     auto it = m_chunks.find(game::ChunkKey(cx, cz));
-    if (it != m_chunks.end()) {
+    if (it != m_chunks.end())
         game::LightEngine::OnBlockChanged(m_registry, it->second, lx, py, lz, oldBlock, type);
-    }
 
-    // ★ 扣除物品并增加状态
     p.inventory[slotIndex].count--;
-    if (p.inventory[slotIndex].count <= 0) {
+    if (p.inventory[slotIndex].count <= 0)
         p.inventory[slotIndex] = {};
-    }
     p.inventoryStateId++;
 }
 
-void GameServer::AddToInventory(ServerPlayer& p, BlockId id, int count) {
+void GameServer::AddToInventory(game::core::ecs::Entity& playerEntity, BlockId id, int count) {
     if (id == AIR_ID || count <= 0)
         return;
+    auto& inv = playerEntity.serverPlayer->inventory;
 
     for (int i = 0; i < 9; ++i) {
-        if (p.inventory[i].type == id && p.inventory[i].count < 64) {
-            int move = std::min(64 - p.inventory[i].count, count);
-            p.inventory[i].count += move;
+        if (inv[i].type == id && inv[i].count < 64) {
+            int move = std::min(64 - inv[i].count, count);
+            inv[i].count += move;
             count -= move;
             if (count <= 0)
                 return;
         }
     }
     for (int i = 0; i < 9; ++i) {
-        if (p.inventory[i].isEmpty()) {
-            p.inventory[i].type = id;
-            p.inventory[i].count = count;
+        if (inv[i].isEmpty()) {
+            inv[i].type = id;
+            inv[i].count = count;
             return;
         }
     }
     for (int i = 9; i < 36; ++i) {
-        if (p.inventory[i].type == id && p.inventory[i].count < 64) {
-            int move = std::min(64 - p.inventory[i].count, count);
-            p.inventory[i].count += move;
+        if (inv[i].type == id && inv[i].count < 64) {
+            int move = std::min(64 - inv[i].count, count);
+            inv[i].count += move;
             count -= move;
             if (count <= 0)
                 return;
         }
     }
     for (int i = 9; i < 36; ++i) {
-        if (p.inventory[i].isEmpty()) {
-            p.inventory[i].type = id;
-            p.inventory[i].count = count;
+        if (inv[i].isEmpty()) {
+            inv[i].type = id;
+            inv[i].count = count;
             return;
         }
     }
@@ -800,14 +796,10 @@ void GameServer::AddToInventory(ServerPlayer& p, BlockId id, int count) {
 BlockId GameServer::GetBlockAt(int wx, int wy, int wz) const {
     if (wy < 0 || wy >= CHUNK_SIZE_Y)
         return AIR_ID;
-    int cx = wx >> 4;
-    int cz = wz >> 4;
-    int lx = wx & 15;
-    int lz = wz & 15;
-    auto it = m_chunks.find(ChunkKey(cx, cz));
+    auto it = m_chunks.find(ChunkKey(wx >> 4, wz >> 4));
     if (it == m_chunks.end())
         return AIR_ID;
-    return ChunkGet(it->second, lx, wy, lz);
+    return ChunkGet(it->second, wx & 15, wy, wz & 15);
 }
 
 void GameServer::SetBlockAt(int wx, int wy, int wz, BlockId bt) {
@@ -815,19 +807,18 @@ void GameServer::SetBlockAt(int wx, int wy, int wz, BlockId bt) {
         return;
     int cx = wx >> 4;
     int cz = wz >> 4;
-    int lx = wx & 15;
-    int lz = wz & 15;
     auto it = m_chunks.find(ChunkKey(cx, cz));
     if (it == m_chunks.end())
         return;
-    ChunkSet(it->second, lx, wy, lz, bt);
+    ChunkSet(it->second, wx & 15, wy, wz & 15, bt);
     m_pendingChanges[ChunkKey(cx, cz)].push_back({wx, wy, wz, bt});
     m_dirty = true;
 }
 
-bool GameServer::IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz) {
-    glm::vec3 pmin{p.position.x - PLAYER_HALF_W, p.position.y, p.position.z - PLAYER_HALF_W};
-    glm::vec3 pmax{p.position.x + PLAYER_HALF_W, p.position.y + PLAYER_HEIGHT, p.position.z + PLAYER_HALF_W};
+bool GameServer::IsInsidePlayer(game::core::ecs::Entity& playerEntity, int bx, int by, int bz) {
+    glm::vec3 pos = playerEntity.transform.position;
+    glm::vec3 pmin{pos.x - PLAYER_HALF_W, pos.y, pos.z - PLAYER_HALF_W};
+    glm::vec3 pmax{pos.x + PLAYER_HALF_W, pos.y + PLAYER_HEIGHT, pos.z + PLAYER_HALF_W};
     glm::vec3 bmin{static_cast<float>(bx), static_cast<float>(by), static_cast<float>(bz)};
     glm::vec3 bmax{bmin.x + 1.0f, bmin.y + 1.0f, bmin.z + 1.0f};
     return (pmin.x < bmax.x && pmax.x > bmin.x) && (pmin.y < bmax.y && pmax.y > bmin.y) &&
@@ -835,12 +826,12 @@ bool GameServer::IsInsidePlayer(const ServerPlayer& p, int bx, int by, int bz) {
 }
 
 bool GameServer::AABBCollides(const glm::vec3& pos) const {
-    int minX = static_cast<int>(std::floor(pos.x - PLAYER_HALF_W));
-    int maxX = static_cast<int>(std::floor(pos.x + PLAYER_HALF_W));
-    int minY = static_cast<int>(std::floor(pos.y));
-    int maxY = static_cast<int>(std::floor(pos.y + PLAYER_HEIGHT));
-    int minZ = static_cast<int>(std::floor(pos.z - PLAYER_HALF_W));
-    int maxZ = static_cast<int>(std::floor(pos.z + PLAYER_HALF_W));
+    int minX = (int)std::floor(pos.x - PLAYER_HALF_W);
+    int maxX = (int)std::floor(pos.x + PLAYER_HALF_W);
+    int minY = (int)std::floor(pos.y);
+    int maxY = (int)std::floor(pos.y + PLAYER_HEIGHT);
+    int minZ = (int)std::floor(pos.z - PLAYER_HALF_W);
+    int maxZ = (int)std::floor(pos.z + PLAYER_HALF_W);
     for (int x = minX; x <= maxX; ++x)
         for (int y = minY; y <= maxY; ++y)
             for (int z = minZ; z <= maxZ; ++z)
@@ -850,27 +841,32 @@ bool GameServer::AABBCollides(const glm::vec3& pos) const {
 }
 
 bool GameServer::IsSolidAt(int wx, int wy, int wz) const {
-    BlockId b = GetBlockAt(wx, wy, wz);
-    return m_registry.IsSolid(b);
+    return m_registry.IsSolid(GetBlockAt(wx, wy, wz));
 }
 
 void GameServer::BroadcastWorldState() {
-    std::lock_guard<std::mutex> lock(m_playersMutex);
+    std::lock_guard<std::mutex> lock(m_worldMutex);
     Eng::tool::MessageWriter w;
     w.Write(static_cast<uint8_t>(game::net::MessageType::WorldState));
-    w.WriteU32BE((uint32_t)m_players.size());
+
+    uint32_t count = 0;
+    for (auto& e : m_ecsWorld.GetEntities())
+        if (e.active && e.serverPlayer)
+            count++;
+    w.WriteU32BE(count);
     w.Write<float>(m_lastTickMs);
 
-    for (auto& p : m_players) {
-        w.WriteU32BE(p.id);
-        uint8_t nlen = static_cast<uint8_t>(std::min<size_t>(p.name.size(), 32));
+    for (auto& e : m_ecsWorld.GetEntities()) {
+        if (!e.active || !e.serverPlayer)
+            continue;
+        w.WriteU32BE(e.serverPlayer->clientId);
+        uint8_t nlen = (uint8_t)std::min<size_t>(e.serverPlayer->name.size(), 32);
         w.Write<uint8_t>(nlen);
-        for (uint8_t i = 0; i < nlen; ++i) {
-            w.Write<uint8_t>(static_cast<uint8_t>(p.name[i]));
-        }
-        w.WriteVec3(p.position);
-        w.Write(p.yaw);
-        w.Write(p.pitch);
+        for (uint8_t i = 0; i < nlen; ++i)
+            w.Write<uint8_t>((uint8_t)e.serverPlayer->name[i]);
+        w.WriteVec3(e.transform.position);
+        w.Write(e.serverPlayer->yaw);
+        w.Write(e.serverPlayer->pitch);
     }
     m_server->Broadcast(w.GetBuffer());
 }
@@ -892,16 +888,88 @@ void GameServer::HandleClickContainer(int clientId, Eng::tool::MessageReader& r)
     uint8_t mode = r.Read<uint8_t>();
 
     bool needResync = false;
-    {
-        std::lock_guard<std::mutex> lock(m_playersMutex);
-        auto it =
-            std::find_if(m_players.begin(), m_players.end(), [&](const auto& p) { return p.id == (uint32_t)clientId; });
-        if (it == m_players.end())
-            return;
 
-        // 如果状态不一致，直接标记需要全量重推
-        if (stateId != it->inventoryStateId) {
+    // 把要生成的掉落物先记录下来，出锁之后再真正生成
+    struct DropInfo {
+        glm::vec3 pos;
+        BlockId type;
+        int count;
+    };
+    std::vector<DropInfo> dropsToSpawn;
+
+    {
+        // 锁范围只包住数据读写
+        std::lock_guard<std::mutex> lock(m_worldMutex);
+        auto* e = GetEntityByNetId((uint32_t)clientId);
+        if (!e || !e->serverPlayer)
+            return;
+        auto& p = *e->serverPlayer;
+
+        if (stateId != p.inventoryStateId) {
             needResync = true;
+        } else {
+            if (mode == 4) {
+                ItemStack* targetStack = nullptr;
+                if (slot == -1)
+                    targetStack = &p.heldItem;
+                else if (slot >= 0 && slot < 36)
+                    targetStack = &p.inventory[slot];
+
+                if (targetStack && !targetStack->isEmpty()) {
+                    int dropCount = (button == 1) ? 1 : targetStack->count;
+                    dropCount = std::min(dropCount, targetStack->count);
+
+                    // 记录掉落物信息，不在这里直接调用 SpawnItemDrop
+                    dropsToSpawn.push_back(
+                        {e->transform.position + glm::vec3(0, 1.5f, 0), targetStack->type, dropCount});
+
+                    targetStack->count -= dropCount;
+                    if (targetStack->count <= 0)
+                        *targetStack = {};
+                }
+            } else if (mode == 0 && slot >= 0 && slot < 36) {
+                auto& inv = p.inventory[slot];
+                auto& held = p.heldItem;
+
+                if (button == 0) {
+                    if (held.isEmpty()) {
+                        held = inv;
+                        inv = {};
+                    } else if (inv.isEmpty()) {
+                        inv = held;
+                        held = {};
+                    } else if (inv.type == held.type && inv.count < 64) {
+                        int move = std::min(64 - inv.count, held.count);
+                        inv.count += move;
+                        held.count -= move;
+                        if (held.count <= 0)
+                            held = {};
+                    } else
+                        std::swap(inv, held);
+                } else if (button == 1) {
+                    if (held.isEmpty()) {
+                        int half = (inv.count + 1) / 2;
+                        held = inv;
+                        held.count = half;
+                        inv.count -= half;
+                        if (inv.count <= 0)
+                            inv = {};
+                    } else if (inv.isEmpty()) {
+                        int half = (held.count + 1) / 2;
+                        inv = held;
+                        inv.count = half;
+                        held.count -= half;
+                        if (held.count <= 0)
+                            held = {};
+                    } else if (inv.type == held.type && inv.count < 64) {
+                        inv.count++;
+                        held.count--;
+                        if (held.count <= 0)
+                            held = {};
+                    }
+                }
+            }
+            p.inventoryStateId++;
         }
     }
 
@@ -910,101 +978,38 @@ void GameServer::HandleClickContainer(int clientId, Eng::tool::MessageReader& r)
         return;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(m_playersMutex);
-        auto it =
-            std::find_if(m_players.begin(), m_players.end(), [&](const auto& p) { return p.id == (uint32_t)clientId; });
-        if (it == m_players.end())
-            return;
-        auto& p = *it;
-
-        if (mode == 4) {
-            ItemStack* targetStack = nullptr;
-            if (slot == -1)
-                targetStack = &p.heldItem;
-            else if (slot >= 0 && slot < 36)
-                targetStack = &p.inventory[slot];
-
-            if (targetStack && !targetStack->isEmpty()) {
-                int dropCount = (button == 1) ? 1 : targetStack->count;
-                dropCount = std::min(dropCount, targetStack->count);
-
-                for (int i = 0; i < dropCount; ++i) {
-                    glm::vec3 dropPos = p.position + glm::vec3(0, 1.5f, 0);
-                    SpawnItemDrop(dropPos, targetStack->type);
-                }
-                targetStack->count -= dropCount;
-                if (targetStack->count <= 0)
-                    *targetStack = {};
-            }
-        } else if (mode == 0 && slot >= 0 && slot < 36) {
-            auto& inv = p.inventory[slot];
-            auto& held = p.heldItem;
-
-            if (button == 0) {  // 左键
-                if (held.isEmpty()) {
-                    held = inv;
-                    inv = {};
-                } else if (inv.isEmpty()) {
-                    inv = held;
-                    held = {};
-                } else if (inv.type == held.type && inv.count < 64) {
-                    int move = std::min(64 - inv.count, held.count);
-                    inv.count += move;
-                    held.count -= move;
-                    if (held.count <= 0)
-                        held = {};
-                } else {
-                    std::swap(inv, held);
-                }
-            } else if (button == 1) {  // 右键
-                if (held.isEmpty()) {
-                    int half = (inv.count + 1) / 2;
-                    held = inv;
-                    held.count = half;
-                    inv.count -= half;
-                    if (inv.count <= 0)
-                        inv = {};
-                } else if (inv.isEmpty()) {
-                    int half = (held.count + 1) / 2;
-                    inv = held;
-                    inv.count = half;
-                    held.count -= half;
-                    if (held.count <= 0)
-                        held = {};
-                } else if (inv.type == held.type && inv.count < 64) {
-                    inv.count++;
-                    held.count--;
-                    if (held.count <= 0)
-                        held = {};
-                }
-            }
+    // 出锁之后，再安全地生成掉落物（此时 SpawnItemDrop 里的加锁和广播都不会死锁）
+    for (const auto& drop : dropsToSpawn) {
+        for (int i = 0; i < drop.count; ++i) {
+            SpawnItemDrop(drop.pos, drop.type);
         }
-        p.inventoryStateId++;
     }
 
+    // 出锁之后，再发送背包同步
     SendInventoryUpdate(clientId);
 }
 
 void GameServer::SendInventoryUpdate(int clientId) {
-    std::lock_guard<std::mutex> lock(m_playersMutex);
-    auto it =
-        std::find_if(m_players.begin(), m_players.end(), [&](const auto& p) { return p.id == (uint32_t)clientId; });
-    if (it == m_players.end())
-        return;
-
     Eng::tool::MessageWriter w;
-    w.Write(static_cast<uint8_t>(game::net::MessageType::InventoryUpdate));
-    w.Write<int32_t>(it->inventoryStateId);
+    {
+        // 只在读取背包数据时加锁
+        std::lock_guard<std::mutex> lock(m_worldMutex);
+        auto* e = GetEntityByNetId((uint32_t)clientId);
+        if (!e || !e->serverPlayer)
+            return;
+        auto& p = *e->serverPlayer;
 
-    for (const auto& item : it->inventory) {
-        w.Write<uint16_t>(item.type);
-        w.Write<int32_t>(item.count);
-    }
+        w.Write(static_cast<uint8_t>(game::net::MessageType::InventoryUpdate));
+        w.Write<int32_t>(p.inventoryStateId);
+        for (const auto& item : p.inventory) {
+            w.Write<uint16_t>(item.type);
+            w.Write<int32_t>(item.count);
+        }
+        w.Write<uint16_t>(p.heldItem.type);
+        w.Write<int32_t>(p.heldItem.count);
+    }  // 锁在这里提前释放
 
-    w.Write<uint16_t>(it->heldItem.type);
-    w.Write<int32_t>(it->heldItem.count);
-
+    // 无锁状态下发送网络包
     m_server->SendTo(clientId, w.GetBuffer());
 }
 

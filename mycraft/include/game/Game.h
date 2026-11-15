@@ -20,6 +20,7 @@
 #include "game/client/MeshManager.h"
 #include "game/client/ModelLoader.h"
 #include "game/core/GameContext.h"
+#include "game/core/Physics.h"
 #include "game/core/RayCast.h"
 #include "game/core/ecs/EntityManager.h"
 #include "game/core/ecs/ItemSystem.h"
@@ -30,6 +31,7 @@
 
 namespace game {
 
+// 全局渲染状态（传递给 Shader）
 struct GlobalState {
     glm::mat4 view = glm::mat4(1.0f);
     glm::mat4 projection = glm::mat4(1.0f);
@@ -52,7 +54,7 @@ public:
 
 private:
     // ================================================================
-    // 1. 引擎注入的底层服务 (由 Engine 注入，MyGame 仅借用，不负责销毁)
+    // 1. 引擎注入的底层服务 (MyGame 仅借用，不负责销毁)
     // ================================================================
     Eng::service::WindowService* winMgr = nullptr;
     Eng::tool::Window* mainWin = nullptr;
@@ -64,7 +66,7 @@ private:
     bool m_useVulkan = false;
 
     // ================================================================
-    // 2. 游戏状态与全局配置 (驱动主循环的核心变量)
+    // 2. 游戏状态与全局配置
     // ================================================================
     enum class GameState : std::uint8_t {
         MainMenu,
@@ -84,15 +86,16 @@ private:
     std::string m_statusText;
 
     // ================================================================
-    // 3. 全局静态资源 (生命周期与 Engine 同寿，在 OnStart / OnShutdown 处理)
+    // 3. 全局静态资源 (生命周期与 Engine 同寿)
     // ================================================================
     game::BlockRegistry m_blockRegistry;
     game::GameContext m_ctx{m_blockRegistry};
+
     int m_renderDistance = 2;
     int m_lodRenderDistance = m_renderDistance * 4;
     bool m_enableLod = false;
 
-    // 核心渲染资产 (地形、天空、实体、手部 Shader 及贴图)
+    // 核心渲染资产
     Eng::service::ShaderPtr m_cubeShader;
     Eng::service::ShaderPtr m_skyShader;
     Eng::service::ShaderPtr m_lodShader;
@@ -113,13 +116,17 @@ private:
     uint32_t m_worldSeed = 0;
     std::unordered_map<uint32_t, net::PlayerState> m_otherPlayers;
 
-    // --- 4.2 世界与后台线程 ---
-    game::client::ClientWorld m_world;
+    // --- 4.2 世界、后台线程与 ECS 容器 ---
+    game::client::ClientWorld m_world;  // 目前仅用于网络请求驱动与 LOD 采样
     client::MeshManager m_meshManager;
     client::LodManager m_lodManager;
-    std::unordered_set<uint64_t> m_knownSceneChunks;
-    std::vector<Eng::client::RenderMesh> m_visibleLodMeshes;
-    std::unordered_map<uint64_t, uint32_t> m_chunkMeshVersions;
+    std::unordered_map<uint64_t, uint32_t> m_chunkMeshVersions;  // 异步建 Mesh 的版本号
+
+    game::core::ecs::EntityManager m_entityManager;
+    game::core::ecs::PigAISystem m_pigAISystem;
+    game::core::ecs::ItemSystem m_itemSystem;
+    game::core::ecs::PhysicsSystem m_physicsSystem;
+    game::core::ecs::RenderSystem m_renderSystem;
 
     // --- 4.3 渲染大脑 ---
     std::unique_ptr<Eng::client::SceneRenderer> m_sceneRenderer;
@@ -129,31 +136,27 @@ private:
     std::string m_selectedWorldId;
     char m_searchBuffer[128] = "";
 
-    // 弹窗状态
     bool m_showNewWorldDialog = false;
     char m_newWorldNameBuffer[128] = "";
     char m_newWorldSeedBuffer[64] = "";
     bool m_showDeleteConfirmDialog = false;
     std::string m_worldToDelete;
 
-    // 多人连接弹窗
     bool m_showMultiplayerDialog = false;
     char m_ipBuffer[128] = "localhost";
     int m_portInput = 25565;
 
     // ================================================================
-    // 5. 玩家状态与物理 (每次进游戏必须彻底重置)
+    // 5. 本地玩家状态与物理输入 (静态数据已剥离至 ECS)
     // ================================================================
-    // 镜头与视角
+    game::core::ecs::EntityId m_localPlayerEntity = game::core::ecs::INVALID_ENTITY;
+
     glm::mat4 view = glm::mat4(1.0f);
     glm::mat4 projection = glm::mat4(1.0f);
 
-    // 物理与移动
     glm::vec3 m_lastMoveDir{0.0f};
-    game::RayHit m_currentRayHit;  // 当前准星指着的方块
+    game::RayHit m_currentRayHit;
 
-    // 输入状态与冷却
-    bool m_flyMode = true;
     bool m_relativeMode = true;
     bool m_showDebug = true;
     float m_placeCooldown = 0.0f;
@@ -161,38 +164,32 @@ private:
     static constexpr float kPlaceInterval = 0.2f;
     static constexpr float kDigInterval = 0.2f;
 
-    game::core::ecs::EntityId m_localPlayerEntity = game::core::ecs::INVALID_ENTITY;
-
     glm::vec3 ComputeCameraFront();
     glm::vec3 GetPlayerEyePos();
 
     // ================================================================
-    // 6. 输入模式与触控 UI 状态 (数据驱动)
+    // 6. 输入模式与触控 UI 状态
     // ================================================================
     enum class InputMode : std::uint8_t { Auto = 0, KeyboardMouse = 1, Touch = 2 };
-
     InputMode m_inputMode = InputMode::Auto;
     InputMode m_activeInputMode = InputMode::KeyboardMouse;
 
-    // 触控参数
     float m_touchSensitivity = 0.15f;
-    float m_touchDeadzone = 5.0f;  // 像素
+    float m_touchDeadzone = 5.0f;
 
-    // 摇杆状态
     int m_leftTouchId = -1;
     glm::vec2 m_joystickBasePos = {0.18f, 0.70f};
     glm::vec2 m_joystickOriginPx = {0.0f, 0.0f};
     glm::vec2 m_joystickCurrentPx = {0.0f, 0.0f};
 
-    // 数据驱动虚拟按键
     struct VirtualButtonConfig {
         std::string actionName;
-        glm::vec2 pos = {0.5f, 0.5f};  // 归一化坐标
-        float radius = 0.05f;          // 归一化半径
+        glm::vec2 pos = {0.5f, 0.5f};
+        float radius = 0.05f;
         std::string label;
     };
     std::vector<VirtualButtonConfig> m_virtualButtons;
-    bool m_isEditingLayout = false;  // 是否处于拖拽编辑模式
+    bool m_isEditingLayout = false;
 
     // 时间与动画
     float m_timeOfDay = 8.0f;
@@ -202,33 +199,21 @@ private:
     float m_walkDist = 0.0f;
 
     // ================================================================
-    // 7. 实体、物品与背包
+    // 7. 物品与背包 (客户端预测缓存)
     // ================================================================
-    struct ClientItemEntity : game::PointEntity {
-        uint32_t id = 0;
-        BlockId itemType = AIR_ID;
-        glm::vec3 renderPos{0.0f};
-        glm::vec3 prevPos{0.0f};
-        glm::vec3 targetPos{0.0f};
-        float interpT = 1.0f;
-        bool pickingUp = false;
-        float pickupT = 0.0f;
-        glm::vec3 pickupStart{0.0f};
-        uint32_t pickerId = 0;
-    };
-
     std::unordered_map<BlockId, Eng::client::RenderMesh> m_itemMeshCache;
-    std::unordered_map<uint32_t, game::core::ecs::EntityId> m_netToEcsMap;
+    std::unordered_map<uint32_t, game::core::ecs::EntityId> m_netToEcsMap;    // 网络实体 ID 映射
+    std::unordered_map<uint64_t, game::core::ecs::EntityId> m_chunkToEcsMap;  // 区块坐标映射
+
     Eng::client::RenderMesh m_playerMesh;
     Eng::client::RenderMesh m_handMesh;
     Eng::client::RenderMesh m_skyboxMesh;
 
-    // 物品栏与背包
-    static constexpr int kHotbarSize = 9;  // 快捷栏固定 9 格
-    uint8_t m_hotbarIndex = 0;             // 当前选中的快捷栏索引 (0~8)
+    static constexpr int kHotbarSize = 9;
+    uint8_t m_hotbarIndex = 0;
     std::array<ItemStack, 36> m_inventory{};
     int32_t m_inventoryStateId = 0;
-    ItemStack m_heldItemStack{};  // 鼠标当前拿着的物品
+    ItemStack m_heldItemStack{};
     bool m_inventoryOpen = false;
 
     // ================================================================
@@ -237,13 +222,11 @@ private:
     GlobalState m_globalState;
     float m_uiScale = 1.0f;
 
-    // FPS 与耗时统计
     float m_lastFrameMs = 0.0f;
     float m_fpsTimer = 0.0f;
     int m_fpsFrameCount = 0;
     float m_fpsAccumMs = 0.0f;
     float m_fpsPeakMs = 0.0f;
-
     float m_fpsDisplay = 0.0f;
     float m_frameMsDisplay = 0.0f;
     float m_frameMsAvgDisp = 0.0f;
@@ -256,8 +239,10 @@ private:
     std::unique_ptr<Eng::tool::Log> logger = std::make_unique<Eng::tool::Log>();
     client::ClientUI m_ui;
 
+    std::unique_ptr<game::client::LoadedModel> m_pigModel;
+
     // ================================================================
-    // 9. 生命周期与初始化辅助函数
+    // 9. 辅助函数声明
     // ================================================================
     void EnterGame();
     void ExitGame();
@@ -269,9 +254,6 @@ private:
     void RecreateFBOs(int w, int h);
     Eng::service::ShaderPtr CreateShaderByName(const std::string& name, bool isSky);
 
-    // ================================================================
-    // 10. 网络与设置辅助函数
-    // ================================================================
     bool StartLocalServer(bool useMemory, bool createClient, const std::string& worldId);
     bool ConnectToServer(const std::string& host, uint16_t port);
     void RefreshWorldList();
@@ -282,20 +264,16 @@ private:
     void SaveInputBindings(nlohmann::json& j);
     static constexpr const char* SETTINGS_FILE = "settings.json";
 
-    // ================================================================
-    // 11. 渲染与 Mesh 构建辅助函数
-    // ================================================================
     Eng::client::RenderMesh BuildPlayerMesh();
     Eng::client::RenderMesh BuildHandMesh();
     Eng::client::RenderMesh BuildSkyboxMesh();
     const Eng::client::RenderMesh& GetOrCreateItemMesh(BlockId id);
     Eng::client::RenderMesh BuildItemCubeMesh(BlockId id);
-    void QueueChunkMeshTask(uint64_t key);
+
+    // ★ 签名已更新为接收 ECS 实体
+    void QueueChunkMeshTask(game::core::ecs::Entity& chunkEntity);
     void DrainMeshResults(size_t maxCount = 16);
 
-    // ================================================================
-    // 12. 游戏逻辑与世界查询辅助函数
-    // ================================================================
     void HandleServerMessage(const std::vector<uint8_t>& data);
     bool GetInput(float dt);
     void UpdateActiveInputMode();
@@ -306,16 +284,7 @@ private:
     bool AABBCollides(const glm::vec3& pos) const;
     void SendClickContainer(int16_t slot, uint8_t button, uint8_t mode);
 
-    // 允许 ClientUI 访问 MyGame 的私有状态，用于绘制 HUD 与触控界面
     friend class client::ClientUI;
-
-    std::unique_ptr<game::client::LoadedModel> m_pigModel;
-
-    game::core::ecs::EntityManager m_entityManager;
-    game::core::ecs::PigAISystem m_pigAISystem;
-    game::core::ecs::ItemSystem m_itemSystem;
-    game::core::ecs::PhysicsSystem m_physicsSystem;
-    game::core::ecs::RenderSystem m_renderSystem;
 };
 
 }  // namespace game
