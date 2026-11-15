@@ -773,8 +773,20 @@ bool MyGame::OnUpdate(Eng::Engine& /*engine*/, float deltaTime) {
     player->player->velocity = motion.velocity;
     player->player->onGround = motion.onGround;
 
-    m_entityManager.Update(
-        deltaTime, [this](int x, int y, int z) { return this->IsSolidAt(x, y, z); }, player->transform.position);
+    // 1. 准备上下文
+    game::core::ecs::SystemContext ctx;
+    ctx.dt = deltaTime;
+    ctx.playerPos = player->transform.position;
+    ctx.isSolidAt = [this](int x, int y, int z) { return this->IsSolidAt(x, y, z); };
+
+    // 2. 更新掉落物逻辑（网络插值、拾取）
+    m_itemSystem.Update(m_entityManager, ctx);
+
+    // 3. 更新猪的 AI
+    m_pigAISystem.Update(m_entityManager, ctx);
+
+    // 4. 更新物理
+    m_physicsSystem.Update(m_entityManager, ctx);
 
     // 服务端校正残差平滑叠加
     constexpr float CORRECTION_RATE = 8.0f;
@@ -921,9 +933,18 @@ void MyGame::OnRender(Eng::Engine& engine) {
             m_sceneRenderer->SubmitMesh(m_playerMesh, m_entityShader, m_playerTexture, data);
         }
 
-        m_entityManager.Render(
-            projection * view, m_sceneRenderer.get(), m_entityShader, m_atlasTexture,
-            [this](BlockId id) -> const Eng::client::RenderMesh& { return GetOrCreateItemMesh(id); });
+        // 构建渲染上下文
+        game::core::ecs::RenderContext renderCtx;
+        renderCtx.viewProj = projection * view;
+        renderCtx.renderer = m_sceneRenderer.get();
+        renderCtx.entityShader = m_entityShader;
+        renderCtx.atlasTexture = m_atlasTexture;
+        renderCtx.getItemMeshFunc = [this](BlockId id) -> const Eng::client::RenderMesh& {
+            return GetOrCreateItemMesh(id);
+        };
+
+        // 提交 ECS 渲染
+        m_renderSystem.Render(m_entityManager, renderCtx);
 
         if (!m_skyboxMesh.vbo)
             m_skyboxMesh = BuildSkyboxMesh();
@@ -943,9 +964,6 @@ void MyGame::OnRender(Eng::Engine& engine) {
             basePos.y -= swing * 0.15f;
             basePos.z += swing * 0.1f;
         }
-        m_entityManager.Render(
-            projection * view, m_sceneRenderer.get(), m_entityShader, m_atlasTexture,
-            [this](BlockId id) -> const Eng::client::RenderMesh& { return GetOrCreateItemMesh(id); });
 
         glm::mat4 handLocalModel = glm::mat4(1.0f);
         handLocalModel = glm::translate(handLocalModel, basePos);

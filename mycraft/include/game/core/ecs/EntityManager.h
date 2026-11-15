@@ -34,30 +34,17 @@ public:
 
     EntityId CreateEntity();
     void DestroyEntity(EntityId id);
+
     Entity* GetEntity(EntityId id);
+    // 提供安全的实体内存访问（供 System 使用）
+    std::vector<Entity>& GetEntities() { return m_entities; }
+
     void Clear();
-
-    void Update(float dt, const std::function<bool(int, int, int)>& isSolidAt, const glm::vec3& playerPos);
-
-    void Render(const glm::mat4& viewProj, Eng::client::SceneRenderer* renderer,
-                const Eng::service::ShaderPtr& entityShader, const Eng::service::TexturePtr& atlasTexture,
-                const std::function<const Eng::client::RenderMesh&(BlockId)>& getItemMeshFunc);
 
 private:
     std::vector<Entity> m_entities;
     std::vector<uint32_t> m_freeIndices;
     std::vector<uint32_t> m_generations;
-
-    void UpdatePigAI(float dt, const std::function<bool(int, int, int)>& isSolidAt);
-    void UpdateItems(float dt, const glm::vec3& playerPos);
-    void UpdateMovement(float dt, const std::function<bool(int, int, int)>& isSolidAt);
-    void UpdateAnimation(float dt);
-
-    void ApplyAnimationToNodes(client::ModelNode* node, const client::AnimationClip& clip, float animTime);
-
-    // ★ 修复：rc 参数类型改为 ecs 命名空间内的 RenderableComponent（即本命名空间）
-    void RenderNode(client::ModelNode* node, const glm::mat4& parentTransform, const RenderableComponent& rc,
-                    Eng::client::SceneRenderer* renderer, const Eng::service::ShaderPtr& entityShader);
 };
 
 }  // namespace game::core::ecs

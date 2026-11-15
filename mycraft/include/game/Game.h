@@ -22,6 +22,10 @@
 #include "game/core/GameContext.h"
 #include "game/core/RayCast.h"
 #include "game/core/ecs/EntityManager.h"
+#include "game/core/ecs/ItemSystem.h"
+#include "game/core/ecs/PhysicsSystem.h"
+#include "game/core/ecs/PigAISystem.h"
+#include "game/core/ecs/RenderSystem.h"
 #include "game/server/WorldSave.h"
 
 namespace game {
@@ -308,6 +312,10 @@ private:
     std::unique_ptr<game::client::LoadedModel> m_pigModel;
 
     game::core::ecs::EntityManager m_entityManager;
+    game::core::ecs::PigAISystem m_pigAISystem;
+    game::core::ecs::ItemSystem m_itemSystem;
+    game::core::ecs::PhysicsSystem m_physicsSystem;
+    game::core::ecs::RenderSystem m_renderSystem;
 };
 
 }  // namespace game

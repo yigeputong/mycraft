@@ -9,6 +9,10 @@ add_library(game-server STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/LightEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/BlockRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/ecs/EntityManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/ecs/PhysicsSystem.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/ecs/PigAISystem.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/ecs/ItemSystem.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/ecs/RenderSystem.cpp
 )
 target_include_directories(game-server PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
