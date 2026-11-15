@@ -278,13 +278,85 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
         return false;
     }
 
-    bool needNewSpawn = (m_spawnPos.y < 60.0f || m_spawnPos.y > 100.0f);
+    bool needNewSpawn = (m_spawnPos.y < 60.0f || m_spawnPos.y > 120.0f);
     if (needNewSpawn) {
-        // ... 原寻陆逻辑保持不变，为了篇幅省略，复制你原来的即可 ...
-        // (直接粘贴你原来的生成逻辑)
+        logInfo(m_logger, "[Server] Generating chunks to search for a valid spawn point...");
+
+        TerrainGenerator gen(m_worldSeed, m_registry);
+        glm::vec3 foundPos(0.0f);
+        bool found = false;
+        BlockId waterId = m_registry.Get("mycraft:water").id;
+
+        // 搜索半径 3 个区块（7x7区块，约 112x112 区域）
+        for (int r = 0; r <= 3 && !found; ++r) {
+            for (int cx = -r; cx <= r && !found; ++cx) {
+                for (int cz = -r; cz <= r && !found; ++cz) {
+                    // 只搜索最外圈
+                    if (r > 0 && std::abs(cx) != r && std::abs(cz) != r)
+                        continue;
+
+                    // 强制生成该区块的真实数据
+                    Chunk chunk = gen.GenerateChunk(cx, cz);
+                    uint64_t key = ChunkKey(cx, cz);
+
+                    // 把生成的区块顺手塞进服务端缓存，客户端连入时秒发！
+                    if (!m_chunks.contains(key)) {
+                        m_chunks.emplace(key, chunk);
+                    }
+
+                    // 在生成的区块里，从最高点往下寻找安全的陆地
+                    for (int lx = 0; lx < 16 && !found; ++lx) {
+                        for (int lz = 0; lz < 16 && !found; ++lz) {
+                            for (int y = CHUNK_SIZE_Y - 1; y > 0; --y) {
+                                BlockId b = ChunkGet(chunk, lx, y, lz);
+
+                                // 必须是实心方块，且不能是水
+                                if (b != AIR_ID && b != waterId) {
+                                    // 检查头顶两格必须全是空气（防止出生在树里或者山洞里）
+                                    BlockId h1 = ChunkGet(chunk, lx, y + 1, lz);
+                                    BlockId h2 = ChunkGet(chunk, lx, y + 2, lz);
+
+                                    if (h1 == AIR_ID && h2 == AIR_ID) {
+                                        // 确保不是极深的地底
+                                        if (y > SEA_LEVEL) {
+                                            int wx = cx * 16 + lx;
+                                            int wz = cz * 16 + lz;
+                                            foundPos = glm::vec3(wx + 0.5f, y + 1.0f, wz + 0.5f);
+                                            found = true;
+                                        }
+                                    }
+                                    break;  // 这一列已经找到最高实心方块了，跳出 Y 循环
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (found) {
+            m_spawnPos = foundPos;
+            logInfo(m_logger, "[Server] Spawn point successfully set to: " << m_spawnPos.x << ", " << m_spawnPos.y
+                                                                           << ", " << m_spawnPos.z);
+
+            for (auto& [key, chunk] : m_chunks) {
+                int cx = chunk.chunk_x;
+                int cz = chunk.chunk_z;
+                LightEngine::InitRegion(m_registry, chunk, GetCachedChunk(cx - 1, cz), GetCachedChunk(cx + 1, cz),
+                                        GetCachedChunk(cx, cz - 1), GetCachedChunk(cx, cz + 1));
+            }
+            logInfo(m_logger, "[Server] Initialized lighting for " << m_chunks.size() << " spawn chunks.");
+        } else {
+            // 全图都是水，直接强行抬到 Y=150 的虚空
+            m_spawnPos = glm::vec3(0.5f, 150.0f, 0.5f);
+            logError(m_logger, "[Server] Failed to find land, falling back to (0.5, 150, 0.5)");
+        }
+
+        m_save->SaveLevel(meta, m_spawnPos);
     } else {
         m_save->SaveLevel(meta, m_spawnPos);
-        logInfo(m_logger, "[Server] Loaded world '" << meta.displayName << "', seed=" << meta.seed);
+        logInfo(m_logger, "[Server] Loaded world '" << meta.displayName << "', spawn at " << m_spawnPos.x << ", "
+                                                    << m_spawnPos.y << ", " << m_spawnPos.z);
     }
 
     auto changes = m_save->LoadChanges();
