@@ -26,6 +26,35 @@ struct Entity {
     std::optional<ChunkCoordComponent> chunkCoord;
     std::optional<ChunkComponent> chunkData;
     std::optional<ChunkRenderComponent> chunkRender;
+
+    // ============================================================
+    // 组件清零：实体销毁与槽位复用都必须经过这里。
+    // ★ 新增组件时，必须在 ResetComponents() 与 IsPristine() 各补一行。
+    //   历史 bug：区块实体被卸载后，复用的新实体继承了 chunkCoord / chunkData /
+    //   chunkRender，形成幽灵区块，并让 shared_ptr<Chunk> 长期滞留。
+    // ============================================================
+    void ResetComponents() {
+        transform = TransformComponent{};
+        velocity.reset();
+        aabb.reset();
+        pigAI.reset();
+        item.reset();
+        netInterp.reset();
+        player.reset();
+        serverPlayer.reset();
+        renderable.reset();
+        chunkCoord.reset();
+        chunkData.reset();
+        chunkRender.reset();
+    }
+
+    // Debug 自检：不活跃的实体不应残留任何可选组件（transform 为必选字段，不参与判断）。
+    [[nodiscard]] bool IsPristine() const {
+        return !velocity.has_value() && !aabb.has_value() && !pigAI.has_value() && !item.has_value() &&
+               !netInterp.has_value() && !player.has_value() && !serverPlayer.has_value() &&
+               !renderable.has_value() && !chunkCoord.has_value() && !chunkData.has_value() &&
+               !chunkRender.has_value();
+    }
 };
 
 class EntityManager {

@@ -1,5 +1,6 @@
 #include "game/core/ecs/EntityManager.h"
 
+#include <cassert>
 #include <cmath>
 
 namespace game::core::ecs {
@@ -48,20 +49,17 @@ EntityId EntityManager::CreateEntity() {
         m_entities.emplace_back();
         m_generations.push_back(0);
     }
-    EntityId id = CreateEntityId(index, generation);
+
     auto& e = m_entities[index];
-    e.id = id;
+
+    // 复用槽位前必须保证干净。若断言失败，说明有路径绕过 DestroyEntity 释放了槽位，
+    // 或者新增组件忘了在 ResetComponents() 里补一行。
+    assert(e.IsPristine() && "Entity slot is not pristine before reuse");
+
+    e.ResetComponents();
+    e.id = CreateEntityId(index, generation);
     e.active = true;
-    e.transform = {};
-    e.velocity.reset();
-    e.aabb.reset();
-    e.pigAI.reset();
-    e.item.reset();
-    e.netInterp.reset();
-    e.player.reset();
-    e.serverPlayer.reset();
-    e.renderable.reset();
-    return id;
+    return e.id;
 }
 
 void EntityManager::DestroyEntity(EntityId id) {
@@ -71,6 +69,12 @@ void EntityManager::DestroyEntity(EntityId id) {
     auto& e = m_entities[index];
     if (e.id == id && e.active) {
         e.active = false;
+        // 立即清零：ChunkComponent 持有 shared_ptr<Chunk>（约 320KB）。
+        // 若等到槽位被复用时才释放，视距外卸载的区块内存会在 free list 里长期滞留。
+        e.ResetComponents();
+        // 注意：e.id 保持原值不清空。调用方可能在本函数之后仍用旧指针读取 e->id
+        // （例如 GameServer 断线回调里先 m_ecsToNetMap.erase(e->id) 再销毁）。
+        // 失效判定由 active 标志负责，GetEntity 已经先检查 active。
         m_generations[index]++;
         m_freeIndices.push_back(index);
     }

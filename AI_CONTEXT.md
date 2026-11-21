@@ -37,7 +37,7 @@
 * **语言**：C++23
 * **构建**：CMake + Ninja Multi-Config + vcpkg（静态链接 `/MT`）
 * **图形**：SDL3、volk、Vulkan 1.3 (Dynamic Rendering, Sync2)、OpenGL 4.6 (DSA)、glm、ImGui (vendored v1.93.0)、assimp
-* **当前状态**：v0.3.0 已发布。服务端权威背包、移动端触控、LOD 渲染已打通。
+* **当前状态**：v0.4.0-dev 核心重构阶段。客户端与服务端已全面完成 ECS 化（实体、系统、区块），彻底剥离了实体管理中的上帝类逻辑。
 
 ---
 
@@ -56,15 +56,16 @@
 2. **Manager（`*Manager`）**：业务子系统，跟 Game 同寿，主动运行（有 Update / 后台线程）。如 `MeshManager`, `LODManager`。
 3. **Tool（无后缀）**：纯工具类，函数式调用，栈对象或静态单例（如 `FileTool`, `MessageWriter`, `RAIIThread`）。
 
-### 铁律 3：RHI 纯粹去脑化
+### 铁律 3：RHI 纯粹去脑化与 ECS 渲染分层
 
-* **RHI 必须无状态**：`IRenderService` 只负责下发指令（`BindShader`, `DrawIndexed`），**严禁**包含 `Mesh`, `Material` 等业务语义。
+* **RHI 必须无状态**：`IRenderService` 只负责下发指令，严禁包含 `Mesh`、`Material` 等业务语义。
 * **渲染大脑归 SceneRenderer**：视锥剔除、MDI 组装、大 VBO 生命周期、阴影 Pass，全部在 `SceneRenderer` 完成。
+* **渲染数据由 ECS 驱动**：`RenderSystem` 只负责从 ECS 遍历实体并组装 `RenderContext`，最终提交给 `SceneRenderer` 统一绘制。
 
-### 铁律 4：RAII 与延迟销毁
+### 铁律 4：RAII 与延迟销毁（补充死锁规范）
 
-* **资源自治**：业务层用完 `BufferPtr` 直接销毁，**绝不允许手动 `WaitIdle`**。
-* **底层延迟销毁**：RHI 后端拦截析构，推入多帧延迟队列（`DeferredDeleter`），等 GPU 执行完 N 帧后安全回收。
+* **资源自治**：业务层用完 `BufferPtr` 直接销毁，绝不允许手动 `WaitIdle`。
+* **锁粒度纪律**：绝对禁止在持有 `std::mutex` 的状态下进行网络发包（如 `m_server->SendTo`）、读写磁盘、或者调用可能再次加锁的公共函数，否则必然导致 `_RESOURCE_DEADLOCK_WOULD_OCCUR` 死锁。
 
 ### 铁律 5：数据与确定性
 
@@ -86,18 +87,39 @@
 
 ## 三、✅ 当前架构现状 (v0.4.0-dev)
 
-### 3.1 v0.4.0 ECS 落地现状
+### 3.1 ECS 架构 (纯容器 + 系统调度)
 
-* **ECS 架构已定稿**：摒弃了纯血 Sparse Set，采用 `std::optional` 组合模式，兼顾直观与性能。
-* **实体管理器**：`EntityManager` 已实现，使用带 Generation 的 64 位 `uint64_t` ID 防悬空引用，包含 `Transform`、`Velocity`、`AABB`、`PigAI`、`Renderable` 组件。
-* **模型加载与动画**：Assimp 加载 glTF 完美运行，通过关键帧 `slerp` 插值与 `ModelNode` 树实现猪的交替步行动画。
-* **AI 逻辑修复**：已参考原版 MC 的 `LandRandomPos` 和 `PathNavigation` 实现。猪现在会寻找合法落脚点，撞墙会自动跳跃，被彻底卡住会立刻放弃并转向，解决了之前的“疯狂转圈”与“穿模”问题。
+* **纯数据容器**：`EntityManager` 仅保留 ID 生成、实体创建/销毁与组件数组。
+* **独立系统调度**：将逻辑抽离为 `ISystem`，并构建了 `SystemContext` 传递环境依赖：
+  * `ItemSystem`：网络插值、拾取判定、波动动画。
+  * `PigAISystem`：状态机、寻路、障碍跳跃。
+  * `PhysicsSystem`：重力、AABB 碰撞、位移。
+  * `RenderSystem`：读取组件，组织渲染数据并提交。
+* **服务端同构接入**：服务端废弃旧 `ServerPlayer` 结构，使用 `ServerPlayerComponent` 统一管理网络 ID、背包、权威位置，`GameServer` 完全基于 ECS 状态运行。
 
-### 3.2 任务拆解
+### 3.2 区块 (Chunk) 全面 ECS 化
 
-1. **将世界地形、物理碰撞接入 ECS 系统**（当前猪的移动仅依赖局部 AABB 射线检测）。
-2. **将玩家的生成、移动和背包迁移进 ECS 系统**（剥离 `Game` 中的上帝类物理逻辑）。
-3. **网络同步预热**：为未来的服务端下发做准备，梳理实体生成（EntitySpawn）和实体状态同步（EntityUpdate）协议。
+* **组件化存储**：`ChunkCoordComponent` 与 `ChunkComponent` 正式接管区块。区块不再散落在各个 Map 中，成为 ECS 实体。
+* **生命周期驱动**：视距外区块卸载、脏标记（`isMeshDirty`）重构 Mesh，全部在主循环通过 ECS 遍历直接驱动。
+* **世界查询**：`GetBlockAt` 改为通过 `m_chunkToEcsMap` 直接定位 ECS 实体并读取 `chunkData->data`。
+
+### 3.3 地形生成 (深度对齐原版)
+
+* **地形形状**：`WorldGenerator` 和 `DensityFunction` 实现了原版的 `sloped_cheese` 密度树、`TerrainProvider` 样条及 `PeaksAndValleys` 折返算法。
+* **生物群系**：移植 `OverworldBiomeBuilder`，基于 6 维气候参数（温度/湿度/侵蚀/怪异/大陆/深度）的查表映射。
+* **地表规则**：引入了基岩、深板岩、砂岩等分层，表层方块动态变化（不再生硬的一刀切）。
+
+### 3.4 光照引擎 (LightEngine)
+
+* **光路分离**：天空光（Sky）与方块光（Block RGB）使用双队列独立扩散，彻底消除神秘光源。
+* **垂直直射不衰减**：天光（SkyLight）在垂直向下传播时保持满值（15），修复洞穴死黑。
+* **环境光保底**：`MeshManager` 组装顶点时加入 `AMBIENT_FLOOR = 0.1f` 防死黑。
+
+### 3.5 下一步：ECS 提升至引擎层
+
+* 将纯容器与系统基类 (`ISystem`) 搬入 `Engine/ecs` 目录。
+* 在客户端与服务端剥离出完全一致的实体注册表。
+* 支持组件在编译期的声明与注册，服务端裁剪渲染组件。
 
 ---
 
@@ -105,10 +127,9 @@
 
 ### 4.1 v0.4.0：轻量级 ECS 与业务层覆盖
 
-* 在 `Engine` 或 `game` 层实现 Sparse Set（稀疏集）架构。
-* 组件抽取：`Transform`、`Velocity`、`AABB`、`Health`、`AI`、`Renderable` 等。
-* 业务层迁移：将现有的猪、掉落物、甚至未来的怪物等，统一纳入 ECS 实体管理。
-* *测试目标*：实现漫游 AI、受重力掉落、腿部摆动动画的体素猪。
+* ✅ 在 `Engine` 或 `game` 层实现 ECS 架构，组件抽取（Transform, Velocity, AABB, Player, Chunk 等）。
+* ✅ 业务层迁移：猪、掉落物、玩家、区块统一纳入 ECS。
+* ✅ 客户端与云端的系统分离，构建 `SystemContext` 驱动。
 
 ### 4.2 v0.5.0：i18n 与全面数据驱动
 
@@ -171,6 +192,16 @@
 * **坐标系**：Blender 导出 glTF 必须勾选 `+Y Up`，否则模型躺着。
 * **动画卡顿**：K 帧时插值必须选“线性”，平滑插值会导致循环首尾帧速度归零而卡顿。
 
+### 光照与渲染逻辑
+
+* **光照拆分**：天空光与方块光必须分列 BFS 队列，绝不能用 `(r==15&&g==15&&b==15)` 来判断是否为天空光，否则光强衰减后会退化为错误颜色。
+* **区块 AABB**：`Chunk` 结构中没有 `aabbMin/Max`，必须在 `DrainMeshResults` 中根据 `cx, cz` 实时算出包围盒再提交给渲染器。
+
+### ECS 与内存安全
+
+* **指针失效**：ECS 的实体数组本质是 `std::vector`。在遍历组件或者在 C++ 的 `auto* e = m_entityManager.GetEntity()` 期间，绝对不能在循环或调用的内部触发 `CreateEntity`（会扩容导致悬空指针）。
+* **死锁陷阱**：调用 `SendInventoryUpdate`、`SpawnItemDrop` 等涉及网络广播或跨系统的函数时，必须确保 `m_worldMutex` 没有在当前线程被重复上锁。
+
 ---
 
 ## 六、🤝 AI 协作约定（最高优先级）
@@ -187,4 +218,4 @@
 
 ### 7.1 一句话唤醒
 >
-> "继续 Mycraft：当前 v0.3.0 已发布，桌面 clang-cl / C++23 / 静态链接；Vulkan 1.3 + OpenGL 4.6；RHI 无状态 + SceneRenderer + MDI + Texture Array；服务端权威背包已通。当前正用 Assimp 加载 `.glb` 猪模型，使用纯 C++ 层级刚体实现关键帧动画。下一步：完成模型加载器，随后开启 v0.4.0 ECS 架构。完整上下文见 `AI_CONTEXT.md`。"
+> "继续 Mycraft：当前 v0.4.0-dev，核心架构已全面完成 ECS 化（玩家、掉落物、区块均已作为实体管理，系统逻辑完全独立）。服务端与客户端状态同构，地形生成已深度复刻原版 26.2 源码，光照分离并修复死锁。下一步：将 ECS 框架提升至 `Engine/ecs` 并支持组件编译期裁剪注册。"

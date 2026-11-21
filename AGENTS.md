@@ -1,30 +1,29 @@
-# AGENTS.md - Mycraft 引擎 AI 代理开发守则
+# AGENTS.md — AI 协作行为与输出规范
 
-## 🛠️ 构建与测试
+## 最高行为准则（绝对红线）
 
-- 构建 Release: `cmake --build build/clang --config Release`
-- 运行测试: 需手动运行 `build/clang/Release/mycraft.exe`
+1. **禁止直接修改代码**：
+   * **绝对禁止**使用任何工具直接修改、创建或删除项目中的文件。
+   * **必须**在对话窗口中输出完整的、可直接复制的 Markdown 代码块。
+   * 修改核心函数必须给出**完整实现**，绝对禁止使用 `// 省略` 或 `...` 敷衍。
 
-## 🚨 绝对禁止事项（红线）
+2. **先读后写**：
+   * 每次新对话或上下文重置，必须优先请求或阅读 `AI_CONTEXT.md` 以恢复项目状态。
+   * 修改底层逻辑前，必须先审查用户提供的代码与日志。绝对禁止凭空捏造 API 或“大概率是某某问题”的瞎改。
 
-1. **禁止触碰第三方库**：`Engine/lib/imgui`、`vcpkg_installed` 严禁修改。
-2. **禁止使用裸指针/宏**：禁止 `new/delete`，禁止面向业务的 C 风格接口。
-3. **禁止跨平台代码泄漏**：所有平台特定代码锁死 `Platform.cpp`。
-4. **禁止 RHI 带脑子**：严禁在 `IRenderService` 中添加带有业务语义的接口（如“上传全局几何体”），渲染状态的维护必须留在 `SceneRenderer`。
+3. **逐步实施**：
+   * 每次只解决一个明确的架构痛点或功能点，提供完整方案，待开发者跑通后再推进下一步。
 
-## 🏗️ 架构约定
+---
 
-- **Service**：同 Engine 寿命，被动调用（如 `IRenderService`）。
-- **Manager**：同 Game 寿命，主动运行（如 `MeshManager`）。
-- **Tool**：无后缀，纯工具（如 `Log`, `RAIIThread`）。
+## 输出格式约定
 
-## 🔍 代码修改流程
+当你输出代码修改时，请严格遵循以下格式，以便开发者直接复制粘贴：
 
-1. 修改底层逻辑前，必须阅读 `AI_CONTEXT.md` 确认架构。
-2. 修改完必须编译 Release 版本，要求 0 Error。如果出现 `[[deprecated]]` 警告，应作为重构提示予以消除。
-3. 涉及多线程、显存分配时，必须在 Release 模式下实测。
+```text
+文件: 相对/绝对路径 (例如 mycraft/src/Game.cpp)
+```
 
-## 🪵 调试与日志规范
-
-- 统一使用 `Eng::tool::Log`，宏定义如 `logInfo(m_logger, "[Tag] Value: " << val)`。
-- 严禁 `printf` / `std::cout`。
+```cpp
+// ... 完整代码 ...
+```
