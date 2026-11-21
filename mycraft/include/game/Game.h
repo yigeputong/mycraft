@@ -10,23 +10,24 @@
 
 #include "Engine/Engine.h"
 #include "Engine/client/SceneRenderer.h"
+#include "Engine/ecs/SystemScheduler.h"
 #include "Engine/service/AssetService.h"
 #include "Engine/tool/Transport.h"
 
 #include "game/GameServer.h"
 #include "game/Protocol.h"
+#include "game/client/ClientEntity.h"
 #include "game/client/ClientUI.h"
 #include "game/client/LODManager.h"
 #include "game/client/MeshManager.h"
 #include "game/client/ModelLoader.h"
+#include "game/client/RenderSystem.h"
 #include "game/core/GameContext.h"
 #include "game/core/Physics.h"
 #include "game/core/RayCast.h"
-#include "game/core/ecs/EntityManager.h"
 #include "game/core/ecs/ItemSystem.h"
 #include "game/core/ecs/PhysicsSystem.h"
 #include "game/core/ecs/PigAISystem.h"
-#include "game/core/ecs/RenderSystem.h"
 #include "game/server/WorldSave.h"
 
 namespace game {
@@ -122,11 +123,12 @@ private:
     client::LodManager m_lodManager;
     std::unordered_map<uint64_t, uint32_t> m_chunkMeshVersions;  // 异步建 Mesh 的版本号
 
-    game::core::ecs::EntityManager m_entityManager;
-    game::core::ecs::PigAISystem m_pigAISystem;
-    game::core::ecs::ItemSystem m_itemSystem;
-    game::core::ecs::PhysicsSystem m_physicsSystem;
-    game::core::ecs::RenderSystem m_renderSystem;
+    game::client::ClientEntityManager m_entityManager;
+    // ECS 系统按注册顺序执行（见 MyGame::OnStart）。系统对象归调度器所有，
+    // 三个系统都没有状态，所以整个进程注册一次即可。
+    game::client::ClientSystemScheduler m_systems;
+    // 渲染系统不参与 tick 调度，由 OnRender 直接调用。
+    game::client::RenderSystem m_renderSystem;
 
     // --- 4.3 渲染大脑 ---
     std::unique_ptr<Eng::client::SceneRenderer> m_sceneRenderer;
@@ -271,7 +273,7 @@ private:
     Eng::client::RenderMesh BuildItemCubeMesh(BlockId id);
 
     // ★ 签名已更新为接收 ECS 实体
-    void QueueChunkMeshTask(game::core::ecs::Entity& chunkEntity);
+    void QueueChunkMeshTask(game::client::ClientEntity& chunkEntity);
     void DrainMeshResults(size_t maxCount = 16);
 
     void HandleServerMessage(const std::vector<uint8_t>& data);

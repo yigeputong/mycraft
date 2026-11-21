@@ -30,7 +30,7 @@ game::core::ecs::EntityId GameServer::CreateNetworkEntity(uint32_t& outNetId) {
     return eid;
 }
 
-game::core::ecs::Entity* GameServer::GetEntityByNetId(uint32_t netId) {
+game::server::ServerEntity* GameServer::GetEntityByNetId(uint32_t netId) {
     auto it = m_netToEcsMap.find(netId);
     if (it != m_netToEcsMap.end()) {
         return m_ecsWorld.GetEntity(it->second);
@@ -349,7 +349,7 @@ bool GameServer::Start(uint16_t port, const std::string& worldId, bool useMemory
                 return;
 
             e->transform.position = m_spawnPos;
-            e->serverPlayer = game::core::ecs::ServerPlayerComponent{};
+            e->serverPlayer = ServerPlayerComponent{};
             e->serverPlayer->clientId = netId;
             e->serverPlayer->inventory[0].type = m_registry.Get("mycraft:grass_block").id;
             e->serverPlayer->inventory[0].count = 64;
@@ -583,7 +583,7 @@ void GameServer::TickEntities(float dt) {
     ctx.playerPos = glm::vec3(0.0f);
     ctx.isSolidAt = [this](int x, int y, int z) { return IsSolidAt(x, y, z); };
 
-    static game::core::ecs::PhysicsSystem physicsSystem;
+    static game::core::ecs::PhysicsSystem<ServerEntityManager> physicsSystem;
     physicsSystem.Update(m_ecsWorld, ctx);
 
     std::vector<game::core::ecs::EntityId> toDestroy;
@@ -668,7 +668,12 @@ Chunk* GameServer::GetCachedChunk(int cx, int cz) {
     return it == m_chunks.end() ? nullptr : &it->second;
 }
 
-void GameServer::HandleDig(game::core::ecs::Entity& playerEntity) {
+void GameServer::HandleDig(ServerEntity& playerEntity) {
+    // 判空必须在这里做：HandleDig 由消息分发直接调用，参数只保证「实体存在」，
+    // 不保证「还是玩家」。断线清理 / 槽位复用的窗口期，serverPlayer 可能已被 reset。
+    if (!playerEntity.active || !playerEntity.serverPlayer.has_value())
+        return;
+
     auto& p = *playerEntity.serverPlayer;
     glm::vec3 front;
     front.x = cosf(p.yaw) * cosf(p.pitch);
@@ -700,9 +705,13 @@ void GameServer::HandleDig(game::core::ecs::Entity& playerEntity) {
     SpawnItemDrop(glm::vec3(hit.bx + 0.5f, hit.by + 0.5f, hit.bz + 0.5f), oldBlock);
 }
 
-void GameServer::HandlePlace(game::core::ecs::Entity& playerEntity, BlockId type) {
+void GameServer::HandlePlace(ServerEntity& playerEntity, BlockId type) {
+    if (!playerEntity.active || !playerEntity.serverPlayer.has_value())
+        return;
+
     if (m_registry.Get(type).id == UNKNOWN_ID)
         return;
+
     auto& p = *playerEntity.serverPlayer;
 
     int slotIndex = -1;
@@ -754,9 +763,13 @@ void GameServer::HandlePlace(game::core::ecs::Entity& playerEntity, BlockId type
     p.inventoryStateId++;
 }
 
-void GameServer::AddToInventory(game::core::ecs::Entity& playerEntity, BlockId id, int count) {
+void GameServer::AddToInventory(ServerEntity& playerEntity, BlockId id, int count) {
+    if (!playerEntity.active || !playerEntity.serverPlayer.has_value())
+        return;
+
     if (id == AIR_ID || count <= 0)
         return;
+
     auto& inv = playerEntity.serverPlayer->inventory;
 
     for (int i = 0; i < 9; ++i) {
@@ -815,7 +828,7 @@ void GameServer::SetBlockAt(int wx, int wy, int wz, BlockId bt) {
     m_dirty = true;
 }
 
-bool GameServer::IsInsidePlayer(game::core::ecs::Entity& playerEntity, int bx, int by, int bz) {
+bool GameServer::IsInsidePlayer(ServerEntity& playerEntity, int bx, int by, int bz) {
     glm::vec3 pos = playerEntity.transform.position;
     glm::vec3 pmin{pos.x - PLAYER_HALF_W, pos.y, pos.z - PLAYER_HALF_W};
     glm::vec3 pmax{pos.x + PLAYER_HALF_W, pos.y + PLAYER_HEIGHT, pos.z + PLAYER_HALF_W};
@@ -859,14 +872,19 @@ void GameServer::BroadcastWorldState() {
     for (auto& e : m_ecsWorld.GetEntities()) {
         if (!e.active || !e.serverPlayer)
             continue;
-        w.WriteU32BE(e.serverPlayer->clientId);
-        uint8_t nlen = (uint8_t)std::min<size_t>(e.serverPlayer->name.size(), 32);
+
+        // 上一行的判定已保证 optional 有值；clang-tidy 的 optional 追踪不跨语句，
+        // 看不到这条事实，所以这里显式解引用一次并缓存成引用。
+        const ServerPlayerComponent& sp = *e.serverPlayer;  // NOLINT(bugprone-unchecked-optional-access)
+
+        w.WriteU32BE(sp.clientId);
+        uint8_t nlen = static_cast<uint8_t>(std::min<size_t>(sp.name.size(), 32));
         w.Write<uint8_t>(nlen);
         for (uint8_t i = 0; i < nlen; ++i)
-            w.Write<uint8_t>((uint8_t)e.serverPlayer->name[i]);
+            w.Write<uint8_t>((uint8_t)sp.name[i]);
         w.WriteVec3(e.transform.position);
-        w.Write(e.serverPlayer->yaw);
-        w.Write(e.serverPlayer->pitch);
+        w.Write(sp.yaw);
+        w.Write(sp.pitch);
     }
     m_server->Broadcast(w.GetBuffer());
 }

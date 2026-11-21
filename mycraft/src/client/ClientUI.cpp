@@ -1232,9 +1232,7 @@ void ClientUI::DrawHUD([[maybe_unused]] Eng::Engine& engine, MyGame& game) {
 
         DrawLineBgLeft(leftX, dbgY, white, "Data Chunks: %zu", game.m_world.GetChunks().size());
         dbgY += lineHeight;
-        DrawLineBgLeft(leftX, dbgY, white, "Mesh Chunks: %zu", game.m_world.GetMeshCount());
-        dbgY += lineHeight;
-        DrawLineBgLeft(leftX, dbgY, white, "Client Pending: %zu", game.m_world.GetPendingSize());
+        DrawLineBgLeft(leftX, dbgY, white, "Requests In Flight: %zu", game.m_world.GetOutstandingCount());
         dbgY += lineHeight;
         if (game.m_server)
             DrawLineBgLeft(leftX, dbgY, white, "Server Chunks: %zu", game.m_server->GetChunkCount());

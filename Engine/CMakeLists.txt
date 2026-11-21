@@ -1,4 +1,11 @@
 # ============================================================
+# engine-ecs：实体存储（纯头文件，不依赖任何其它引擎目标）
+# 只提供 EntityId 与 EntityStore<EntityT> 模板，不认识任何组件。
+# ============================================================
+add_library(engine-ecs INTERFACE)
+target_include_directories(engine-ecs INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# ============================================================
 # engine-core：日志 / 平台 / 配置
 # ============================================================
 add_library(engine-core STATIC

@@ -8,17 +8,12 @@ add_library(game-server STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/DensityFunctionJson.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/LightEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/BlockRegistry.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/ecs/EntityManager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/ecs/PhysicsSystem.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/ecs/PigAISystem.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/ecs/ItemSystem.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/ecs/RenderSystem.cpp
 )
 target_include_directories(game-server PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(game-server 
-    PUBLIC engine-core engine-net
+    PUBLIC engine-core engine-net engine-ecs
     PRIVATE nlohmann_json::nlohmann_json project_options project_sanitizer
 )
 
@@ -36,6 +31,7 @@ set(CLIENT_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/LODManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/MeshBuilderUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/ModelLoader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/RenderSystem.cpp
 )
 
 if(ANDROID)

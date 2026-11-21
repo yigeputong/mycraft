@@ -4,3 +4,6 @@ CompileFlags:
 
 Index:
     Background: Build
+
+Documentation:
+    CommentFormat: Doxygen

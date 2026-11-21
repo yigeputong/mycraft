@@ -11,7 +11,6 @@
 
 #include "game/core/BlockRegistry.h"
 
-
 namespace game::client {
 
 // 关键帧数据（只保留旋转，因为猪的位移/缩放没变）
@@ -48,17 +47,6 @@ struct LoadedModel {
     std::unique_ptr<ModelNode> rootNode;
     std::unordered_map<std::string, AnimationClip> clips;
     Eng::service::TexturePtr texture;
-};
-
-// ECS 预热组件
-struct RenderableComponent {
-    // 如果是猪，model 不为空
-    client::LoadedModel* model = nullptr;
-    std::string currentClip = "Walk";
-    float animTime = 0.0f;
-
-    // 如果是掉落物，blockType 不为 AIR_ID
-    BlockId blockType = AIR_ID;
 };
 
 // 静态加载工具类

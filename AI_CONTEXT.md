@@ -87,15 +87,16 @@
 
 ## 三、✅ 当前架构现状 (v0.4.0-dev)
 
-### 3.1 ECS 架构 (纯容器 + 系统调度)
+### 3.1 ECS 架构（引擎容器 + 业务实体）
 
-* **纯数据容器**：`EntityManager` 仅保留 ID 生成、实体创建/销毁与组件数组。
-* **独立系统调度**：将逻辑抽离为 `ISystem`，并构建了 `SystemContext` 传递环境依赖：
-  * `ItemSystem`：网络插值、拾取判定、波动动画。
-  * `PigAISystem`：状态机、寻路、障碍跳跃。
-  * `PhysicsSystem`：重力、AABB 碰撞、位移。
-  * `RenderSystem`：读取组件，组织渲染数据并提交。
-* **服务端同构接入**：服务端废弃旧 `ServerPlayer` 结构，使用 `ServerPlayerComponent` 统一管理网络 ID、背包、权威位置，`GameServer` 完全基于 ECS 状态运行。
+* **引擎层 `Engine/ecs`**：只认识"实体存储"与"系统接口"，不认识任何组件。
+  * `EntityId` / `INVALID_ENTITY` / `MakeEntityId(index, generation)`。
+  * `EntityStore<EntityT>`：`std::deque` + generation + 空闲槽 LIFO 复用；`DestroyEntity` 立即调 `ResetComponents()` 释放大对象；新槽 generation 从 1 起（0 保留给 `INVALID_ENTITY`）。
+  * `ISystemT<WorldT, TickContextT>`：只有 `Update`，**没有 Render**（渲染有独立上下文与时机）。
+  * `SystemScheduler<WorldT, TickContextT>`：按注册顺序线性调度，不做依赖图。
+* **业务层双实体**：`ClientEntity`（player / renderable / chunkCoord / chunkData）与 `ServerEntity`（serverPlayer）共同继承 `EntityCommon`（transform / velocity / aabb / pigAI / item / netInterp），各自实现 `ResetComponents` / `IsPristine`。服务端那份**物理上没有渲染字段**，裁剪靠实体定义而不是宏。
+* **系统**：`ItemSystem` / `PigAISystem` / `PhysicsSystem` 为 header-only 模板（`template <typename WorldT>`），两端共用；`AnimationSystem` 与 `RenderSystem` 只在客户端注册，服务端不编译。
+* **服务端同构**：`GameServer` 基于 `ServerEntityManager` 运行，`ServerPlayerComponent` 统一管理网络 ID、背包、权威位置。
 
 ### 3.2 区块 (Chunk) 全面 ECS 化
 
@@ -115,11 +116,12 @@
 * **垂直直射不衰减**：天光（SkyLight）在垂直向下传播时保持满值（15），修复洞穴死黑。
 * **环境光保底**：`MeshManager` 组装顶点时加入 `AMBIENT_FLOOR = 0.1f` 防死黑。
 
-### 3.5 下一步：ECS 提升至引擎层
+### 3.5 ECS 已提升至引擎层（v0.4.0 完成）
 
-* 将纯容器与系统基类 (`ISystem`) 搬入 `Engine/ecs` 目录。
-* 在客户端与服务端剥离出完全一致的实体注册表。
-* 支持组件在编译期的声明与注册，服务端裁剪渲染组件。
+* 纯容器与系统接口已搬入 `Engine/ecs`，业务层通过 `EntityStore<ClientEntity>` / `EntityStore<ServerEntity>` 实例化。
+* 客户端与服务端各自持有实体注册表，共享同一套存储算法与调度器。
+* 组件裁剪为编译期完成：服务端实体定义里不存在 renderable / chunkCoord / chunkData / chunkRender。
+* 遗留问题（v0.6.0 收敛）：区块状态仍有两个记录者——`ClientWorld::m_outstanding` 记录"请求在途"，ECS 的 `chunkData` 记录"数据可读"。唯一事实来源必须是 ECS。
 
 ---
 
@@ -130,6 +132,7 @@
 * ✅ 在 `Engine` 或 `game` 层实现 ECS 架构，组件抽取（Transform, Velocity, AABB, Player, Chunk 等）。
 * ✅ 业务层迁移：猪、掉落物、玩家、区块统一纳入 ECS。
 * ✅ 客户端与云端的系统分离，构建 `SystemContext` 驱动。
+* ✅ ECS 容器与系统接口提升至 `Engine/ecs`，客户端/服务端实体定义分离。
 
 ### 4.2 v0.5.0：i18n 与全面数据驱动
 
@@ -199,7 +202,7 @@
 
 ### ECS 与内存安全
 
-* **指针失效**：ECS 的实体数组本质是 `std::vector`。在遍历组件或者在 C++ 的 `auto* e = m_entityManager.GetEntity()` 期间，绝对不能在循环或调用的内部触发 `CreateEntity`（会扩容导致悬空指针）。
+* **指针失效**：`EntityStore` 底层是 `std::deque`，`CreateEntity` 不会让已有实体的引用失效，但**迭代器全部失效**，遍历过程中创建实体依然禁止。`GetEntity` 返回的指针在 `DestroyEntity` 后立即失效（槽位已被 `ResetComponents` 清空）。
 * **死锁陷阱**：调用 `SendInventoryUpdate`、`SpawnItemDrop` 等涉及网络广播或跨系统的函数时，必须确保 `m_worldMutex` 没有在当前线程被重复上锁。
 
 ---
@@ -218,4 +221,4 @@
 
 ### 7.1 一句话唤醒
 >
-> "继续 Mycraft：当前 v0.4.0-dev，核心架构已全面完成 ECS 化（玩家、掉落物、区块均已作为实体管理，系统逻辑完全独立）。服务端与客户端状态同构，地形生成已深度复刻原版 26.2 源码，光照分离并修复死锁。下一步：将 ECS 框架提升至 `Engine/ecs` 并支持组件编译期裁剪注册。"
+> "继续 Mycraft：当前 v0.4.0-dev，核心架构已全面完成 ECS 化（玩家、掉落物、区块均已作为实体管理，系统逻辑完全独立）。下一步：v0.5.0 i18n + 数据驱动"

@@ -1,14 +1,15 @@
-#include "game/core/ecs/RenderSystem.h"
+#include "game/client/RenderSystem.h"
 
 #include <cmath>
 #include <unordered_map>
+#include <vector>
 
-#include "game/core/ecs/EntityManager.h"
+#include "Engine/ecs/Entity.h"
 
-namespace game::core::ecs {
+namespace game::client {
 
-void RenderSystem::Render(EntityManager& world, const RenderContext& ctx) {
-    std::unordered_map<BlockId, std::vector<Eng::service::rhi::PerObjectData>> itemInstances;
+void RenderSystem::Render(ClientEntityManager& world, const RenderContext& ctx) {
+    std::unordered_map<game::BlockId, std::vector<Eng::service::rhi::PerObjectData>> itemInstances;
 
     for (auto& e : world.GetEntities()) {
         if (!e.active || !e.renderable)
@@ -29,8 +30,8 @@ void RenderSystem::Render(EntityManager& world, const RenderContext& ctx) {
         }
 
         // 2. 收集掉落物实例化数据
-        if (e.item && rc.blockType != AIR_ID) {
-            const float entityPhase = static_cast<float>(GetEntityIndex(e.id)) * 0.5f;
+        if (e.item && rc.blockType != game::AIR_ID) {
+            const float entityPhase = static_cast<float>(Eng::ecs::GetEntityIndex(e.id)) * 0.5f;
 
             Eng::service::rhi::PerObjectData data;
             data.model = glm::translate(glm::mat4(1.0f), e.transform.position);
@@ -58,7 +59,7 @@ void RenderSystem::Render(EntityManager& world, const RenderContext& ctx) {
     }
 }
 
-void RenderSystem::RenderNode(client::ModelNode* node, const glm::mat4& parentTransform, const RenderableComponent& rc,
+void RenderSystem::RenderNode(ModelNode* node, const glm::mat4& parentTransform, const RenderableComponent& rc,
                               Eng::client::SceneRenderer* renderer, const Eng::service::ShaderPtr& entityShader) {
     glm::mat4 localMat = node->baseTransform * node->currentAnimTransform;
     glm::mat4 worldMat = parentTransform * localMat;
@@ -69,7 +70,7 @@ void RenderSystem::RenderNode(client::ModelNode* node, const glm::mat4& parentTr
         RenderNode(child.get(), worldMat, rc, renderer, entityShader);
 }
 
-void RenderSystem::ApplyAnimationToNodes(client::ModelNode* node, const client::AnimationClip& clip, float animTime) {
+void RenderSystem::ApplyAnimationToNodes(ModelNode* node, const AnimationClip& clip, float animTime) {
     node->currentAnimTransform = glm::mat4(1.0f);
     for (const auto& channel : clip.channels) {
         if (channel.nodeName == node->name && channel.keyframes.size() >= 2) {
@@ -98,4 +99,4 @@ void RenderSystem::ApplyAnimationToNodes(client::ModelNode* node, const client::
         ApplyAnimationToNodes(child.get(), clip, animTime);
 }
 
-}  // namespace game::core::ecs
+}  // namespace game::client

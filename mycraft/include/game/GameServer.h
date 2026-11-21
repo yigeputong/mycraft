@@ -21,9 +21,9 @@
 #include "game/core/BlockRegistry.h"
 #include "game/core/Physics.h"
 #include "game/core/World.h"
-#include "game/core/ecs/Components.h"
-#include "game/core/ecs/EntityManager.h"
 #include "game/core/ecs/System.h"
+#include "game/server/Components.h"
+#include "game/server/ServerEntity.h"
 #include "game/server/WorldGenerator.h"
 #include "game/server/WorldSave.h"
 
@@ -51,7 +51,7 @@ private:
     game::BlockRegistry m_registry;
 
     // ==================== ECS 世界 ====================
-    game::core::ecs::EntityManager m_ecsWorld;
+    ServerEntityManager m_ecsWorld;
     mutable std::mutex m_worldMutex;
 
     // 网络 ID <-> ECS EntityId 映射
@@ -113,7 +113,7 @@ private:
 
     // ==================== ECS 辅助 ====================
     game::core::ecs::EntityId CreateNetworkEntity(uint32_t& outNetId);
-    game::core::ecs::Entity* GetEntityByNetId(uint32_t netId);
+    ServerEntity* GetEntityByNetId(uint32_t netId);
 
     void SpawnItemDrop(const glm::vec3& pos, BlockId id);
     void TickEntities(float dt);
@@ -131,14 +131,14 @@ private:
     Chunk* GetCachedChunk(int cx, int cz);
     BlockId GetBlockAt(int wx, int wy, int wz) const;
     void SetBlockAt(int wx, int wy, int wz, BlockId id);
-    bool IsInsidePlayer(game::core::ecs::Entity& playerEntity, int bx, int by, int bz);
+    bool IsInsidePlayer(ServerEntity& playerEntity, int bx, int by, int bz);
     void SendInventoryUpdate(int clientId);
     void HandleClickContainer(int clientId, Eng::tool::MessageReader& r);
 
     // ==================== 交互 ====================
-    void HandleDig(game::core::ecs::Entity& playerEntity);
-    void HandlePlace(game::core::ecs::Entity& playerEntity, BlockId id);
-    void AddToInventory(game::core::ecs::Entity& playerEntity, BlockId id, int count);
+    void HandleDig(ServerEntity& playerEntity);
+    void HandlePlace(ServerEntity& playerEntity, BlockId id);
+    void AddToInventory(ServerEntity& playerEntity, BlockId id, int count);
 
     // ==================== 广播 ====================
     void BroadcastWorldState();

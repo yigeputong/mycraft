@@ -23,6 +23,7 @@
 
 #include "game/GameServer.h"
 #include "game/Protocol.h"
+#include "game/client/AnimationSystem.h"
 #include "game/client/MeshBuilderUtils.h"
 #include "game/client/TextureArray.h"
 #include "game/core/Blocks.h"
@@ -146,6 +147,12 @@ void MyGame::OnStart(Eng::Engine& engine) {
 
     RegisterGameActions();
     LoadSettings(engine);
+    // 注册顺序 = 执行顺序，顺序本身是语义（拾取先于物理，物理先于表现），
+    // 调整它会改变掉落物被拾取的时机，不要随手重排。
+    m_systems.Add<game::core::ecs::ItemSystem<game::client::ClientEntityManager>>();
+    m_systems.Add<game::core::ecs::PigAISystem<game::client::ClientEntityManager>>();
+    m_systems.Add<game::core::ecs::PhysicsSystem<game::client::ClientEntityManager>>();
+    m_systems.Add<game::client::AnimationSystem>();
 
     if (m_inputMode == InputMode::Auto) {
         m_activeInputMode = Eng::tool::IsMobilePlatform() ? InputMode::Touch : InputMode::KeyboardMouse;
@@ -253,9 +260,7 @@ bool MyGame::OnUpdate(Eng::Engine& /*engine*/, float deltaTime) {
     ctx.playerPos = player->transform.position;
     ctx.isSolidAt = [this](int x, int y, int z) { return this->IsSolidAt(x, y, z); };
 
-    m_itemSystem.Update(m_entityManager, ctx);
-    m_pigAISystem.Update(m_entityManager, ctx);
-    m_physicsSystem.Update(m_entityManager, ctx);
+    m_systems.UpdateAll(m_entityManager, ctx);
 
     // --- 5. 服务端校正与时间/光照更新 ---
     constexpr float CORRECTION_RATE = 8.0f;
@@ -301,6 +306,14 @@ bool MyGame::OnUpdate(Eng::Engine& /*engine*/, float deltaTime) {
     // --- 7. 区块流式加载与网络请求 ---
     m_world.UpdateStreaming(
         player->transform.position, m_renderDistance,
+        // 可读 = ECS 里存在带数据的区块实体（唯一事实来源）
+        [this](int cx, int cz) {
+            auto it = m_chunkToEcsMap.find(ChunkKey(cx, cz));
+            if (it == m_chunkToEcsMap.end())
+                return false;
+            auto* chunkEntity = m_entityManager.GetEntity(it->second);
+            return chunkEntity && chunkEntity->chunkData && chunkEntity->chunkData->data;
+        },
         [this](int cx, int cz) {
             Eng::tool::MessageWriter w;
             w.Write(static_cast<uint8_t>(game::net::MessageType::ChunkRequest));
@@ -342,12 +355,16 @@ bool MyGame::OnUpdate(Eng::Engine& /*engine*/, float deltaTime) {
     for (auto eid : chunksToDestroy) {
         auto* e = m_entityManager.GetEntity(eid);
         if (e && e->chunkCoord) {
-            uint64_t key = ChunkKey(e->chunkCoord->cx, e->chunkCoord->cz);
-            m_chunkToEcsMap.erase(key);
+            const int chunkX = e->chunkCoord->cx;
+            const int chunkZ = e->chunkCoord->cz;
+            const uint64_t chunkKey = ChunkKey(chunkX, chunkZ);
+
+            m_chunkToEcsMap.erase(chunkKey);
+            m_world.OnChunkDestroyed(chunkX, chunkZ);  // 请求作废，下次靠近可重新请求
             if (m_sceneRenderer) {
-                m_sceneRenderer->OnChunkUnloaded(key);
+                m_sceneRenderer->OnChunkUnloaded(chunkKey);
             }
-            m_chunkMeshVersions.erase(key);
+            m_chunkMeshVersions.erase(chunkKey);
             m_entityManager.DestroyEntity(eid);
         }
     }
@@ -412,7 +429,7 @@ void MyGame::OnRender(Eng::Engine& engine) {
             m_sceneRenderer->SubmitMesh(m_playerMesh, m_entityShader, m_playerTexture, data);
         }
 
-        game::core::ecs::RenderContext renderCtx;
+        game::client::RenderContext renderCtx;
         renderCtx.viewProj = projection * view;
         renderCtx.renderer = m_sceneRenderer.get();
         renderCtx.entityShader = m_entityShader;
@@ -558,7 +575,7 @@ void MyGame::EnterGame() {
         player->transform.position = glm::vec3(0.0f, 40.0f, 0.0f);
         player->transform.yaw = -90.0f;
         player->transform.pitch = 0.0f;
-        player->player = game::core::ecs::PlayerComponent{};
+        player->player = game::client::PlayerComponent{};
     }
 
     if (m_sceneRenderer) {
@@ -1453,8 +1470,8 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
                 eid = m_entityManager.CreateEntity();
                 auto* e = m_entityManager.GetEntity(eid);
 
-                e->chunkCoord = game::core::ecs::ChunkCoordComponent{cx, cz};
-                e->chunkData = game::core::ecs::ChunkComponent{};
+                e->chunkCoord = game::client::ChunkCoordComponent{cx, cz};
+                e->chunkData = game::client::ChunkComponent{};
                 e->chunkData->data = std::make_shared<Chunk>();
 
                 m_chunkToEcsMap[key] = eid;
@@ -1474,6 +1491,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
 
                 e->chunkData->isMeshDirty = true;
                 e->chunkData->meshVersion++;
+                m_world.OnChunkDataArrived(cx, cz);
             }
 
             auto MarkNeighborDirty = [this](int ncx, int ncz) {
@@ -1560,7 +1578,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
             entity->netInterp =
                 game::core::ecs::NetInterpolationComponent{.prevPos = pos, .targetPos = pos, .interpT = 1.0f};
             entity->item = game::core::ecs::ItemComponent{.itemType = bt, .count = 1, .pickupDelay = 0.5f};
-            entity->renderable = game::core::ecs::RenderableComponent{.blockType = bt};
+            entity->renderable = game::client::RenderableComponent{.blockType = bt};
 
             m_netToEcsMap[id] = e;
             break;
@@ -1641,7 +1659,7 @@ void MyGame::HandleServerMessage(const std::vector<uint8_t>& data) {
                 entity->pigAI->idleTimer = 1.0f + i * 0.5f;
                 entity->pigAI->rngState = seed + (i + 1) * 1337;
 
-                entity->renderable = game::core::ecs::RenderableComponent{
+                entity->renderable = game::client::RenderableComponent{
                     .model = m_pigModel.get(), .currentClip = "Walk", .animTime = 0.0f};
 
                 logInfo(logger, "[Game] Spawned Pig " << i << " at " << entity->transform.position.x << ", "
@@ -1869,7 +1887,7 @@ Eng::client::RenderMesh MyGame::BuildSkyboxMesh() {
     return mesh;
 }
 
-void MyGame::QueueChunkMeshTask(game::core::ecs::Entity& chunkEntity) {
+void MyGame::QueueChunkMeshTask(game::client::ClientEntity& chunkEntity) {
     if (!chunkEntity.chunkCoord || !chunkEntity.chunkData || !chunkEntity.chunkData->data)
         return;
 
