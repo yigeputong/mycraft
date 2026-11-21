@@ -37,7 +37,7 @@
 * **语言**：C++23
 * **构建**：CMake + Ninja Multi-Config + vcpkg（静态链接 `/MT`）
 * **图形**：SDL3、volk、Vulkan 1.3 (Dynamic Rendering, Sync2)、OpenGL 4.6 (DSA)、glm、ImGui (vendored v1.93.0)、assimp
-* **当前状态**：v0.4.0-dev 核心重构阶段。客户端与服务端已全面完成 ECS 化（实体、系统、区块），彻底剥离了实体管理中的上帝类逻辑。
+* **当前状态**：v0.4.0 核心重构阶段。客户端与服务端已全面完成 ECS 化（实体、系统、区块），彻底剥离了实体管理中的上帝类逻辑。
 
 ---
 
@@ -131,7 +131,7 @@
 
 * ✅ 在 `Engine` 或 `game` 层实现 ECS 架构，组件抽取（Transform, Velocity, AABB, Player, Chunk 等）。
 * ✅ 业务层迁移：猪、掉落物、玩家、区块统一纳入 ECS。
-* ✅ 客户端与云端的系统分离，构建 `SystemContext` 驱动。
+* ✅ 客户端与服务端的系统分离，构建 `SystemContext` 驱动。
 * ✅ ECS 容器与系统接口提升至 `Engine/ecs`，客户端/服务端实体定义分离。
 
 ### 4.2 v0.5.0：i18n 与全面数据驱动
